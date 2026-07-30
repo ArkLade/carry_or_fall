@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "display": "@carry-or-fall/protocol",
+  "extends": "../../tsconfig.base.json",
+  "include": ["src"]
+}

@@ -1,0 +1,25 @@
+{
+  "name": "@carry-or-fall/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Authoritative Colyseus game server (Node 24). M0 hosts a single foundation_room with a health endpoint and graceful shutdown; no gameplay.",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "node esbuild.config.mjs"
+  },
+  "dependencies": {
+    "@carry-or-fall/protocol": "workspace:*",
+    "@colyseus/core": "0.17.45",
+    "@colyseus/schema": "4.0.30",
+    "@colyseus/ws-transport": "0.17.13",
+    "express": "5.2.1"
+  },
+  "devDependencies": {
+    "@colyseus/sdk": "0.17.43",
+    "@types/express": "5.0.6",
+    "@types/node": "24.13.3",
+    "esbuild": "0.28.1",
+    "tsx": "4.23.1"
+  }
+}

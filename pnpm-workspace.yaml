@@ -1,0 +1,15 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# Build scripts are disabled by default in pnpm 11. Each dependency that ships
+# one must be explicitly acknowledged here (name: true to run it, false to skip)
+# or `pnpm install` exits non-zero and fails CI.
+#   - esbuild: its binary is provided by the platform-specific optional package
+#     (@esbuild/<platform>), so the postinstall is unnecessary; verified working
+#     without it. Skipped to avoid any postinstall failure in CI.
+#   - msgpackr-extract: an optional native accelerator; skipping the build falls
+#     back to the pure-JS encoder, which is fine for M0.
+allowBuilds:
+  esbuild: false
+  msgpackr-extract: false

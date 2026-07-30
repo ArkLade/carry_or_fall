@@ -1,0 +1,14 @@
+{
+  "name": "@carry-or-fall/protocol",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Framework-agnostic client/server contract: version constants, room name, message type literals, payload interfaces, and runtime validators. Has no @colyseus/schema dependency so it stays a pure, transport-agnostic contract shared by both the browser client and the authoritative server.",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  }
+}

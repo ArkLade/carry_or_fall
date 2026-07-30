@@ -1,0 +1,5 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "display": "Carry or Fall — root base (re-exports packages/config)",
+  "extends": "./packages/config/tsconfig.base.json"
+}

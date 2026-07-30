@@ -1,0 +1,14 @@
+{
+  "name": "@carry-or-fall/simulation-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Deterministic simulation utilities shared by future authoritative gameplay. M0 ships a seeded PRNG and a version placeholder only; no gameplay logic yet.",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  }
+}
