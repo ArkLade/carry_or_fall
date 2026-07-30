@@ -269,3 +269,20 @@ milestone, not implemented yet).
   not treated as a regression. M8 must measure first-load size and apply the §36.1
   strategies.
 - **Status:** Reserved.
+
+## D25. Public repository
+
+- **Decision:** The repository is public. `.github/workflows/codeql.yml` runs as
+  advanced setup, and secret scanning is active. Default setup for code scanning
+  must not be enabled, because it would disable the committed workflow.
+- **Reason:** Technical plan §31 asks for GitHub dependency and code scanning.
+  GitHub restricts code scanning to public repositories on Free and Pro plans, so
+  public visibility is what makes §31 achievable without a paid license. Actions
+  minutes are also unmetered for public repositories.
+- **Consequences:** All source, all documents, and the entire commit history are
+  public. No credentials have ever been committed (verified: `.env` was never
+  tracked across all 5 commits). Any future secret must go through provider
+  settings, never the repository. Forked pull requests can run workflows, so
+  "Require approval for all external contributors" stays enabled under
+  Settings → Actions → General.
+- **Status:** Approved.
