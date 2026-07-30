@@ -1,10 +1,13 @@
 import { matchMaker } from "@colyseus/core";
 import { Client } from "@colyseus/sdk";
 import {
-  CLIENT_MESSAGE_TYPES,
   FOUNDATION_ROOM,
   type FoundationRoomState,
+  HEALTH_PATH,
+  INCOMPATIBLE_CLIENT_MESSAGE,
+  PROTOCOL_MISMATCH_CODE,
   PROTOCOL_VERSION,
+  validateHealthResponse,
 } from "@carry-or-fall/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -12,6 +15,10 @@ import type { Logger } from "../src/logger";
 import { createGameServer, type GameServerHandle } from "../src/server";
 
 const BUILD_VERSION = "0.0.0-test";
+const CLIENT_ORIGIN = "http://localhost:5173";
+
+// The version handshake a compatible client supplies as Colyseus join options.
+const validHandshake = { protocolVersion: PROTOCOL_VERSION, buildVersion: BUILD_VERSION };
 
 // The server logs verbosely; silence it so test output stays readable.
 const silentLogger: Logger = {
@@ -46,7 +53,7 @@ describe("foundation room integration", () => {
     handle = createGameServer({
       buildVersion: BUILD_VERSION,
       logger: silentLogger,
-      allowedOrigins: ["http://localhost:5173"],
+      allowedOrigins: [CLIENT_ORIGIN],
     });
     await handle.gameServer.listen(0);
 
@@ -62,22 +69,41 @@ describe("foundation room integration", () => {
     await handle.gameServer.gracefullyShutdown(false);
   });
 
-  it("serves a health endpoint reporting build and protocol versions", async () => {
-    const response = await fetch(`${httpBaseUrl}/health`);
-    expect(response.status).toBe(200);
-
-    const body = (await response.json()) as Record<string, unknown>;
-    expect(body).toMatchObject({
-      status: "ok",
-      buildVersion: BUILD_VERSION,
-      protocolVersion: PROTOCOL_VERSION,
+  it("serves a health endpoint with CORS for an allowed cross-origin request", async () => {
+    // The browser client runs on a different origin than the server, so the
+    // health response must carry an Access-Control-Allow-Origin the browser
+    // accepts. Simulate that by sending the client's Origin header.
+    const response = await fetch(`${httpBaseUrl}${HEALTH_PATH}`, {
+      headers: { Origin: CLIENT_ORIGIN },
     });
-    expect(typeof body["uptime"]).toBe("number");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("access-control-allow-origin")).toBe(CLIENT_ORIGIN);
+
+    const result = validateHealthResponse(await response.json());
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toMatchObject({
+        status: "ok",
+        buildVersion: BUILD_VERSION,
+        protocolVersion: PROTOCOL_VERSION,
+      });
+      expect(typeof result.value.uptime).toBe("number");
+    }
   });
 
-  it("accepts a valid client and exposes the authoritative state", async () => {
+  it("does not send CORS headers for a disallowed origin", async () => {
+    // Never reflect an arbitrary origin (technical plan §20.3): a request from an
+    // origin outside the allowlist gets a healthy body but no CORS grant.
+    const response = await fetch(`${httpBaseUrl}${HEALTH_PATH}`, {
+      headers: { Origin: "http://evil.example" },
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("access-control-allow-origin")).toBeNull();
+  });
+
+  it("accepts a compatible client and exposes the authoritative state", async () => {
     const client = new Client(wsBaseUrl);
-    const room = await client.joinOrCreate<FoundationRoomState>(FOUNDATION_ROOM);
+    const room = await client.joinOrCreate<FoundationRoomState>(FOUNDATION_ROOM, validHandshake);
 
     await waitFor(() => room.state.connectedPlayers === 1);
     expect(room.state.serverBuildVersion).toBe(BUILD_VERSION);
@@ -87,11 +113,11 @@ describe("foundation room integration", () => {
 
   it("increments and decrements the player count as clients join and leave", async () => {
     const clientA = new Client(wsBaseUrl);
-    const roomA = await clientA.joinOrCreate<FoundationRoomState>(FOUNDATION_ROOM);
+    const roomA = await clientA.joinOrCreate<FoundationRoomState>(FOUNDATION_ROOM, validHandshake);
     await waitFor(() => roomA.state.connectedPlayers === 1);
 
     const clientB = new Client(wsBaseUrl);
-    const roomB = await clientB.joinOrCreate<FoundationRoomState>(FOUNDATION_ROOM);
+    const roomB = await clientB.joinOrCreate<FoundationRoomState>(FOUNDATION_ROOM, validHandshake);
     await waitFor(() => roomA.state.connectedPlayers === 2);
     expect(roomB.roomId).toBe(roomA.roomId);
 
@@ -103,7 +129,7 @@ describe("foundation room integration", () => {
 
   it("disposes the room once the last client leaves", async () => {
     const client = new Client(wsBaseUrl);
-    const room = await client.joinOrCreate<FoundationRoomState>(FOUNDATION_ROOM);
+    const room = await client.joinOrCreate<FoundationRoomState>(FOUNDATION_ROOM, validHandshake);
     await waitFor(() => room.state.connectedPlayers === 1);
     const { roomId } = room;
 
@@ -113,22 +139,33 @@ describe("foundation room integration", () => {
     expect(await matchMaker.query({ roomId })).toHaveLength(0);
   });
 
-  it("rejects a client whose handshake fails validation", async () => {
+  it("refuses a client with an incompatible protocol version at join", async () => {
     const client = new Client(wsBaseUrl);
-    const room = await client.joinOrCreate<FoundationRoomState>(FOUNDATION_ROOM);
-    await waitFor(() => room.state.connectedPlayers === 1);
 
-    const left = new Promise<number>((resolve) => {
-      room.onLeave((code) => resolve(code));
+    // A newer/older protocol must be refused at the join boundary — never
+    // accepted and later desynced — and must carry the refresh/update message.
+    await expect(
+      client.joinOrCreate(FOUNDATION_ROOM, {
+        protocolVersion: PROTOCOL_VERSION + 1,
+        buildVersion: BUILD_VERSION,
+      }),
+    ).rejects.toMatchObject({
+      message: INCOMPATIBLE_CLIENT_MESSAGE,
+      code: PROTOCOL_MISMATCH_CODE,
     });
 
-    // protocolVersion must be a positive integer; a string must be rejected at
-    // the server boundary rather than trusted.
-    room.send(CLIENT_MESSAGE_TYPES.hello, {
-      protocolVersion: "not-a-number",
-      buildVersion: BUILD_VERSION,
-    });
+    // The rejected client never occupied a seat, so no room lingers.
+    await waitFor(async () => (await matchMaker.query({})).length === 0);
+  });
 
-    expect(await left).toBeGreaterThanOrEqual(4000);
+  it("refuses a client whose handshake is malformed at join", async () => {
+    const client = new Client(wsBaseUrl);
+
+    await expect(
+      client.joinOrCreate(FOUNDATION_ROOM, { protocolVersion: "not-a-number" }),
+    ).rejects.toMatchObject({
+      message: INCOMPATIBLE_CLIENT_MESSAGE,
+      code: PROTOCOL_MISMATCH_CODE,
+    });
   });
 });

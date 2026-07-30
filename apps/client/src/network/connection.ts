@@ -1,12 +1,15 @@
 /**
  * Thin wrapper over the Colyseus client SDK for M0. It joins the single
- * foundation room, sends the protocol handshake, and reports connection status
- * and synchronized state back through callbacks so the rendering layer (the
- * Phaser scene) stays decoupled from the networking library.
+ * foundation room and reports connection status and synchronized state back
+ * through callbacks so the rendering layer (the Phaser scene) stays decoupled
+ * from the networking library.
+ *
+ * The protocol/build handshake is sent as Colyseus *join options* so the server
+ * can refuse an incompatible client at the join boundary (technical plan §35);
+ * on refusal the join rejects with the server's refresh/update message.
  */
 import {
-  type ClientHelloPayload,
-  CLIENT_MESSAGE_TYPES,
+  type ClientHandshake,
   FOUNDATION_ROOM,
   type FoundationRoomState,
   PROTOCOL_VERSION,
@@ -41,8 +44,13 @@ export async function connectToFoundationRoom(
 
   const client = new Client(options.serverUrl);
 
+  const handshake: ClientHandshake = {
+    protocolVersion: PROTOCOL_VERSION,
+    buildVersion: options.buildVersion,
+  };
+
   try {
-    const room = await client.joinOrCreate<FoundationRoomState>(FOUNDATION_ROOM);
+    const room = await client.joinOrCreate<FoundationRoomState>(FOUNDATION_ROOM, { ...handshake });
 
     room.onStateChange((state) => {
       callbacks.onStateChange({
@@ -59,12 +67,6 @@ export async function connectToFoundationRoom(
       callbacks.onStatusChange("failed", `disconnected (code ${code})`);
     });
 
-    const hello: ClientHelloPayload = {
-      protocolVersion: PROTOCOL_VERSION,
-      buildVersion: options.buildVersion,
-    };
-    room.send(CLIENT_MESSAGE_TYPES.hello, hello);
-
     callbacks.onStatusChange("connected");
 
     return {
@@ -73,6 +75,8 @@ export async function connectToFoundationRoom(
       },
     };
   } catch (error) {
+    // An incompatible client is rejected here with the server's refresh/update
+    // message (technical plan §35); surface whatever the server reported.
     callbacks.onStatusChange("failed", toDetail(error));
     throw error;
   }

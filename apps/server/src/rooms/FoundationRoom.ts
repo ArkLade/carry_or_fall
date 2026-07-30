@@ -9,21 +9,18 @@
  * options could be spoofed by a client. Capturing config in the closure keeps
  * the server the sole authority (see docs/DEVELOPMENT_RULES.md, "Authority").
  */
-import { type Client, Room, type Server } from "@colyseus/core";
+import { type Client, Room, type Server, ServerError } from "@colyseus/core";
 import {
-  CLIENT_MESSAGE_TYPES,
   FOUNDATION_ROOM,
+  INCOMPATIBLE_CLIENT_MESSAGE,
   isProtocolCompatible,
+  PROTOCOL_MISMATCH_CODE,
   PROTOCOL_VERSION,
-  validateClientHello,
+  validateClientHandshake,
 } from "@carry-or-fall/protocol";
 
 import type { Logger } from "../logger";
 import { FoundationState, type FoundationStateType } from "./FoundationState";
-
-// WebSocket close code sent when the server rejects a client during handshake.
-// 4000+ is the app-defined range permitted by the WebSocket spec.
-const CLOSE_PROTOCOL_REJECTED = 4001;
 
 export interface FoundationRoomDeps {
   readonly buildVersion: string;
@@ -43,40 +40,45 @@ export function defineFoundationRoom(gameServer: Server, deps: FoundationRoomDep
     override maxClients = deps.maxClients;
     override autoDispose = true;
 
+    /**
+     * Handshake gate. Runs during the join handshake, before `onJoin` and before
+     * the client occupies a seat. The client reports its protocol/build version
+     * as join options; a malformed or incompatible client is refused here with a
+     * refresh/update message (technical plan §35) rather than accepted and later
+     * desynced. The reported version is used only to gate compatibility — never
+     * as authoritative game state.
+     */
+    override onAuth(client: Client, options: unknown): boolean {
+      const result = validateClientHandshake(options);
+      if (!result.ok) {
+        logger.warn("refused malformed client handshake", {
+          sessionId: client.sessionId,
+          error: result.error,
+        });
+        throw new ServerError(PROTOCOL_MISMATCH_CODE, INCOMPATIBLE_CLIENT_MESSAGE);
+      }
+
+      if (!isProtocolCompatible(result.value.protocolVersion)) {
+        logger.warn("refused incompatible client protocol", {
+          sessionId: client.sessionId,
+          clientProtocol: result.value.protocolVersion,
+          serverProtocol: PROTOCOL_VERSION,
+        });
+        throw new ServerError(PROTOCOL_MISMATCH_CODE, INCOMPATIBLE_CLIENT_MESSAGE);
+      }
+
+      logger.info("accepted client handshake", {
+        sessionId: client.sessionId,
+        clientProtocol: result.value.protocolVersion,
+        clientBuildVersion: result.value.buildVersion,
+      });
+      return true;
+    }
+
     override onCreate(): void {
       this.state = new FoundationState({
         serverBuildVersion: buildVersion,
         connectedPlayers: 0,
-      });
-
-      // The only client message in M0. It is validated at this boundary before
-      // any field is trusted; a malformed or incompatible hello is rejected.
-      this.onMessage<unknown>(CLIENT_MESSAGE_TYPES.hello, (client, message) => {
-        const result = validateClientHello(message);
-        if (!result.ok) {
-          logger.warn("rejected malformed client_hello", {
-            sessionId: client.sessionId,
-            error: result.error,
-          });
-          client.leave(CLOSE_PROTOCOL_REJECTED);
-          return;
-        }
-
-        if (!isProtocolCompatible(result.value.protocolVersion)) {
-          logger.warn("rejected incompatible client protocol", {
-            sessionId: client.sessionId,
-            clientProtocol: result.value.protocolVersion,
-            serverProtocol: PROTOCOL_VERSION,
-          });
-          client.leave(CLOSE_PROTOCOL_REJECTED);
-          return;
-        }
-
-        logger.info("accepted client_hello", {
-          sessionId: client.sessionId,
-          clientProtocol: result.value.protocolVersion,
-          clientBuildVersion: result.value.buildVersion,
-        });
       });
 
       logger.info("room created", { roomId: this.roomId });

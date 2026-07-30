@@ -1,23 +1,19 @@
 /**
- * Client -> server message type identifiers. Kept as string literals so both
- * ends share one source of truth and neither hard-codes raw strings.
+ * Shared client/server payload shapes for M0.
  *
- * M0 has no gameplay, so the only message is the post-join handshake. It exists
- * to exercise the authoritative rule that every client message is validated at
- * the network boundary before it is trusted.
+ * M0 has no gameplay, so there are no post-join client→server messages. The only
+ * thing a client tells the server is who it is: the version handshake below,
+ * supplied as Colyseus *join options* so the server can refuse an incompatible
+ * client before it ever occupies a seat (see the technical plan §35).
  */
-export const CLIENT_MESSAGE_TYPES = {
-  hello: "client_hello",
-} as const;
-
-export type ClientMessageType = (typeof CLIENT_MESSAGE_TYPES)[keyof typeof CLIENT_MESSAGE_TYPES];
 
 /**
- * Handshake the client sends immediately after joining. It reports only version
+ * Version handshake the client supplies as Colyseus join options. It reports only
  * information the client legitimately owns; the server never trusts a client for
- * anything beyond identifying itself.
+ * anything beyond identifying its version. The server validates this at the join
+ * boundary and rejects a malformed or incompatible client.
  */
-export interface ClientHelloPayload {
+export interface ClientHandshake {
   readonly protocolVersion: number;
   readonly buildVersion: string;
 }

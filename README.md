@@ -38,8 +38,26 @@ Enable Corepack once per machine:
 corepack enable
 ```
 
+> **Windows: `corepack enable` fails with `EPERM` / "operation not permitted".**
+> `corepack enable` installs shims into the Node install directory (e.g.
+> `C:\Program Files\nodejs`), which a non-elevated shell cannot write to. Choose
+> one of:
+>
+> - Run it from an **Administrator** PowerShell, **or**
+> - Install the shims into a user-writable directory that is already on your
+>   `PATH` (the npm global bin usually is):
+>
+>   ```powershell
+>   corepack enable --install-directory "$env:APPDATA\npm"
+>   ```
+>
+> - Or skip the shims entirely and invoke pnpm through Corepack each time —
+>   `corepack pnpm <args>` (e.g. `corepack pnpm install`). This needs no admin
+>   rights and is what CI does after `corepack enable` on Linux.
+
 All commands below are run from the repository root. pnpm `11.18.0` is pinned in
-`package.json` (`packageManager`) and Corepack will use it automatically.
+`package.json` (`packageManager`) and Corepack will use it automatically. If you
+did not enable the shims, prefix each `pnpm …` command with `corepack `.
 
 ## Install
 
@@ -63,6 +81,15 @@ Copy-Item .env.example .env
 `ALLOWED_ORIGINS`, `GAME_BUILD_VERSION`, `LOG_LEVEL`). It contains **no
 secrets**; the real `.env` is git-ignored.
 
+Both sides read this single root `.env`:
+
+- The **client** (Vite) loads the `VITE_*` vars.
+- The **server** loads `NODE_ENV`, `PORT`, `ALLOWED_ORIGINS`,
+  `GAME_BUILD_VERSION`, and `LOG_LEVEL` via Node's `--env-file` (wired into the
+  server `dev` and `start` scripts). The file is optional — with no `.env` the
+  server falls back to the documented defaults — and any real environment
+  variable takes precedence over the file, so a host can inject values directly.
+
 ## Run locally
 
 Start the client and server together:
@@ -80,13 +107,26 @@ This runs both workspaces in parallel:
 Open <http://localhost:5173>. The boot scene shows the title, the client build
 version, and a live **server connection status** that transitions
 `Connecting…` → `Connected` once the smoke-test room join succeeds. It also
-displays the synchronized connected-player count from the server.
+displays the synchronized connected-player count and a **health** line reporting
+the result of an HTTP `GET /health` — proving the client can reach the server
+over HTTP, not only over WebSocket (technical plan §38 exit criteria).
+
+If the client and server protocol versions disagree, the server refuses the join
+and the client shows a refresh/update message instead of connecting.
 
 To run just one side:
 
 ```powershell
 pnpm --filter @carry-or-fall/server dev
 pnpm --filter @carry-or-fall/client dev
+```
+
+To run the server the way a host does — from its built bundle, loading the root
+`.env` via `--env-file`:
+
+```powershell
+pnpm --filter @carry-or-fall/server build
+pnpm --filter @carry-or-fall/server start
 ```
 
 ## Quality checks and tests
@@ -117,7 +157,10 @@ Carry_or_Fall/
 │  ├─ simulation-core/  Deterministic simulation utilities (seeded PRNG in M0)
 │  └─ config/           Shared TypeScript + ESLint base config (no runtime code)
 ├─ docs/          Authoritative + control documents
-├─ .github/workflows/ci.yml   Format, lint, typecheck, test, build (no deploy)
+├─ .github/
+│  ├─ workflows/ci.yml      Format, lint, typecheck, test, build (no deploy)
+│  ├─ workflows/codeql.yml  CodeQL code scanning
+│  └─ dependabot.yml        Weekly dependency-update PRs
 ├─ tsconfig.base.json         Shared strict compiler settings
 ├─ eslint.config.mjs          Flat ESLint config
 ├─ vitest.config.ts           Unit + integration test projects
@@ -132,11 +175,18 @@ Carry_or_Fall/
 - Minimal Phaser client: one boot scene, build info, live connection status.
 - Minimal Colyseus server: one `foundation_room`, join/leave logging,
   synchronized state (server build version + connected-player count), an HTTP
-  health endpoint, env-var validation, structured logs, and graceful shutdown.
-- Shared `protocol` package with version constants, message types, and runtime
-  validators (the server never trusts arbitrary client input).
-- Strict TypeScript, ESLint, Prettier, Vitest, and GitHub Actions CI.
-- One verified local client-to-server connection.
+  health endpoint (allowlisted CORS), env-var validation, structured logs, and
+  graceful shutdown.
+- **Version-compatibility gate**: the client sends its protocol/build version as
+  join options and the server refuses an incompatible client at the join
+  boundary with a refresh/update message (technical plan §35).
+- Shared `protocol` package with version constants, the handshake/health
+  contracts, and runtime validators (the server never trusts arbitrary client
+  input; the client validates the health response too).
+- Strict TypeScript, ESLint, Prettier, Vitest, and GitHub Actions CI, plus
+  Dependabot dependency updates and CodeQL code scanning (technical plan §31).
+- One verified local client-to-server connection, and the client reaching the
+  HTTP health endpoint.
 
 **Excludes (deferred to later milestones)**
 
@@ -149,10 +199,24 @@ Carry_or_Fall/
 
 - **`pnpm` not found** — run `corepack enable`, then retry. Corepack ships with
   Node 24; no separate pnpm install is needed.
+- **`corepack enable` fails with `EPERM` (Windows)** — the shims target the Node
+  install dir, which needs admin rights. Run it from an Administrator shell, use
+  `corepack enable --install-directory "$env:APPDATA\npm"`, or just prefix
+  commands with `corepack ` (e.g. `corepack pnpm install`). See
+  [Prerequisites](#prerequisites).
+- **Client shows a refresh/update message** — the client's protocol version does
+  not match the server's, so the server refused the join (technical plan §35).
+  This normally means a stale browser tab against a newer server; refresh the
+  page. During development, restart both sides so their build/protocol versions
+  agree.
 - **Client shows `Connection failed`** — ensure the server is running
   (`pnpm dev` starts both) and that `VITE_GAME_SERVER_URL` in `.env` points at
   the server (`ws://localhost:2567` by default). Confirm the server is up via
   `http://localhost:2567/health`.
+- **Client health line shows `unreachable`** — the HTTP `GET /health` failed.
+  Confirm the server is running and that its `ALLOWED_ORIGINS` includes the
+  client origin (`http://localhost:5173` by default), since the health response
+  is CORS-restricted to allowlisted origins.
 - **Port already in use** — the client uses a strict port (`5173`) and will
   fail rather than pick another. Free the port or change `PORT` /
   `VITE_GAME_SERVER_URL` and the Vite port together.

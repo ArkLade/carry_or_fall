@@ -18,8 +18,9 @@ Carry_or_Fall/
 │  ├─ client/                 Phaser 4 + Vite browser client
 │  │  ├─ src/
 │  │  │  ├─ config/env.ts      Typed client configuration (env vars)
-│  │  │  ├─ network/connection.ts  Colyseus connection helper
-│  │  │  ├─ scenes/BootScene.ts    Single boot scene (status UI)
+│  │  │  ├─ network/connection.ts  Colyseus connection helper (version handshake)
+│  │  │  ├─ network/health.ts  HTTP health probe (GET /health)
+│  │  │  ├─ scenes/BootScene.ts    Single boot scene (status + health UI)
 │  │  │  ├─ vite-env.d.ts      Typed import.meta.env declarations
 │  │  │  └─ main.ts
 │  │  ├─ test/                 Integration test (production build)
@@ -33,19 +34,22 @@ Carry_or_Fall/
 │     │  ├─ rooms/FoundationRoom.ts  Connection-only room + synced state
 │     │  ├─ rooms/FoundationState.ts Colyseus schema state
 │     │  ├─ logger.ts          Structured JSON logging
-│     │  ├─ server.ts          HTTP health endpoint + Colyseus wiring
+│     │  ├─ server.ts          Health endpoint (allowlisted CORS) + Colyseus wiring
 │     │  └─ index.ts           Bootstrap: env load, listen, graceful shutdown
 │     ├─ test/                 Integration tests (room smoke + production build)
 │     ├─ esbuild.config.mjs    Production bundle (esbuild)
 │     ├─ tsconfig.json
 │     └─ package.json
 ├─ packages/
-│  ├─ protocol/               Shared IDs, versions, schemas, validators (+ unit tests)
+│  ├─ protocol/               Shared IDs, versions, handshake + health contracts, validators
 │  ├─ game-content/           Content type placeholders (no content)
 │  ├─ simulation-core/        Deterministic helper + version (no combat)
 │  └─ config/                 Shared tsconfig + ESLint/Prettier config source
 ├─ docs/                      Authoritative docs + rules/decisions/plan
-├─ .github/workflows/ci.yml   CI pipeline
+├─ .github/
+│  ├─ workflows/ci.yml        CI pipeline (validate only, no deploy)
+│  ├─ workflows/codeql.yml    CodeQL code scanning
+│  └─ dependabot.yml          Dependency-update PRs
 ├─ AGENTS.md, CLAUDE.md
 ├─ package.json               Root workspace + scripts
 ├─ pnpm-workspace.yaml
@@ -107,16 +111,26 @@ milestones (load testing, persistence, protocol design) and are intentionally om
 `pnpm dev` runs both apps via `pnpm --parallel -r run dev` (no extra orchestrator). All scripts
 are Windows-compatible (chained with `&&`, executed by pnpm's script shell).
 
+The server package also exposes `start` (`node --env-file-if-exists=../../.env dist/index.js`) to
+run the built bundle the way a host does. Both the server `dev` and `start` scripts load the root
+`.env` via Node's `--env-file` so `PORT`/`ALLOWED_ORIGINS`/`GAME_BUILD_VERSION`/`LOG_LEVEL` take
+effect; Vite loads the `VITE_*` vars for the client. The file is optional (defaults apply when it
+is absent) and real environment variables take precedence.
+
 ## 6. Tests
 
 1. protocol version + build-version exports and shape.
-2. runtime validation of the minimal client message schema (accept valid, reject malformed).
+2. runtime validation of the client handshake and the health response (accept valid, reject
+   malformed).
 3. simulation-core deterministic helper (seeded PRNG reproducibility).
-4. server health endpoint returns ok + build version.
-5. Colyseus `foundation_room` accepts a valid client (integration).
-6. synchronized connected-player count increments on join and decrements on leave.
-7. room disposes when empty.
-8. production builds complete for client (Vite) and server (esbuild), each exercised by a
+4. server health endpoint returns ok + build version, with allowlisted CORS: an allowed origin
+   receives a reflected `Access-Control-Allow-Origin`; a disallowed origin receives none.
+5. Colyseus `foundation_room` accepts a compatible client at join (integration).
+6. an incompatible protocol version — and a malformed handshake — are refused at join with the
+   refresh/update message and mismatch code (technical plan §35).
+7. synchronized connected-player count increments on join and decrements on leave.
+8. room disposes when empty.
+9. production builds complete for client (Vite) and server (esbuild), each exercised by a
    dedicated integration test and again by `pnpm build` in CI.
 
 ## 7. CI workflow
@@ -124,6 +138,11 @@ are Windows-compatible (chained with `&&`, executed by pnpm's script shell).
 `.github/workflows/ci.yml`, on push and pull_request: checkout → Node 24 → enable Corepack/pnpm
 → `pnpm install --frozen-lockfile` → `format:check` → `lint` → `typecheck` → `test` →
 `test:integration` → `build`. No deployment.
+
+Dependency and code scanning (technical plan §31): `.github/dependabot.yml` opens weekly update
+PRs for the npm/pnpm and github-actions ecosystems, and `.github/workflows/codeql.yml` runs
+CodeQL analysis on JavaScript/TypeScript on push, pull_request, and a weekly schedule. Both
+validate only — no deployment.
 
 ## 8. Acceptance criteria
 
@@ -134,7 +153,9 @@ are Windows-compatible (chained with `&&`, executed by pnpm's script shell).
 - A browser client connects to the local server, joins `foundation_room`, and shows
   Connecting → Connected (or Connection failed on error), plus server build version and live
   connected-player count.
-- Server exposes an HTTP health endpoint.
+- Server exposes an HTTP health endpoint, and the browser client reaches it and surfaces the
+  result (technical plan §38 exit criteria).
+- An incompatible client is refused at join with a refresh/update message (technical plan §35).
 - No secrets committed; no out-of-scope gameplay systems added.
 
 ## 9. Non-goals

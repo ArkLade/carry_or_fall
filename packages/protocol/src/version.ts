@@ -2,8 +2,8 @@
  * Wire protocol version shared by the client and the authoritative server.
  *
  * Bump this whenever the message contract changes in a way an older peer cannot
- * understand. The client sends its value on connect (see `ClientHelloPayload`)
- * so the server can detect a stale client instead of letting it silently desync.
+ * understand. The client sends its value at join time (see `ClientHandshake`)
+ * so the server can refuse a stale client instead of letting it silently desync.
  */
 export const PROTOCOL_VERSION = 1;
 
@@ -14,6 +14,21 @@ export const PROTOCOL_VERSION = 1;
 export function isProtocolCompatible(peerVersion: number): boolean {
   return peerVersion === PROTOCOL_VERSION;
 }
+
+/**
+ * Application-defined code the server returns when it refuses an incompatible
+ * client at the join boundary. In the app-defined 4000+ range permitted for
+ * WebSocket close/error codes.
+ */
+export const PROTOCOL_MISMATCH_CODE = 4001;
+
+/**
+ * Message the server returns with {@link PROTOCOL_MISMATCH_CODE} when it refuses
+ * an incompatible client. The technical plan §35 requires showing a
+ * refresh/update prompt rather than letting a stale tab talk to a newer server.
+ */
+export const INCOMPATIBLE_CLIENT_MESSAGE =
+  "Your game version is out of date. Please refresh the page to update.";
 
 const MAX_BUILD_VERSION_LENGTH = 64;
 

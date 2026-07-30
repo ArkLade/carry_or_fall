@@ -5,8 +5,9 @@
   "type": "module",
   "description": "Authoritative Colyseus game server (Node 24). M0 hosts a single foundation_room with a health endpoint and graceful shutdown; no gameplay.",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "node esbuild.config.mjs"
+    "dev": "tsx watch --env-file-if-exists=../../.env src/index.ts",
+    "build": "node esbuild.config.mjs",
+    "start": "node --env-file-if-exists=../../.env dist/index.js"
   },
   "dependencies": {
     "@carry-or-fall/protocol": "workspace:*",

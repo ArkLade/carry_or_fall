@@ -162,3 +162,110 @@ milestone, not implemented yet).
 - **Consequences:** The client shows foundation status and connection state; the server hosts a
   connection-only room. Gameplay begins at M1.
 - **Status:** Approved.
+
+## D18. Refuse incompatible clients at the join boundary
+
+- **Decision:** The client sends its protocol and build version as Colyseus **join options**;
+  the server validates them in `onAuth` and refuses an incompatible or malformed client at the
+  join boundary, returning `PROTOCOL_MISMATCH_CODE` (4001) with a refresh/update message. The
+  client surfaces that message. The reported version gates compatibility only and is never
+  trusted as game state.
+- **Reason:** Technical plan §35 requires preventing an incompatible client from joining and
+  showing a refresh/update prompt, so a stale tab cannot send messages a newer server no longer
+  understands. Rejecting at join (rather than accepting then kicking) means an incompatible
+  client never occupies a seat.
+- **Consequences:** The protocol package owns the handshake shape, the mismatch code, and the
+  message; both ends share them. M0 uses exact protocol-version matching; a later milestone may
+  widen it to a supported range and add the content version.
+- **Status:** Approved.
+
+## D19. Client can reach the health endpoint; CORS is allowlisted
+
+- **Decision:** The browser client fetches the server's HTTP `GET /health` and surfaces the
+  result, proving HTTP reachability independently of the WebSocket (technical plan §38 M0 exit
+  criteria). Because the client and server are different origins, `/health` returns
+  `Access-Control-Allow-Origin` reflecting **only** an origin in `ALLOWED_ORIGINS`; other origins
+  receive the body without a CORS grant — never a wildcard (technical plan §20.3).
+- **Reason:** §38 lists "client can reach health endpoint" as an M0 exit criterion, and a
+  browser cannot read a cross-origin response without a matching CORS header. The health/HTTP
+  contract lives in the shared protocol package and the client validates the response at the
+  boundary.
+- **Consequences:** Colyseus's router reflects any origin by default; the `/health` handler
+  overrides that to enforce the allowlist. Broader origin hardening across all HTTP routes (and
+  OPTIONS preflight) is a deployment-milestone concern, not M0.
+- **Status:** Approved.
+
+## D20. Server reads the root `.env` via Node `--env-file`
+
+- **Decision:** The server `dev` and `start` scripts load the repository-root `.env` with Node's
+  `--env-file-if-exists=../../.env`, so `PORT`, `ALLOWED_ORIGINS`, `GAME_BUILD_VERSION`,
+  `LOG_LEVEL`, and `NODE_ENV` from the single documented `.env` take effect for the server, just
+  as Vite loads the `VITE_*` vars for the client.
+- **Reason:** The README instructs copying `.env.example` to a root `.env`; previously only the
+  client honored it. `--env-file-if-exists` keeps the file optional (defaults still apply when it
+  is absent, e.g. in CI and integration tests) and real environment variables still take
+  precedence, matching how a production host injects secrets.
+- **Consequences:** One root `.env` configures both sides. No dotenv dependency is added. Running
+  the built server directly with `node dist/index.js` from another directory would not find
+  `../../.env`; use the `start` script (run from the server package) instead.
+- **Status:** Approved.
+
+## D21. GitHub dependency and code scanning (Dependabot + CodeQL)
+
+- **Decision:** Enable Dependabot (`.github/dependabot.yml`) for the npm/pnpm and github-actions
+  ecosystems and a CodeQL workflow (`.github/workflows/codeql.yml`) analyzing JavaScript/
+  TypeScript on push, pull request, and a weekly schedule.
+- **Reason:** Technical plan §31 requires using "dependency and code scanning available through
+  GitHub." Dependabot's update PRs also fit the pinned-dependency, upgrade-only-through-a-PR
+  policy (§2.7).
+- **Consequences:** Scanning surfaces advisories and update PRs; it never deploys or auto-merges.
+  Both workflows validate only, consistent with the M0 rule that CI performs no deployment.
+- **Status:** Approved.
+
+## D22. Defer `docs/DATA_MODEL.md` to M5
+
+- **Date:** 2026-07-30.
+- **Decision:** `docs/DATA_MODEL.md` — the Supabase/PostgreSQL schema, the atomic reward
+  settlement function, secure-slot reservations, and row-level security (technical plan §18) — is
+  deliberately **not authored yet**. It is written when persistence work begins, at M5.
+- **Reason:** Technical plan §46 lists `DATA_MODEL.md` among the documents to create before major
+  gameplay code, but milestones M1–M4 (local combat, loot and extraction, data-driven skills, and
+  authoritative multiplayer) introduce **no persistent storage**: they run in memory with no
+  Supabase dependency, variables, schema, or code (see D9 and D16). Authoring the data model now
+  would be speculative and would likely be rewritten once account and reward requirements are
+  concrete at M5. The other §46 pre-gameplay documents that M1–M4 actually depend on — `PROTOCOL.md`,
+  `CONTENT_AUTHORING.md`, `TEST_PLAN.md`, and the M1 issue list — are written now.
+- **Consequences:** No `DATA_MODEL.md` exists during M1–M4. M5 ("Accounts and Progression") must
+  author it before any migration, and the same milestone owns `supabase/` migrations, the
+  `settle_match_reward` function, and RLS policies. Until then, no code reads or writes a persistent
+  schema; secure-slot and reward persistence remain explicitly unimplemented (D9, D16).
+- **Status:** Reserved.
+
+## D23. Runtime validators ship with the first networked consumer
+
+- **Decision:** Message *types* may be added to `packages/protocol` ahead of their
+  network use, but the runtime validator for a message is written no later than the
+  milestone in which that message first crosses a network boundary. M1 adds
+  `InputMessage` without a validator because M1 has no untrusted boundary; M4 must
+  add the validator in the same change that makes the server consume it.
+- **Reason:** `DEVELOPMENT_RULES.md` forbids empty layers for features that do not
+  exist yet, but also requires runtime validation at every network boundary and
+  forbids unchecked payloads. Deferring one validator with no consumer is fine;
+  letting M2 and M3 accumulate unvalidated message types and retrofitting them all
+  at M4 is not.
+- **Consequences:** No message reaches a network boundary without schema, range, and
+  state validation. The deferral applies only to types with no consumer.
+- **Status:** Approved.
+
+## D24. Client bundle code-splitting deferred to the deployment milestone
+
+- **Decision:** The client production bundle is approximately 1.49 MB (Phaser
+  dominates) and Vite emits its >500 kB warning on every build. No code-splitting or
+  asset optimization is performed during local gameplay milestones. Revisit at M8
+  (private internet test), governed by technical plan §36 Asset Delivery.
+- **Reason:** First-load size matters once real players load the client over the
+  internet. Optimizing before the asset set exists would be premature.
+- **Consequences:** The Vite size warning is expected in every build until M8 and is
+  not treated as a regression. M8 must measure first-load size and apply the §36.1
+  strategies.
+- **Status:** Reserved.

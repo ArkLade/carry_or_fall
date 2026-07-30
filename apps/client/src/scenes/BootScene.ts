@@ -8,6 +8,7 @@ import Phaser from "phaser";
 
 import { type ClientEnv, loadClientEnv } from "../config/env";
 import { type ConnectionStatus, connectToFoundationRoom } from "../network/connection";
+import { checkServerHealth } from "../network/health";
 
 const COLOR = {
   title: "#e6edf3",
@@ -34,6 +35,7 @@ const STATUS_COLOR: Record<ConnectionStatus, string> = {
 export class BootScene extends Phaser.Scene {
   private statusText!: Phaser.GameObjects.Text;
   private playersText!: Phaser.GameObjects.Text;
+  private healthText!: Phaser.GameObjects.Text;
 
   constructor() {
     super("boot");
@@ -77,6 +79,14 @@ export class BootScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
+    this.healthText = this.add
+      .text(centerX, camera.height * 0.71, "Health: checking…", {
+        fontFamily: BASE_FONT,
+        fontSize: "16px",
+        color: COLOR.pending,
+      })
+      .setOrigin(0.5);
+
     this.add
       .text(centerX, camera.height * 0.92, env.serverUrl, {
         fontFamily: "monospace",
@@ -86,6 +96,10 @@ export class BootScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     void this.openConnection(env);
+    // The HTTP health probe is independent of the WebSocket connection, so it is
+    // reported separately: it proves the client can reach the server over HTTP
+    // even if the room join is still in flight or fails.
+    void this.reportHealth(env);
   }
 
   private async openConnection(env: ClientEnv): Promise<void> {
@@ -107,5 +121,16 @@ export class BootScene extends Phaser.Scene {
     const suffix = status === "failed" && detail !== undefined ? ` (${detail})` : "";
     this.statusText.setText(`${STATUS_LABEL[status]}${suffix}`);
     this.statusText.setColor(STATUS_COLOR[status]);
+  }
+
+  private async reportHealth(env: ClientEnv): Promise<void> {
+    const result = await checkServerHealth(env.serverUrl);
+    if (result.reachable) {
+      this.healthText.setText(`Health: ok · server build ${result.health.buildVersion}`);
+      this.healthText.setColor(COLOR.ok);
+    } else {
+      this.healthText.setText(`Health: unreachable (${result.detail})`);
+      this.healthText.setColor(COLOR.error);
+    }
   }
 }

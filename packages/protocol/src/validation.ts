@@ -1,4 +1,5 @@
-import { ClientHelloPayload } from "./messages";
+import { HealthResponse } from "./http";
+import { ClientHandshake } from "./messages";
 import { isBuildVersion } from "./version";
 
 /**
@@ -34,25 +35,61 @@ function isProtocolVersionValue(value: unknown): value is number {
 }
 
 /**
- * Validate an untrusted `client_hello` payload. This is the network-boundary
- * check for the only client message in M0: it enforces shape, types, and ranges
- * before any field is trusted, and never mutates or coerces the input.
+ * Validate an untrusted client handshake (Colyseus join options). This is the
+ * network-boundary check the server runs before admitting a client: it enforces
+ * shape, types, and ranges before any field is trusted, and never mutates or
+ * coerces the input.
  */
-export function validateClientHello(input: unknown): ValidationResult<ClientHelloPayload> {
+export function validateClientHandshake(input: unknown): ValidationResult<ClientHandshake> {
   if (!isRecord(input)) {
-    return fail("client_hello payload must be an object");
+    return fail("client handshake must be an object");
   }
 
   if (!isProtocolVersionValue(input["protocolVersion"])) {
-    return fail("client_hello.protocolVersion must be a positive integer");
+    return fail("client handshake protocolVersion must be a positive integer");
   }
 
   if (!isBuildVersion(input["buildVersion"])) {
-    return fail("client_hello.buildVersion must be a valid build version string");
+    return fail("client handshake buildVersion must be a valid build version string");
   }
 
   return ok({
     protocolVersion: input["protocolVersion"],
     buildVersion: input["buildVersion"],
+  });
+}
+
+/**
+ * Validate an untrusted health-endpoint response. The client fetches `/health`
+ * over HTTP (a network boundary), so the body is validated before it is trusted
+ * or displayed, exactly like a message received over the socket.
+ */
+export function validateHealthResponse(input: unknown): ValidationResult<HealthResponse> {
+  if (!isRecord(input)) {
+    return fail("health response must be an object");
+  }
+
+  if (input["status"] !== "ok") {
+    return fail('health response status must be "ok"');
+  }
+
+  if (!isBuildVersion(input["buildVersion"])) {
+    return fail("health response buildVersion must be a valid build version string");
+  }
+
+  if (!isProtocolVersionValue(input["protocolVersion"])) {
+    return fail("health response protocolVersion must be a positive integer");
+  }
+
+  const uptime = input["uptime"];
+  if (typeof uptime !== "number" || !Number.isFinite(uptime) || uptime < 0) {
+    return fail("health response uptime must be a non-negative number");
+  }
+
+  return ok({
+    status: "ok",
+    buildVersion: input["buildVersion"],
+    protocolVersion: input["protocolVersion"],
+    uptime,
   });
 }
