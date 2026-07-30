@@ -1,0 +1,14 @@
+{
+  "name": "@carry-or-fall/game-content",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Data-driven game content definitions. M0 ships type placeholders only; concrete content (points, items, skills) is deferred to later milestones per the concept document.",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  }
+}

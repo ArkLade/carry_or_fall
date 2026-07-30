@@ -1,0 +1,41 @@
+name: CodeQL
+
+# Code scanning (technical plan §31: "Use dependency and code scanning available
+# through GitHub"). Runs on pushes and PRs to main, plus a weekly scheduled scan
+# so newly published advisories are caught even when the code has not changed.
+# This workflow analyzes only; it never deploys.
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  schedule:
+    - cron: "30 5 * * 1"
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["javascript-typescript"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # TypeScript/JavaScript is interpreted, so no compiled build is needed.
+          build-mode: none
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

@@ -1,0 +1,28 @@
+# Dependency scanning (technical plan §31: "Use dependency and code scanning
+# available through GitHub"). Dependabot opens update PRs, which matches the
+# policy that dependencies are pinned and upgraded only through a dedicated PR
+# (technical plan §2.7). It does not deploy or merge anything on its own.
+version: 2
+updates:
+  # Application and library dependencies across the pnpm workspace. Dependabot
+  # reads pnpm-lock.yaml under the "npm" ecosystem.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    versioning-strategy: increase
+    groups:
+      # Batch updates to reduce PR noise; production and dev are kept separate so
+      # a runtime dependency bump is easy to review on its own.
+      production-dependencies:
+        dependency-type: "production"
+      development-dependencies:
+        dependency-type: "development"
+
+  # The GitHub Actions pinned in the CI and CodeQL workflows.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5

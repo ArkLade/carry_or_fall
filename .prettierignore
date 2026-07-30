@@ -1,0 +1,30 @@
+# Prettier ignore — keep in sync with .gitignore build/output excludes.
+
+# Dependencies and lockfile
+node_modules/
+pnpm-lock.yaml
+
+# Build output
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# Test / coverage
+coverage/
+.vitest/
+
+# Vite / caches
+.vite/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Generated design artifacts (excluded from lint, typecheck, and build per docs/DEVELOPMENT_RULES.md)
+design-artifacts/
+
+# Markdown is formatted by hand. The two authoritative docs in docs/ MUST NOT be
+# reformatted, and the remaining docs use manual layout, so exclude all Markdown.
+*.md

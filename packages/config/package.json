@@ -1,0 +1,11 @@
+{
+  "name": "@carry-or-fall/config",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared TypeScript and ESLint base configuration for the Carry or Fall monorepo. Consumed by relative path (tsconfig extends, eslint import); ships no runtime code.",
+  "exports": {
+    "./tsconfig.base.json": "./tsconfig.base.json",
+    "./eslint.base.mjs": "./eslint.base.mjs"
+  }
+}
