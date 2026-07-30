@@ -2,9 +2,13 @@
  * The local M1 play scene (M1.1, `docs/M1_EXECUTION_PLAN.md` §2.1, §2.2). It
  * captures input intent, advances the shared simulation on a fixed step, and
  * renders the resulting state — it decides no outcomes itself (technical plan
- * §5.1). Combat, the enemy, health/death, the HUD, and dash are later M1
- * chunks and are intentionally absent here.
+ * §5.1). This chunk adds aim and the sword/bow attack pipeline; the enemy,
+ * health/death, the HUD, and dash are later M1 chunks and are intentionally
+ * absent here. There is no enemy to hit yet, so the pipeline is always run
+ * with an empty target list — melee/ranged hit resolution is exercised by
+ * `packages/simulation-core` unit tests, not by anything in this scene.
  */
+import { basicBow, basicSword } from "@carry-or-fall/game-content";
 import Phaser from "phaser";
 import {
   createSimulation,
@@ -16,6 +20,7 @@ import {
 } from "@carry-or-fall/simulation-core";
 
 import { KeyboardInput } from "../input/keyboard";
+import { PointerInput } from "../input/pointer";
 import { WorldView } from "../render/world-view";
 
 const MAP_WIDTH = 960;
@@ -39,6 +44,7 @@ const PLAYER_START: Vec2 = { x: 240, y: MAP_HEIGHT / 2 };
 
 export class PlayScene extends Phaser.Scene {
   private keyboardInput!: KeyboardInput;
+  private pointerInput!: PointerInput;
   private worldView!: WorldView;
   private world!: World;
   private accumulatorMs = 0;
@@ -48,22 +54,35 @@ export class PlayScene extends Phaser.Scene {
   }
 
   create(): void {
-    this.world = createSimulation({ walls: TEST_MAP_WALLS, playerStart: PLAYER_START });
+    this.world = createSimulation({
+      walls: TEST_MAP_WALLS,
+      playerStart: PLAYER_START,
+      meleeWeapon: basicSword,
+      rangedWeapon: basicBow,
+    });
     this.keyboardInput = new KeyboardInput(this);
+    this.pointerInput = new PointerInput(this);
     this.worldView = new WorldView(this);
     this.worldView.render(this.world);
   }
 
   override update(_time: number, deltaMs: number): void {
     this.accumulatorMs += deltaMs;
-    const input = this.keyboardInput.getInputState();
+    const movement = this.keyboardInput.getInputState();
+    const input = {
+      ...movement,
+      aimAngle: this.pointerInput.aimAngleFrom(this.world.player.position),
+      attackPressed: this.pointerInput.isAttackPressed(),
+      secondaryAttackPressed: this.pointerInput.isSecondaryAttackPressed(),
+    };
 
     // The single client→simulation seam (`docs/M1_EXECUTION_PLAN.md` §2.1):
     // the only call site that advances authoritative state, and only ever by
     // the fixed step — never by `deltaMs` itself (technical plan §9.3). This
-    // becomes the authoritative room boundary at M4.
+    // becomes the authoritative room boundary at M4. No enemy exists yet, so
+    // the target list is always empty.
     while (this.accumulatorMs >= SIMULATION_DT_MS) {
-      this.world = stepSimulation(this.world, input);
+      ({ world: this.world } = stepSimulation(this.world, input));
       this.accumulatorMs -= SIMULATION_DT_MS;
     }
 

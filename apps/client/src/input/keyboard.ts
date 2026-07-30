@@ -7,6 +7,9 @@
 import Phaser from "phaser";
 import type { InputState } from "@carry-or-fall/simulation-core";
 
+/** The movement subset of `InputState`; `PlayScene` merges this with `PointerInput`'s aim/attack fields. */
+export type MovementInput = Pick<InputState, "moveX" | "moveY">;
+
 export class KeyboardInput {
   private readonly up: Phaser.Input.Keyboard.Key;
   private readonly down: Phaser.Input.Keyboard.Key;
@@ -27,7 +30,7 @@ export class KeyboardInput {
   }
 
   /** The current normalized movement intent, read fresh each call. */
-  getInputState(): InputState {
+  getInputState(): MovementInput {
     return {
       moveX: axisValue(this.right, this.left),
       moveY: axisValue(this.down, this.up),

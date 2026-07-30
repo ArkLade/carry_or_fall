@@ -32,6 +32,9 @@ importers:
 
   apps/client:
     dependencies:
+      '@carry-or-fall/game-content':
+        specifier: workspace:*
+        version: link:../../packages/game-content
       '@carry-or-fall/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -92,7 +95,11 @@ importers:
 
   packages/protocol: {}
 
-  packages/simulation-core: {}
+  packages/simulation-core:
+    dependencies:
+      '@carry-or-fall/game-content':
+        specifier: workspace:*
+        version: link:../game-content
 
 packages:
 

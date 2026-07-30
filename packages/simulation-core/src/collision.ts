@@ -35,6 +35,14 @@ export function circleIntersectsWall(circle: Circle, wall: Wall): boolean {
   return dx * dx + dy * dy < circle.radius * circle.radius;
 }
 
+/** Whether two circles overlap. Used for projectile-vs-target hit detection (M1.8). */
+export function circleIntersectsCircle(a: Circle, b: Circle): boolean {
+  const dx = a.position.x - b.position.x;
+  const dy = a.position.y - b.position.y;
+  const radiusSum = a.radius + b.radius;
+  return dx * dx + dy * dy < radiusSum * radiusSum;
+}
+
 /** The axis-aligned bounding box of a circle, for spatial-grid queries. */
 export function circleBounds(circle: Circle): Wall {
   return {

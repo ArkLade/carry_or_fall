@@ -213,3 +213,27 @@ independent once the loop (M1.1) and weapon data (M1.2) exist.
 - Documentation updated where behavior or structure changed (`DEVELOPMENT_RULES.md`), including
   `docs/PROTOCOL.md` if the input message is formalized and `docs/CONTENT_AUTHORING.md` if content
   fields change.
+
+
+## Known deferred defects
+
+### D-1. Projectiles do not collide with walls
+
+Found by manual play testing after the attack pipeline was implemented. A bow
+projectile passes through interior walls, and at the outer boundary it is
+despawned rather than colliding. The player character collides with walls
+correctly, so the defect is specific to projectiles.
+
+Technical plan §12.1 places projectiles in the same collision system as actors
+(circles for actors and projectiles, AABB for walls). Projectiles are currently
+outside that path.
+
+Deferred deliberately so M1 can complete its remaining scope first. Two
+consequences to keep in mind until it is fixed:
+
+- Ranged combat is trivially safe, because there is no line of sight to break.
+  Do not judge combat balance or enemy threat until this is fixed.
+- The §13.4 bounce cap may not be reachable from running gameplay today, so its
+  test may be exercising an unreachable path. Verify when fixing.
+
+Fix before M1 is declared done, or move to M2 with an explicit decision.
