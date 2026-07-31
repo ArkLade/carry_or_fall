@@ -300,3 +300,69 @@ milestone, not implemented yet).
 - **Consequences:** `v0.1.0-local-combat` is not a good playable build. The first
   tag with correct collision is the M2 tag, `v0.2.0-loot-extraction`.
 - **Status:** Approved.
+
+## D29. One two-slot rare skill; loadout selection rejects, effect magnitude clamps
+
+- **Date:** 2026-07-31.
+- **Decision:** M3 ships exactly one 2-slot skill, `returning_shot` (concept §9.4's "Returning
+  Projectiles"); every other of the ten `ALL_SKILLS` costs 1 slot. Slot cost is validated by
+  `packages/simulation-core/src/skill-loadout.ts`'s `createSkillLoadout(skillIds)`, which sums
+  every selected skill's `slotCost` against `MAX_SKILL_SLOTS = 3` and **rejects** — a typed
+  `{ ok: false, reason }`, never a silently trimmed loadout — a selection with an unknown id, a
+  duplicate id, or a total slot cost over the budget. Separately, a *legal* loadout's summed effect
+  *magnitude* (e.g. stacking `stunChanceAdd` from the permanent loadout and an identical wildcard)
+  is **clamped** in `skill-effects.ts`, exactly like M2's `build-effects.ts` already clamps carried
+  loot.
+- **Reason:** Concept §8.3 permits "strong rare skills may cost two slots" without requiring one to
+  exist; shipping exactly one is enough to prove the two-slot mechanic works (`returning_shot` plus
+  one 1-slot skill fits; plus two 1-slot skills does not) without inventing several rare skills with
+  no numeric source in either authoritative document. The reject-vs-clamp split follows the existing
+  M2 precedent directly: a full inventory or an already-occupied secure slot is refused (no smaller
+  version of "select four slots' worth of skills" exists), while carried-loot build effects are
+  clamped (a legal build must keep working, just capped) — M3 extends the same rule to skills rather
+  than inventing a third policy.
+- **Consequences:** `createSkillLoadout` is the one validation boundary a pre-run loadout choice must
+  pass through before it ever reaches `createSimulation` (client `LoadoutScene` calls it live, per
+  toggle). `skill-effects.ts`'s caps (and, for bounce/pierce/return/search-radius, the pre-existing
+  `combat/caps.ts` §13.4 ceilings) are the only place effect magnitude is bounded; no function
+  refuses or throws for exceeding one.
+- **Status:** Approved.
+
+## D30. Wildcard skill chips are scattered ground pickups, not a boss-core drop
+
+- **Date:** 2026-07-31.
+- **Decision:** M3's wildcard skill chip (concept §10) is a `SkillChip` ground entity scattered on
+  the local test map at run start — the skill counterpart of M2.6's `GroundLoot` scattering, using
+  the same non-goal workaround (no new enemy type, no boss). Its skill is chosen via the seeded RNG
+  from the same `ALL_SKILLS` pool the permanent loadout draws from, not a boss-exclusive subset.
+- **Reason:** Concept §10 (wildcard) and concept §11 (boss skill cores) are two separate systems;
+  §10 names no source for the temporary chip, while §11's mechanic is explicitly boss-gated, and
+  bosses are M7 (`docs/M2_ISSUES.md` §1 already deferred all boss content). M3 has no boss and adds
+  no new enemy type, so a boss-core-sourced wildcard is not achievable this milestone; scattering
+  chips is the same treatment M2.6 already gave ordinary loot for the identical reason.
+- **Consequences:** Every wildcard chip a player can find in M3 grants an ordinary skill, including
+  the 2-slot `returning_shot` — there is no boss-exclusive skill roster yet. When M7 adds boss skill
+  cores, they become a second, boss-exclusive wildcard source alongside (not replacing) this one.
+- **Status:** Approved.
+
+## D31. Pre-run skill selection is a local, non-persistent client screen, not a lobby
+
+- **Date:** 2026-07-31.
+- **Decision:** A new client-only `LoadoutScene` is shown before `PlayScene`. It lets the player
+  toggle up to three permanent skills (validated live against `createSkillLoadout`, D29) and press
+  Enter to start a run with the confirmed loadout, passed as Phaser scene data. A documented default
+  loadout (`ricochet`, `extended_reach`, `bulwark_strike`) is pre-selected. Nothing is written to
+  storage; the choice does not survive a page reload; there is no networked matchmaking or waiting
+  room.
+- **Reason:** Concept §8.3 requires skills to be "selected before entering the match," and technical
+  plan §38 M3 lists "three pre-run skill slots" as a played deliverable, not just internal engine
+  state — but M3 still has no account or lobby (M5/M6, D9/D16). A local menu screen is not a lobby (a
+  lobby implies matchmaking or a multiplayer waiting room; this is a single-player menu, the same
+  category of thing as M2's Enter-to-restart convenience) and needs no persistence to exist.
+- **Consequences:** `main.ts`'s scene order changes: `LoadoutScene` is now the client's entry scene,
+  ahead of `PlayScene` (previously the direct entry point per `docs/M1_EXECUTION_PLAN.md` §9). The
+  Enter-to-restart convenience keeps the same loadout across a restart (an in-memory scene field, not
+  persistence) so a human can playtest repeatedly without returning to the picker every run. When M5
+  adds accounts and M6 adds lobbies, this screen's validation logic (`createSkillLoadout`) is reused;
+  its ephemeral, no-persistence framing is what changes.
+- **Status:** Approved.
