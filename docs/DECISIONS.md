@@ -286,3 +286,27 @@ milestone, not implemented yet).
   "Require approval for all external contributors" stays enabled under
   Settings → Actions → General.
 - **Status:** Approved.
+
+## D26. Projectile and dash collision defects moved to M2 — SUPERSEDED
+
+- **Original decision:** D-1 (projectiles pass through walls) and D-2 (dash
+  tunnels through thin walls) are not fixed in M1. Both are moved into M2 and
+  must be fixed before M2 loot and extraction work is declared done.
+- **Original reason:** M1's three §38 exit criteria are met without them. Both
+  share one root cause — `resolveAxisMovement` is a discrete landing-position
+  check rather than a swept path check — so they are one fix, not two, and are
+  better done together.
+- **Original consequences:** Ranged combat has no line of sight to break until
+  this is fixed; combat balance must not be judged before then. The §13.4
+  bounce cap may be exercising an unreachable code path.
+- **Superseded:** this decision was reversed before it was ever committed. D-1
+  and D-2 were fixed directly in M1, not deferred, using exactly the shared
+  swept-collision approach this entry anticipated —
+  `sweptCircleIntersectsWall` in `packages/simulation-core/src/collision.ts`,
+  used by both `resolveAxisMovement` (actor movement and the dash) and
+  `combat/ranged.ts`'s `stepProjectiles`. See `docs/M1_ISSUES.md` D-1/D-2
+  (marked resolved) for the fix and its regression tests. The bounce-cap
+  caveat still holds as written: `MAX_BOUNCES`/`clampBounceCount` remain
+  unreachable from running gameplay, because no mechanic produces a bounce
+  yet (M3's `ricochet` skill) — this fix deliberately did not add one.
+- **Status:** Superseded (see above); no longer in force.

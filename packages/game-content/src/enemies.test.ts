@@ -13,5 +13,6 @@ describe("chaser", () => {
     expect(chaser.health).toBeGreaterThan(0);
     expect(chaser.moveSpeed).toBeGreaterThan(0);
     expect(chaser.contactDamage).toBeGreaterThan(0);
+    expect(chaser.contactDamageIntervalMs).toBeGreaterThan(0);
   });
 });

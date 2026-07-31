@@ -183,6 +183,8 @@ export interface EnemyDefinition extends ContentDefinition {
   readonly health: number;
   readonly moveSpeed: number;
   readonly contactDamage: number;
+  /** How often a touching enemy re-applies `contactDamage`, in milliseconds. */
+  readonly contactDamageIntervalMs: number;
 }
 
 export const chaser: EnemyDefinition = {
@@ -192,6 +194,7 @@ export const chaser: EnemyDefinition = {
   health: 20,
   moveSpeed: 90,
   contactDamage: 5,
+  contactDamageIntervalMs: 500,
 } as const;
 ```
 

@@ -217,51 +217,71 @@ independent once the loop (M1.1) and weapon data (M1.2) exist.
 
 ## Known deferred defects
 
-### D-1. Projectiles do not collide with walls
+### D-1. Projectiles do not collide with walls — RESOLVED
 
 Found by manual play testing after the attack pipeline was implemented. A bow
-projectile passes through interior walls, and at the outer boundary it is
-despawned rather than colliding. The player character collides with walls
-correctly, so the defect is specific to projectiles.
+projectile passed through interior walls, and at the outer boundary it was
+despawned rather than colliding. The player character collided with walls
+correctly, so the defect was specific to projectiles.
 
 Technical plan §12.1 places projectiles in the same collision system as actors
-(circles for actors and projectiles, AABB for walls). Projectiles are currently
+(circles for actors and projectiles, AABB for walls). Projectiles were
 outside that path.
 
-Deferred deliberately so M1 can complete its remaining scope first. Two
-consequences to keep in mind until it is fixed:
+**Fix:** `combat/ranged.ts`'s `stepProjectiles` now sweeps each projectile's
+per-step travel against the spatial grid via `collision.ts`'s
+`sweptCircleIntersectsWall` (see D-2 below — one shared root cause, one
+shared fix). A projectile whose swept path this step crosses any wall
+(interior or boundary — both are just `Wall` entries in the same grid) is
+removed before target-hit resolution runs, so a wall between the shooter and
+a target now protects that target rather than merely despawning the
+projectile cosmetically after the fact. No bounce was added: per concept
+§29.2, bounces are the `ricochet` skill's effect (M3), not base-weapon
+behavior, and the §13.4 value of 3 is a ceiling, not a default. `basic_bow`
+projectiles stop at a wall.
 
-- Ranged combat is trivially safe, because there is no line of sight to break.
-  Do not judge combat balance or enemy threat until this is fixed.
-- The §13.4 bounce cap may not be reachable from running gameplay today, so its
-  test may be exercising an unreachable path. Verify when fixing.
+Consequences that no longer apply:
 
-Fix before M1 is declared done, or move to M2 with an explicit decision.
+- ~~Ranged combat is trivially safe, because there is no line of sight to
+  break.~~ Line of sight is now real: a wall blocks a shot.
+- **The §13.4 bounce cap still does not exercise a code path reachable from
+  running gameplay.** `clampBounceCount`/`MAX_BOUNCES` (`combat/caps.ts`) are
+  not called by any weapon or pipeline stage — no mechanic produces a bounce
+  yet (that is M3's `ricochet` skill). Its test (`caps.test.ts`) still only
+  exercises the standalone cap-enforcement function directly, same as before
+  this fix. This is expected, not a regression: this task deliberately did
+  not add bounce behavior.
 
-### D-2. A large enough dash can tunnel through a thin wall
+Regression tests: `packages/simulation-core/src/combat/ranged.test.ts`
+("stepProjectiles: wall collision (D-1, resolved)") and
+`packages/simulation-core/src/simulation.test.ts` ("swept wall collision
+fixes D-1 and D-2").
+
+### D-2. A large enough dash can tunnel through a thin wall — RESOLVED
 
 Found while adding the dash (M1.S1). Wall collision (`collision.ts`,
-`resolveAxisMovement`) is a **discrete** check: it tests only the candidate
+`resolveAxisMovement`) was a **discrete** check: it tested only the candidate
 landing position against the spatial grid's walls, with no swept/continuous
 check along the path between the old and new position. Ordinary per-step
-movement is small enough (`PLAYER_SPEED * SIMULATION_DT_SECONDS` ≈ 11px at
-220px/s and 50ms) that this has never mattered, but the dash moves the player
+movement was small enough (`PLAYER_SPEED * SIMULATION_DT_SECONDS` ≈ 11px at
+220px/s and 50ms) that this never mattered, but the dash moves the player
 `DASH_DISTANCE_PX` (140px) in a single step — larger than the compact test
-map's wall thickness (20px) — so a dash aimed squarely at a thin wall can land
-past it without ever being detected as colliding.
+map's wall thickness (20px) — so a dash aimed squarely at a thin wall could
+land past it without ever being detected as colliding.
 
-Deferred deliberately: fixing it means adding a swept-segment (or
-sub-stepped) check to the shared movement-resolution path, which is a real
-change to `collision.ts` beyond this task's scope (implement the dash; do not
-redesign collision). Two consequences to keep in mind until it is fixed:
+**Fix — the same root cause as D-1, fixed once:** `resolveAxisMovement` now
+queries the spatial grid over the swept bounding box of the whole move (not
+just the landing position) and tests each candidate wall with the new
+`sweptCircleIntersectsWall(start, end, radius, wall)` instead of the old
+discrete `circleIntersectsWall(candidatePosition, wall)`. This one function
+is the single swept-collision path shared by ordinary movement, the dash, the
+chaser's movement, and (via `stepProjectiles`) projectiles — not two separate
+patches. It is an exact circle-vs-AABB sweep (Minkowski-sum decomposition:
+the wall expanded by the radius on each flat side, plus a radius-distance
+check against each of its four corners), so it introduces no new false
+positives/negatives beyond what the previous discrete check already had at a
+single point in time.
 
-- A player can dash through the test map's interior wall under the right
-  aim/position, effectively teleporting past an obstacle other movement
-  respects.
-- The same risk applies to any future fast, large single-step displacement
-  (not just the dash), so any such addition should account for this rather
-  than assume the existing discrete check is sufficient.
-
-Fix before the movement/collision system is revisited, or accept and document
-a maximum safe single-step displacement (e.g. clamp `DASH_DISTANCE_PX` below
-the thinnest wall on any shipped map) with an explicit decision.
+Regression test:
+`packages/simulation-core/src/simulation.test.ts` ("[D-2 regression] does not
+tunnel through a wall thinner than DASH_DISTANCE_PX (140px)").

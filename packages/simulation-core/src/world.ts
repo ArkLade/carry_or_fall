@@ -58,9 +58,9 @@ export interface MeleeAttackState {
  * A live ranged projectile (M1.8). Runtime shape is intentionally minimal:
  * M1's bow has no bounce/pierce/return/split behavior (`docs/
  * M1_EXECUTION_PLAN.md` §7), so a projectile simply travels until it hits one
- * target (and is then removed) or its lifespan expires. It does not collide
- * with walls — a known, deliberately deferred defect (`docs/M1_ISSUES.md`,
- * "Known deferred defects" D-1); not fixed or worked around here.
+ * target, is stopped by a wall (swept collision, `combat/ranged.ts` —
+ * `docs/M1_ISSUES.md` D-1, resolved), or its lifespan expires — removed in
+ * every case, never bounced.
  */
 export interface Projectile {
   readonly id: string;
@@ -87,6 +87,7 @@ export interface Enemy {
   readonly maxHealth: number;
   readonly moveSpeed: number;
   readonly contactDamage: number;
+  readonly contactDamageIntervalMs: number;
   readonly contactCooldownMs: number;
 }
 

@@ -6,6 +6,13 @@
  * player against every wall on the map (technical plan §12.3); a more complex
  * structure is added only with benchmarking, and none is needed for M1's small
  * test map.
+ *
+ * Movement resolution is **swept**, not discrete: `resolveAxisMovement` (and
+ * `combat/ranged.ts`'s projectile stepping) checks the whole path a circle
+ * travels this step, not just its landing position. This fixes
+ * `docs/M1_ISSUES.md` D-1 (projectiles passing through walls) and D-2 (a
+ * large dash tunneling through a thin wall) from one shared root cause and
+ * one shared fix — see {@link sweptCircleIntersectsWall}.
  */
 import type { Vec2, Wall } from "./world";
 
@@ -43,6 +50,129 @@ export function circleIntersectsCircle(a: Circle, b: Circle): boolean {
   return dx * dx + dy * dy < radiusSum * radiusSum;
 }
 
+/**
+ * Whether the line segment from `start` to `end` intersects axis-aligned box
+ * `box`. Standard slab (Liang-Barsky) clipping: the segment is parameterized
+ * as `start + t * (end - start)` for `t` in `[0, 1]`, clipped against each
+ * axis's slab. A zero-length segment (`start === end`) correctly degrades to
+ * a point-in-box test.
+ */
+function segmentIntersectsAabb(start: Vec2, end: Vec2, box: Wall): boolean {
+  let tMin = 0;
+  let tMax = 1;
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+
+  if (dx === 0) {
+    if (start.x < box.x || start.x > box.x + box.width) {
+      return false;
+    }
+  } else {
+    const tx1 = (box.x - start.x) / dx;
+    const tx2 = (box.x + box.width - start.x) / dx;
+    tMin = Math.max(tMin, Math.min(tx1, tx2));
+    tMax = Math.min(tMax, Math.max(tx1, tx2));
+    if (tMin > tMax) {
+      return false;
+    }
+  }
+
+  if (dy === 0) {
+    if (start.y < box.y || start.y > box.y + box.height) {
+      return false;
+    }
+  } else {
+    const ty1 = (box.y - start.y) / dy;
+    const ty2 = (box.y + box.height - start.y) / dy;
+    tMin = Math.max(tMin, Math.min(ty1, ty2));
+    tMax = Math.min(tMax, Math.max(ty1, ty2));
+    if (tMin > tMax) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * The squared distance from `point` to the closest point on segment
+ * `start`-`end`. A zero-length segment correctly degrades to point-to-point
+ * squared distance. Squared (not rooted) since every caller only compares it
+ * against a squared radius.
+ */
+function squaredDistanceToSegment(start: Vec2, end: Vec2, point: Vec2): number {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy;
+
+  let t = 0;
+  if (lengthSquared > 0) {
+    t = ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared;
+    t = Math.min(1, Math.max(0, t));
+  }
+
+  const closestX = start.x + t * dx;
+  const closestY = start.y + t * dy;
+  const offsetX = point.x - closestX;
+  const offsetY = point.y - closestY;
+  return offsetX * offsetX + offsetY * offsetY;
+}
+
+/**
+ * Whether a circle of `radius` sweeping from `start` to `end` ever overlaps
+ * `wall`, at any point along that path — not just at `end` (the previous,
+ * discrete-only check). This is the exact Minkowski-sum decomposition of "a
+ * circle vs. a rectangle" into three swept sub-shapes, which together cover
+ * the wall's rounded-rectangle "expansion" by `radius` with no gaps and no
+ * over-coverage:
+ *
+ * 1. The wall expanded by `radius` on the left/right (catches the segment
+ *    crossing the wall's vertical sides).
+ * 2. The wall expanded by `radius` on the top/bottom (catches the segment
+ *    crossing the horizontal sides).
+ * 3. A `radius`-distance check against each of the wall's four corners
+ *    (catches the segment passing near a corner, where the closest point on
+ *    the wall is that corner rather than an edge).
+ *
+ * When `start === end`, this reduces exactly to the discrete
+ * {@link circleIntersectsWall} test.
+ */
+export function sweptCircleIntersectsWall(
+  start: Vec2,
+  end: Vec2,
+  radius: number,
+  wall: Wall,
+): boolean {
+  const expandedHorizontally: Wall = {
+    x: wall.x - radius,
+    y: wall.y,
+    width: wall.width + radius * 2,
+    height: wall.height,
+  };
+  if (segmentIntersectsAabb(start, end, expandedHorizontally)) {
+    return true;
+  }
+
+  const expandedVertically: Wall = {
+    x: wall.x,
+    y: wall.y - radius,
+    width: wall.width,
+    height: wall.height + radius * 2,
+  };
+  if (segmentIntersectsAabb(start, end, expandedVertically)) {
+    return true;
+  }
+
+  const radiusSquared = radius * radius;
+  const corners: readonly Vec2[] = [
+    { x: wall.x, y: wall.y },
+    { x: wall.x + wall.width, y: wall.y },
+    { x: wall.x, y: wall.y + wall.height },
+    { x: wall.x + wall.width, y: wall.y + wall.height },
+  ];
+  return corners.some((corner) => squaredDistanceToSegment(start, end, corner) < radiusSquared);
+}
+
 /** The axis-aligned bounding box of a circle, for spatial-grid queries. */
 export function circleBounds(circle: Circle): Wall {
   return {
@@ -51,6 +181,20 @@ export function circleBounds(circle: Circle): Wall {
     width: circle.radius * 2,
     height: circle.radius * 2,
   };
+}
+
+/**
+ * The axis-aligned bounding box of a circle of `radius` sweeping from
+ * `start` to `end` — the union of both endpoints' circle bounds. Used to
+ * query the spatial grid for a swept check so a wall the segment merely
+ * passes through (not just one under the landing position) is still found.
+ */
+export function sweptCircleBounds(start: Vec2, end: Vec2, radius: number): Wall {
+  const minX = Math.min(start.x, end.x) - radius;
+  const minY = Math.min(start.y, end.y) - radius;
+  const maxX = Math.max(start.x, end.x) + radius;
+  const maxY = Math.max(start.y, end.y) + radius;
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
 /**
@@ -128,11 +272,13 @@ export function buildWallGrid(
 }
 
 /**
- * Resolve movement along one axis against the walls in `grid`: if moving by
- * `delta` on `axis` would overlap any candidate wall, the axis stays at its
- * current value (blocked); otherwise the moved value is returned. Resolving
- * the two axes independently (see `simulation.ts`) is what lets the player
- * slide along a wall instead of stopping dead on a diagonal approach.
+ * Resolve movement along one axis against the walls in `grid`: if the swept
+ * path from the current position to `delta` away on `axis` overlaps any
+ * candidate wall **at any point along it** (not just at the landing
+ * position — `docs/M1_ISSUES.md` D-2), the axis stays at its current value
+ * (blocked); otherwise the moved value is returned. Resolving the two axes
+ * independently (see `simulation.ts`) is what lets the player slide along a
+ * wall instead of stopping dead on a diagonal approach.
  */
 export function resolveAxisMovement(
   position: Vec2,
@@ -150,11 +296,10 @@ export function resolveAxisMovement(
     axis === "x"
       ? { x: position.x + delta, y: position.y }
       : { x: position.x, y: position.y + delta };
-  const candidateCircle: Circle = { position: candidatePosition, radius };
-  const candidates = grid.query(circleBounds(candidateCircle));
+  const candidates = grid.query(sweptCircleBounds(position, candidatePosition, radius));
 
   for (const wall of candidates) {
-    if (circleIntersectsWall(candidateCircle, wall)) {
+    if (sweptCircleIntersectsWall(position, candidatePosition, radius, wall)) {
       return current;
     }
   }

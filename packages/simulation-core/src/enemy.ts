@@ -20,9 +20,6 @@ import { resolveAxisMovement } from "./collision";
 import type { Rng } from "./prng";
 import type { Enemy, Vec2, Wall } from "./world";
 
-/** Pacing for contact damage: how often a touching enemy re-applies its `contactDamage`. */
-export const CONTACT_DAMAGE_COOLDOWN_MS = 500;
-
 /**
  * Build a live `Enemy` from its content definition, spawned at one of
  * `candidateSpawnPoints` chosen via the seeded PRNG (`createRng`) for
@@ -54,6 +51,7 @@ export function spawnEnemy(
     maxHealth: definition.health,
     moveSpeed: definition.moveSpeed,
     contactDamage: definition.contactDamage,
+    contactDamageIntervalMs: definition.contactDamageIntervalMs,
     contactCooldownMs: 0,
   };
 }

@@ -2,13 +2,7 @@ import { chaser, type EnemyDefinition } from "@carry-or-fall/game-content";
 import { describe, expect, it } from "vitest";
 
 import { buildWallGrid } from "./collision";
-import {
-  canDealContactDamage,
-  CONTACT_DAMAGE_COOLDOWN_MS,
-  isTouchingPlayer,
-  spawnEnemy,
-  stepEnemyMovement,
-} from "./enemy";
+import { canDealContactDamage, isTouchingPlayer, spawnEnemy, stepEnemyMovement } from "./enemy";
 import { createRng } from "./prng";
 import type { Enemy, Wall } from "./world";
 
@@ -23,6 +17,7 @@ describe("spawnEnemy", () => {
     expect(enemy.maxHealth).toBe(chaser.health);
     expect(enemy.moveSpeed).toBe(chaser.moveSpeed);
     expect(enemy.contactDamage).toBe(chaser.contactDamage);
+    expect(enemy.contactDamageIntervalMs).toBe(chaser.contactDamageIntervalMs);
     expect(enemy.radius).toBe(18);
     expect(enemy.contactCooldownMs).toBe(0);
   });
@@ -61,6 +56,7 @@ function buildEnemy(overrides: Partial<Enemy> = {}): Enemy {
     maxHealth: chaser.health,
     moveSpeed: chaser.moveSpeed,
     contactDamage: chaser.contactDamage,
+    contactDamageIntervalMs: chaser.contactDamageIntervalMs,
     contactCooldownMs: 0,
     ...overrides,
   };
@@ -132,9 +128,5 @@ describe("isTouchingPlayer / canDealContactDamage", () => {
 
     const farAway = buildEnemy({ position: { x: 1000, y: 0 }, contactCooldownMs: 0 });
     expect(canDealContactDamage(farAway, player)).toBe(false);
-  });
-
-  it("CONTACT_DAMAGE_COOLDOWN_MS is a positive pacing value", () => {
-    expect(CONTACT_DAMAGE_COOLDOWN_MS).toBeGreaterThan(0);
   });
 });

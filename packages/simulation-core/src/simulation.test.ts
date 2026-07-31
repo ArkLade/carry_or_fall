@@ -1,7 +1,6 @@
 import { basicBow, basicSword, chaser } from "@carry-or-fall/game-content";
 import { describe, expect, it } from "vitest";
 
-import { CONTACT_DAMAGE_COOLDOWN_MS } from "./enemy";
 import { PLAYER_SPEED } from "./movement";
 import {
   createSimulation,
@@ -181,17 +180,48 @@ describe("stepSimulation: dash (M1.S1)", () => {
   });
 
   it("is blocked by a wall exactly like ordinary movement", () => {
-    // Deliberately much thicker than DASH_DISTANCE_PX: collision here is a
-    // discrete check on the landing position only (no swept/continuous
-    // check), so a wall thinner than the dash distance can be jumped clean
-    // over — see the "dash can tunnel through a thin wall" note recorded in
-    // docs/M1_ISSUES.md's Known deferred defects. This test asserts the dash
-    // *does* respect collision, using a wall thick enough not to trigger
-    // that separate, already-flagged limitation.
     const wall: Wall = { x: 30, y: -200, width: 300, height: 400 };
     const world = newSimulation({ walls: [wall] });
     const { world: next } = stepSimulation(world, DASH_RIGHT);
     expect(next.player.position.x + next.player.radius).toBeLessThanOrEqual(wall.x);
+  });
+
+  it("[D-2 regression] does not tunnel through a wall thinner than DASH_DISTANCE_PX (140px)", () => {
+    // This is the exact scenario docs/M1_ISSUES.md's D-2 describes: a 20px
+    // wall — the compact test map's actual wall thickness — is far thinner
+    // than one dash, so the discrete (landing-position-only) check used to
+    // let the dash land clean on the other side, undetected. Run against the
+    // pre-fix code, this test fails (player ends up past the wall).
+    const wall: Wall = { x: 30, y: -200, width: 20, height: 400 };
+    const world = newSimulation({ walls: [wall] });
+    const { world: next } = stepSimulation(world, DASH_RIGHT);
+    expect(next.player.position.x + next.player.radius).toBeLessThanOrEqual(wall.x);
+  });
+});
+
+describe("stepSimulation: swept wall collision fixes D-1 and D-2 (docs/M1_ISSUES.md)", () => {
+  it("[D-1] stops a fast projectile that would otherwise cross a thin interior wall in one step", () => {
+    // basic_bow travels 600 * 0.05 = 30px per step — already wider than this
+    // 15px wall, so the old discrete endpoint-only check for projectiles
+    // (there wasn't one at all) let it land clean on the far side. Run
+    // against the pre-fix code, this test fails (the projectile survives,
+    // positioned past the wall).
+    const wall: Wall = { x: 10, y: -50, width: 15, height: 100 };
+    let world = newSimulation({ walls: [wall] });
+    ({ world } = stepSimulation(world, FIRE));
+    expect(world.projectiles).toHaveLength(0);
+  });
+
+  it("[D-1] a wall between the player and the enemy stops the projectile before it can hit the enemy", () => {
+    // Enemy sits far enough past the wall that reaching it takes a second
+    // step; run against the pre-fix code, the projectile is not stopped by
+    // the wall and damages the enemy on the second step, failing this test.
+    const wall: Wall = { x: 10, y: -50, width: 15, height: 100 };
+    let world = newSimulation({ walls: [wall], enemySpawnPoints: [{ x: 60, y: 0 }] });
+    ({ world } = stepSimulation(world, FIRE));
+    ({ world } = stepSimulation(world, NO_INPUT));
+    expect(world.enemies[0]!.health).toBe(chaser.health);
+    expect(world.projectiles).toHaveLength(0);
   });
 });
 
@@ -269,7 +299,7 @@ describe("stepSimulation: chaser movement and contact damage (M1.9/M1.10)", () =
     expect(world.player.health).toBe(PLAYER_MAX_HEALTH - chaser.contactDamage);
 
     // After the contact cooldown fully elapses, contact damage can apply again.
-    const stepsToCooldown = Math.ceil(CONTACT_DAMAGE_COOLDOWN_MS / SIMULATION_DT_MS);
+    const stepsToCooldown = Math.ceil(chaser.contactDamageIntervalMs / SIMULATION_DT_MS);
     for (let i = 0; i < stepsToCooldown; i += 1) {
       ({ world } = stepSimulation(world, NO_INPUT));
     }

@@ -26,12 +26,7 @@ import type { AttackActor, AttackTarget } from "./combat/pipeline";
 import { applyDamageAmount } from "./combat/pipeline";
 import { startRangedAttack, stepProjectiles } from "./combat/ranged";
 import { computeDashDelta, DASH_COOLDOWN_MS } from "./dash";
-import {
-  canDealContactDamage,
-  CONTACT_DAMAGE_COOLDOWN_MS,
-  spawnEnemy,
-  stepEnemyMovement,
-} from "./enemy";
+import { canDealContactDamage, spawnEnemy, stepEnemyMovement } from "./enemy";
 import { computeMovementDelta } from "./movement";
 import { createRng } from "./prng";
 import type { Enemy, InputState, Vec2, Wall, World } from "./world";
@@ -210,14 +205,14 @@ export function stepSimulation(world: World, input: InputState): StepResult {
     }
   }
 
-  // Advance every live projectile: move, resolve a hit or expire. Projectiles
-  // do not collide with walls — a known, deliberately deferred defect
-  // (`docs/M1_ISSUES.md` D-1); not fixed or worked around here.
+  // Advance every live projectile: move, resolve against a wall (swept,
+  // D-1) or a target, or expire.
   const projectileStep = stepProjectiles(
     projectiles,
     SIMULATION_DT_MS,
     SIMULATION_DT_SECONDS,
     workingTargets,
+    grid,
   );
   projectiles = projectileStep.projectiles;
   workingTargets = projectileStep.updatedTargets;
@@ -249,7 +244,7 @@ export function stepSimulation(world: World, input: InputState): StepResult {
       if (playerHealth <= 0) {
         playerAlive = false;
       }
-      return { ...moved, contactCooldownMs: CONTACT_DAMAGE_COOLDOWN_MS };
+      return { ...moved, contactCooldownMs: moved.contactDamageIntervalMs };
     }
     return moved;
   });
