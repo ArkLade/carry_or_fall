@@ -1,4 +1,12 @@
-import { basicBow, basicSword, chaser, honingStone } from "@carry-or-fall/game-content";
+import {
+  basicBow,
+  basicSword,
+  bulwarkStrike,
+  chaser,
+  extendedReach,
+  honingStone,
+  multishot,
+} from "@carry-or-fall/game-content";
 import { describe, expect, it } from "vitest";
 
 import { PLAYER_SPEED } from "./movement";
@@ -568,5 +576,129 @@ describe("stepSimulation: death and extraction differ correctly (M2.8 exit crite
     const { world: next, hitEvents } = stepSimulation(world, MOVE_RIGHT);
     expect(next).toEqual(world);
     expect(hitEvents).toEqual([]);
+  });
+});
+
+// moveSpeed: 0 isolates a range/reach check from the chaser's own movement,
+// so a hit/miss is attributable only to the skill under test.
+const STATIONARY_CHASER = { ...chaser, moveSpeed: 0 };
+
+describe("stepSimulation: skill effects flow through the real pipeline (M3.3 exit criterion)", () => {
+  it("without extended_reach, a target just outside the base melee range is not hit", () => {
+    // basic_sword's base reach is rangePx (56) + the target's radius (18) = 74px.
+    let world = newSimulation({
+      enemyDefinition: STATIONARY_CHASER,
+      enemySpawnPoints: [{ x: 80, y: 0 }],
+    });
+    ({ world } = stepSimulation(world, ATTACK));
+    const stepsToActive = Math.ceil(basicSword.windupMs! / SIMULATION_DT_MS);
+    for (let i = 0; i < stepsToActive; i += 1) {
+      ({ world } = stepSimulation(world, NO_INPUT));
+    }
+    expect(world.enemies[0]!.health).toBe(chaser.health);
+  });
+
+  it("extended_reach in the permanent loadout widens the melee weapon's effective range enough to hit the same target", () => {
+    // extended_reach's boosted reach is (56 * 1.35) + 18 = 93.6px, past 80.
+    let world = newSimulation({
+      enemyDefinition: STATIONARY_CHASER,
+      skillLoadout: [extendedReach],
+      enemySpawnPoints: [{ x: 80, y: 0 }],
+    });
+    ({ world } = stepSimulation(world, ATTACK));
+    const stepsToActive = Math.ceil(basicSword.windupMs! / SIMULATION_DT_MS);
+    for (let i = 0; i < stepsToActive; i += 1) {
+      ({ world } = stepSimulation(world, NO_INPUT));
+    }
+    expect(world.enemies[0]!.health).toBeLessThan(chaser.health);
+  });
+
+  it("multishot in the permanent loadout spawns more projectiles through a real attack", () => {
+    let world = newSimulation({ skillLoadout: [multishot] });
+    ({ world } = stepSimulation(world, FIRE));
+    expect(world.projectiles).toHaveLength((basicBow.projectileCount ?? 0) + 2);
+  });
+
+  it("bulwark_strike grants shield on a landed melee hit", () => {
+    let world = newSimulation({
+      enemyDefinition: STATIONARY_CHASER,
+      skillLoadout: [bulwarkStrike],
+      enemySpawnPoints: [{ x: 40, y: 0 }],
+    });
+    expect(world.player.shieldHp).toBe(0);
+    ({ world } = stepSimulation(world, ATTACK));
+    const stepsToActive = Math.ceil(basicSword.windupMs! / SIMULATION_DT_MS);
+    for (let i = 0; i < stepsToActive; i += 1) {
+      ({ world } = stepSimulation(world, NO_INPUT));
+    }
+    expect(world.enemies[0]!.health).toBeLessThan(chaser.health); // the hit landed
+    expect(world.player.shieldHp).toBe(bulwarkStrike.effects.shieldOnHitAdd);
+  });
+
+  it("shield absorbs contact damage before health", () => {
+    const highContactDamageEnemy = { ...chaser, contactDamage: 5 };
+    const touchingDistance = PLAYER_RADIUS + ENEMY_RADIUS - 1;
+    let world = newSimulation({
+      enemyDefinition: highContactDamageEnemy,
+      enemySpawnPoints: [{ x: touchingDistance, y: 0 }],
+    });
+    // Seed a shield directly (isolating the contact-damage-consumes-shield
+    // wiring from how the shield was earned, which is covered above).
+    world = { ...world, player: { ...world.player, shieldHp: 4 } };
+    ({ world } = stepSimulation(world, NO_INPUT));
+    expect(world.player.shieldHp).toBe(0);
+    expect(world.player.health).toBe(PLAYER_MAX_HEALTH - 1); // 5 contact damage - 4 shield
+  });
+});
+
+describe("stepSimulation: wildcard skill chip (M3.7)", () => {
+  it("picking up a nearby skill chip sets the wildcard skill and removes the chip", () => {
+    let world = newSimulation({ skillChipSpawnPoints: [{ x: 0, y: 0 }] });
+    expect(world.skillChips).toHaveLength(1);
+    expect(world.player.wildcardSkill).toBeNull();
+    ({ world } = stepSimulation(world, INTERACT));
+    expect(world.player.wildcardSkill).not.toBeNull();
+    expect(world.skillChips).toHaveLength(0);
+  });
+
+  it("does nothing when no skill chip is nearby", () => {
+    let world = newSimulation({ skillChipSpawnPoints: [{ x: 100_000, y: 100_000 }] });
+    ({ world } = stepSimulation(world, INTERACT));
+    expect(world.player.wildcardSkill).toBeNull();
+    expect(world.skillChips).toHaveLength(1);
+  });
+
+  it("a second chip pickup replaces the current wildcard skill, with no refusal case", () => {
+    let world = newSimulation({
+      skillChipSpawnPoints: [
+        { x: 0, y: 0 },
+        { x: 5, y: 0 },
+      ],
+    });
+    ({ world } = stepSimulation(world, INTERACT));
+    expect(world.player.wildcardSkill).not.toBeNull();
+    ({ world } = stepSimulation(world, INTERACT));
+    expect(world.skillChips).toHaveLength(0); // both picked up
+    expect(world.player.wildcardSkill).not.toBeNull(); // still set, never refused
+  });
+
+  it("the wildcard's effects are included in aggregation alongside the permanent loadout", () => {
+    let world = newSimulation({});
+    world = { ...world, player: { ...world.player, wildcardSkill: multishot } };
+    ({ world } = stepSimulation(world, FIRE));
+    expect(world.projectiles).toHaveLength((basicBow.projectileCount ?? 0) + 2);
+  });
+
+  it("the wildcard skill is lost on death", () => {
+    const highContactDamageEnemy = { ...chaser, contactDamage: PLAYER_MAX_HEALTH };
+    const touchingDistance = PLAYER_RADIUS + ENEMY_RADIUS - 1;
+    let world = newSimulation({
+      enemyDefinition: highContactDamageEnemy,
+      enemySpawnPoints: [{ x: touchingDistance, y: 0 }],
+    });
+    world = { ...world, player: { ...world.player, wildcardSkill: multishot } };
+    ({ world } = stepSimulation(world, NO_INPUT));
+    expect(world.player.alive).toBe(false);
+    expect(world.player.wildcardSkill).toBeNull();
   });
 });

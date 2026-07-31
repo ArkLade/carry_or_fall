@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { basicSword } from "@carry-or-fall/game-content";
+import { basicBow, basicSword } from "@carry-or-fall/game-content";
 
+import { NO_SKILL_EFFECTS } from "../skill-effects";
 import {
   applyCarriedLootModifiers,
   applyDamage,
@@ -38,12 +39,13 @@ describe("prepareAttack (stages 1-5)", () => {
     const result = prepareAttack(ACTOR, basicSword, 0);
     expect(result.ready).toBe(true);
     if (!result.ready) throw new Error("expected ready");
-    // Stage 5 (carried-loot modifiers, M2) always returns an effective copy,
-    // even under NO_BUILD_EFFECTS, so this is equal-by-value, not the same
-    // reference as `basicSword`.
+    // Stages 4-5 (equipped skills M3, carried-loot modifiers M2) always
+    // return an effective copy, even under the "no effect" defaults, so this
+    // is equal-by-value, not the same reference as `basicSword`.
     expect(result.definition.weapon).toEqual(basicSword);
     expect(result.definition.origin).toEqual(ACTOR.position);
     expect(result.definition.facing).toBe(ACTOR.facing);
+    expect(result.definition.skillEffects).toEqual(NO_SKILL_EFFECTS);
   });
 
   it("also allows an attack exactly at zero remaining cooldown (boundary, not just below it)", () => {
@@ -51,17 +53,53 @@ describe("prepareAttack (stages 1-5)", () => {
   });
 });
 
-describe("pass-through stages (M1 has no skills or carried loot yet)", () => {
-  it("applyEquippedSkills does not alter the attack definition", () => {
+describe("pass-through stages under the 'no effect' defaults", () => {
+  it("applyEquippedSkills does not alter the attack definition under NO_SKILL_EFFECTS", () => {
     const result = prepareAttack(ACTOR, basicSword, 0);
     if (!result.ready) throw new Error("expected ready");
     expect(applyEquippedSkills(result.definition)).toEqual(result.definition);
   });
 
-  it("applyCarriedLootModifiers does not alter the attack definition", () => {
+  it("applyCarriedLootModifiers does not alter the attack definition under NO_BUILD_EFFECTS", () => {
     const result = prepareAttack(ACTOR, basicSword, 0);
     if (!result.ready) throw new Error("expected ready");
     expect(applyCarriedLootModifiers(result.definition)).toEqual(result.definition);
+  });
+});
+
+describe("applyEquippedSkills (stage 4, M3)", () => {
+  it("widens a melee weapon's range and arc, and shortens its recovery", () => {
+    const result = prepareAttack(ACTOR, basicSword, 0);
+    if (!result.ready) throw new Error("expected ready");
+    const skillEffects = {
+      ...NO_SKILL_EFFECTS,
+      rangeMultiplierAdd: 0.5,
+      arcDegreesAdd: 20,
+      recoveryReductionAdd: 0.5,
+    };
+    const effective = applyEquippedSkills(result.definition, skillEffects);
+    expect(effective.weapon.rangePx).toBeCloseTo(basicSword.rangePx! * 1.5);
+    expect(effective.weapon.arcDegrees).toBe(basicSword.arcDegrees! + 20);
+    expect(effective.weapon.recoveryMs).toBeCloseTo(basicSword.recoveryMs! * 0.5);
+    expect(effective.skillEffects).toEqual(skillEffects);
+  });
+
+  it("adds to a ranged weapon's projectile count and leaves melee-only fields untouched", () => {
+    const result = prepareAttack(ACTOR, basicBow, 0);
+    if (!result.ready) throw new Error("expected ready");
+    const skillEffects = { ...NO_SKILL_EFFECTS, projectileCountAdd: 3 };
+    const effective = applyEquippedSkills(result.definition, skillEffects);
+    expect(effective.weapon.projectileCount).toBe((basicBow.projectileCount ?? 0) + 3);
+    expect(effective.weapon.rangePx).toBeUndefined();
+  });
+
+  it("clamps the effective stunChance to [0, 1]", () => {
+    const swordWithBaseStun = { ...basicSword, stunChance: 0.8 };
+    const result = prepareAttack(ACTOR, swordWithBaseStun, 0);
+    if (!result.ready) throw new Error("expected ready");
+    const skillEffects = { ...NO_SKILL_EFFECTS, stunChanceAdd: 0.5 };
+    const effective = applyEquippedSkills(result.definition, skillEffects);
+    expect(effective.weapon.stunChance).toBe(1);
   });
 });
 

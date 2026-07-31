@@ -47,7 +47,10 @@ export const basicSword: WeaponDefinition = {
   id: "basic_sword",
   kind: "weapon",
   category: "melee",
-  tags: ["melee"],
+  // "attack" (concept §9.3's suggested generic tag) lets an M3 skill declare
+  // compatibility with either weapon category (e.g. `bulwark_strike`)
+  // without inventing a workaround (`docs/M3_ISSUES.md` M3.1).
+  tags: ["melee", "attack"],
   damage: 12,
   attackIntervalMs: 500,
   rangePx: 56,
@@ -65,7 +68,7 @@ export const basicBow: WeaponDefinition = {
   id: "basic_bow",
   kind: "weapon",
   category: "ranged",
-  tags: ["projectile"],
+  tags: ["projectile", "attack"],
   damage: 10,
   attackIntervalMs: 650,
   projectileSpeed: 600,

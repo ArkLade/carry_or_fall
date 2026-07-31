@@ -53,6 +53,7 @@ export function spawnEnemy(
     contactDamage: definition.contactDamage,
     contactDamageIntervalMs: definition.contactDamageIntervalMs,
     contactCooldownMs: 0,
+    stunnedMs: 0,
   };
 }
 
@@ -61,7 +62,10 @@ export function spawnEnemy(
  * behavior is `"chaser"` (nearest player — trivially the only player in M1's
  * single-player local run), blocked/sliding on walls exactly like the
  * player's own movement. Ticks down `contactCooldownMs` regardless of
- * behavior.
+ * behavior. While `stunnedMs > 0` (M3.5, a melee `stunning_blows`-style skill
+ * hit), the chase step is skipped, but `stunnedMs` still counts down every
+ * step so the stun eventually elapses (contact damage is unaffected by stun
+ * — a deliberate scope choice, `docs/M3_ISSUES.md` M3.5).
  */
 export function stepEnemyMovement(
   enemy: Enemy,
@@ -71,16 +75,17 @@ export function stepEnemyMovement(
   wallGrid: SpatialGrid<Wall>,
 ): Enemy {
   const contactCooldownMs = Math.max(0, enemy.contactCooldownMs - dtMs);
+  const stunnedMs = Math.max(0, enemy.stunnedMs - dtMs);
 
-  if (enemy.behavior !== "chaser") {
-    return { ...enemy, contactCooldownMs };
+  if (enemy.behavior !== "chaser" || enemy.stunnedMs > 0) {
+    return { ...enemy, contactCooldownMs, stunnedMs };
   }
 
   const dx = playerPosition.x - enemy.position.x;
   const dy = playerPosition.y - enemy.position.y;
   const distance = Math.hypot(dx, dy);
   if (distance === 0) {
-    return { ...enemy, contactCooldownMs };
+    return { ...enemy, contactCooldownMs, stunnedMs };
   }
 
   const step = enemy.moveSpeed * dtSeconds;
@@ -91,7 +96,7 @@ export function stepEnemyMovement(
   const afterX: Vec2 = { x, y: enemy.position.y };
   const y = resolveAxisMovement(afterX, "y", deltaY, enemy.radius, wallGrid);
 
-  return { ...enemy, position: { x, y }, contactCooldownMs };
+  return { ...enemy, position: { x, y }, contactCooldownMs, stunnedMs };
 }
 
 /** Whether `enemy` currently overlaps the player's circle. */
