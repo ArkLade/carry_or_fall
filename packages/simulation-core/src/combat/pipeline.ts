@@ -27,6 +27,7 @@
  */
 import type { WeaponDefinition } from "@carry-or-fall/game-content";
 
+import { applyBuildEffectsToWeapon, type BuildEffects, NO_BUILD_EFFECTS } from "../build-effects";
 import type { Vec2 } from "../vec2";
 
 /** The minimal actor shape the pipeline needs: where it is and which way it faces. */
@@ -93,20 +94,31 @@ export function applyEquippedSkills(definition: AttackDefinition): AttackDefinit
   return definition;
 }
 
-/** Stage 5: apply carried-loot modifiers. Pass-through in M1 — M2 adds real loot effects here. */
-export function applyCarriedLootModifiers(definition: AttackDefinition): AttackDefinition {
-  return definition;
+/**
+ * Stage 5: apply carried-loot modifiers (M2, `docs/M2_ISSUES.md` M2.4). The
+ * player's current `BuildEffects` (aggregated from their inventory —
+ * `build-effects.ts` — never the secure slot) are applied to the weapon this
+ * attack actually uses. Defaults to {@link NO_BUILD_EFFECTS} so an M1-era
+ * call site with no carried loot behaves exactly as the M1 pass-through did.
+ */
+export function applyCarriedLootModifiers(
+  definition: AttackDefinition,
+  carriedEffects: BuildEffects = NO_BUILD_EFFECTS,
+): AttackDefinition {
+  return { ...definition, weapon: applyBuildEffectsToWeapon(definition.weapon, carriedEffects) };
 }
 
 /**
  * Runs stages 1-5 and reports whether the attack may proceed. Shared by
  * `combat/melee.ts` and `combat/ranged.ts` so both weapon categories are
- * gated identically, matching invariant 8 ("Real pipeline").
+ * gated identically, matching invariant 8 ("Real pipeline"). `carriedEffects`
+ * defaults to {@link NO_BUILD_EFFECTS} for callers with no carried loot.
  */
 export function prepareAttack(
   actor: AttackActor,
   weapon: WeaponDefinition,
   cooldownRemainingMs: number,
+  carriedEffects: BuildEffects = NO_BUILD_EFFECTS,
 ): AttackPreparation {
   if (!isValidActor(actor)) {
     return { ready: false, reason: "invalid_actor" };
@@ -117,6 +129,7 @@ export function prepareAttack(
 
   const definition = applyCarriedLootModifiers(
     applyEquippedSkills(buildAttackDefinition(actor, weapon)),
+    carriedEffects,
   );
   return { ready: true, definition };
 }

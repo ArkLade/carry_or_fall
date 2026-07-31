@@ -13,6 +13,7 @@ import type { WeaponDefinition } from "@carry-or-fall/game-content";
 
 import { circleIntersectsCircle, sweptCircleBounds, sweptCircleIntersectsWall } from "../collision";
 import type { SpatialGrid } from "../collision";
+import { type BuildEffects, NO_BUILD_EFFECTS } from "../build-effects";
 import type { Projectile, Vec2, Wall } from "../world";
 import { clampProjectilesPerAttack, clampSpawnForActiveCap } from "./caps";
 import type { HitEvent } from "./events";
@@ -24,7 +25,12 @@ export const PROJECTILE_RADIUS_PX = 6;
 export const PROJECTILE_LIFESPAN_MS = 2000;
 
 export type RangedStartResult =
-  | { readonly started: true; readonly projectiles: readonly Projectile[] }
+  | {
+      readonly started: true;
+      readonly projectiles: readonly Projectile[];
+      /** The effective (post-carried-loot) attack interval; use this to set the next cooldown. */
+      readonly attackIntervalMs: number;
+    }
   | { readonly started: false; readonly reason: AttackDenialReason };
 
 /**
@@ -38,7 +44,8 @@ export type RangedStartResult =
  *
  * `spawnSequence` seeds deterministic projectile ids (e.g. the world's step
  * counter) — no `Math.random`/PRNG is needed since the spread distribution
- * below is a fixed, deterministic formula, not a random draw.
+ * below is a fixed, deterministic formula, not a random draw. `carriedEffects`
+ * (M2, `docs/M2_ISSUES.md` M2.4) defaults to {@link NO_BUILD_EFFECTS}.
  */
 export function startRangedAttack(
   actor: AttackActor,
@@ -46,8 +53,9 @@ export function startRangedAttack(
   cooldownRemainingMs: number,
   activeProjectileCount: number,
   spawnSequence: number,
+  carriedEffects: BuildEffects = NO_BUILD_EFFECTS,
 ): RangedStartResult {
-  const preparation = prepareAttack(actor, weapon, cooldownRemainingMs);
+  const preparation = prepareAttack(actor, weapon, cooldownRemainingMs, carriedEffects);
   if (!preparation.ready) {
     return { started: false, reason: preparation.reason };
   }
@@ -76,7 +84,7 @@ export function startRangedAttack(
     });
   }
 
-  return { started: true, projectiles };
+  return { started: true, projectiles, attackIntervalMs: definition.weapon.attackIntervalMs };
 }
 
 /**

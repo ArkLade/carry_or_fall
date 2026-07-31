@@ -14,6 +14,9 @@ function input(moveX: -1 | 0 | 1, moveY: -1 | 0 | 1): InputState {
     attackPressed: false,
     secondaryAttackPressed: false,
     dashPressed: false,
+    interactPressed: false,
+    discardSlotIndex: null,
+    secureSlotIndex: null,
   };
 }
 

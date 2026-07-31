@@ -8,6 +8,7 @@
 import type { WeaponDefinition } from "@carry-or-fall/game-content";
 
 import { angleDifference, degToRad } from "../angles";
+import { type BuildEffects, NO_BUILD_EFFECTS } from "../build-effects";
 import type { MeleeAttackState, Vec2 } from "../world";
 import type { AttackActor, AttackDenialReason, AttackTarget } from "./pipeline";
 import { applyDamage, prepareAttack } from "./pipeline";
@@ -19,13 +20,21 @@ export type MeleeStartResult =
   | { readonly started: true; readonly state: MeleeAttackState }
   | { readonly started: false; readonly reason: AttackDenialReason };
 
-/** Attempt to start a new swing. Refused if the actor is invalid or the weapon's cooldown has not elapsed. */
+/**
+ * Attempt to start a new swing. Refused if the actor is invalid or the
+ * weapon's cooldown has not elapsed. `carriedEffects` (M2, `docs/
+ * M2_ISSUES.md` M2.4) defaults to {@link NO_BUILD_EFFECTS} for no carried
+ * loot; the resulting `state.weapon` is the effective, post-loot weapon, so
+ * its `attackIntervalMs` is what the caller should use to set the next
+ * cooldown.
+ */
 export function startMeleeAttack(
   actor: AttackActor,
   weapon: WeaponDefinition,
   cooldownRemainingMs: number,
+  carriedEffects: BuildEffects = NO_BUILD_EFFECTS,
 ): MeleeStartResult {
-  const preparation = prepareAttack(actor, weapon, cooldownRemainingMs);
+  const preparation = prepareAttack(actor, weapon, cooldownRemainingMs, carriedEffects);
   if (!preparation.ready) {
     return { started: false, reason: preparation.reason };
   }
