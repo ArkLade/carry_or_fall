@@ -12,7 +12,7 @@ const root = fileURLToPath(new URL(".", import.meta.url));
 // client `VITE_*` vars and the server vars, so point Vite there explicitly.
 const envDir = fileURLToPath(new URL("../../", import.meta.url));
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   root,
   envDir,
   server: {
@@ -25,4 +25,18 @@ export default defineConfig({
     emptyOutDir: true,
     sourcemap: true,
   },
-});
+  // The shared root `.env` sets `NODE_ENV=development` for the server
+  // (`docs/DECISIONS.md` D20). Loading that same file via `envDir` above
+  // also feeds Vite's own production/development detection, which would
+  // otherwise make `import.meta.env.DEV` true even in a `vite build` output
+  // (verified: without this, dev-only code stayed in the production
+  // bundle). `command` is reliably "serve" for `vite`/`vite dev` and
+  // "build" for `vite build`/the programmatic `build()` API regardless of
+  // NODE_ENV, so defining the two constants from it instead of trusting
+  // Vite's NODE_ENV-influenced default keeps dev-only code (e.g. the debug
+  // hook, `docs/TEST_PLAN.md` §2.3) verifiably out of production.
+  define: {
+    "import.meta.env.DEV": JSON.stringify(command === "serve"),
+    "import.meta.env.PROD": JSON.stringify(command !== "serve"),
+  },
+}));

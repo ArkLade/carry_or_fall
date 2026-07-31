@@ -9,6 +9,8 @@ import type { WeaponDefinition } from "@carry-or-fall/game-content";
 
 import { angleDifference, degToRad } from "../angles";
 import { type BuildEffects, NO_BUILD_EFFECTS } from "../build-effects";
+import type { Rng } from "../prng";
+import { NO_SKILL_EFFECTS, type SkillEffects } from "../skill-effects";
 import type { MeleeAttackState, Vec2 } from "../world";
 import type { AttackActor, AttackDenialReason, AttackTarget } from "./pipeline";
 import { applyDamage, prepareAttack } from "./pipeline";
@@ -24,17 +26,26 @@ export type MeleeStartResult =
  * Attempt to start a new swing. Refused if the actor is invalid or the
  * weapon's cooldown has not elapsed. `carriedEffects` (M2, `docs/
  * M2_ISSUES.md` M2.4) defaults to {@link NO_BUILD_EFFECTS} for no carried
- * loot; the resulting `state.weapon` is the effective, post-loot weapon, so
- * its `attackIntervalMs` is what the caller should use to set the next
- * cooldown.
+ * loot; `skillEffects` (M3, `docs/M3_ISSUES.md` M3.3) defaults to
+ * {@link NO_SKILL_EFFECTS} for no equipped skills. The resulting
+ * `state.weapon` is the effective, post-skill, post-loot weapon, so its
+ * `attackIntervalMs`/`rangePx`/`arcDegrees`/`recoveryMs`/`stunChance` are what
+ * the caller should use.
  */
 export function startMeleeAttack(
   actor: AttackActor,
   weapon: WeaponDefinition,
   cooldownRemainingMs: number,
   carriedEffects: BuildEffects = NO_BUILD_EFFECTS,
+  skillEffects: SkillEffects = NO_SKILL_EFFECTS,
 ): MeleeStartResult {
-  const preparation = prepareAttack(actor, weapon, cooldownRemainingMs, carriedEffects);
+  const preparation = prepareAttack(
+    actor,
+    weapon,
+    cooldownRemainingMs,
+    carriedEffects,
+    skillEffects,
+  );
   if (!preparation.ready) {
     return { started: false, reason: preparation.reason };
   }
@@ -102,17 +113,31 @@ export function isWithinMeleeArc(
  * away from the swing's origin — M1 has no ongoing-force/velocity system for
  * a target to receive, since neither the enemy nor player physics state
  * exists yet). Called once, when the swing enters its active window.
+ *
+ * `rng` (M3.5, `docs/M3_ISSUES.md` M3.5) rolls each hit against the swing's
+ * effective `weapon.stunChance` (already skill-adjusted by
+ * `combat/pipeline.ts`'s stage 4); a successful roll adds the target's id to
+ * `stunnedTargetIds`. The caller (`simulation.ts`) — not this module, which
+ * only knows the minimal `AttackTarget` shape — applies the resulting stun
+ * duration to `Enemy.stunnedMs`.
  */
 export function resolveMeleeHits(
   state: MeleeAttackState,
   targets: readonly AttackTarget[],
-): { readonly updatedTargets: readonly AttackTarget[]; readonly hitEvents: readonly HitEvent[] } {
+  rng: Pick<Rng, "next">,
+): {
+  readonly updatedTargets: readonly AttackTarget[];
+  readonly hitEvents: readonly HitEvent[];
+  readonly stunnedTargetIds: readonly string[];
+} {
   const rangePx = state.weapon.rangePx ?? 0;
   const arcDegrees = state.weapon.arcDegrees ?? 0;
   const knockbackPx = state.weapon.knockback ?? 0;
+  const stunChance = state.weapon.stunChance ?? 0;
 
   const updatedTargets: AttackTarget[] = [];
   const hitEvents: HitEvent[] = [];
+  const stunnedTargetIds: string[] = [];
 
   for (const target of targets) {
     if (!isWithinMeleeArc(state.origin, state.facing, rangePx, arcDegrees, target)) {
@@ -124,9 +149,12 @@ export function resolveMeleeHits(
     const knockedBack = applyKnockback(damaged, state.origin, knockbackPx);
     updatedTargets.push(knockedBack);
     hitEvents.push({ targetId: target.id, damage: state.weapon.damage, position: target.position });
+    if (stunChance > 0 && rng.next() < stunChance) {
+      stunnedTargetIds.push(target.id);
+    }
   }
 
-  return { updatedTargets, hitEvents };
+  return { updatedTargets, hitEvents, stunnedTargetIds };
 }
 
 function applyKnockback(target: AttackTarget, origin: Vec2, knockbackPx: number): AttackTarget {

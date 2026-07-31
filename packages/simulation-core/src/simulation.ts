@@ -6,14 +6,20 @@
  * `SIMULATION_DT_MS` step, never by an arbitrary render-frame delta.
  *
  * M1 shipped the chaser enemy, player health/death, and dash. M2 (`docs/
- * M2_ISSUES.md`) adds the six-slot inventory, the secure slot, carried-loot
- * build effects, ground loot (from kills and scattered at run start),
- * rotating extraction, and the local run result. `World.enemies` is the
- * single source of truth for attack targets — the shared melee/ranged
+ * M2_ISSUES.md`) added the six-slot inventory, the secure slot, carried-loot
+ * build effects, ground loot, rotating extraction, and the local run result.
+ * M3 (`docs/M3_ISSUES.md`) adds the permanent skill loadout, the wildcard
+ * skill chip, per-attack skill-effect aggregation (feeding
+ * `combat/pipeline.ts`'s stage 4), stun, and the player shield. `World.enemies`
+ * is the single source of truth for attack targets — the shared melee/ranged
  * pipeline (`combat/pipeline.ts`) reads it directly since `Enemy` satisfies
  * `AttackTarget` structurally.
  */
-import type { EnemyDefinition, WeaponDefinition } from "@carry-or-fall/game-content";
+import type {
+  EnemyDefinition,
+  SkillDefinition,
+  WeaponDefinition,
+} from "@carry-or-fall/game-content";
 
 import { normalizeAngle } from "./angles";
 import { aggregateBuildEffects, effectiveMaxHealth, effectiveMoveSpeed } from "./build-effects";
@@ -27,7 +33,6 @@ import {
 } from "./combat/melee";
 import type { HitEvent } from "./combat/events";
 import type { AttackActor, AttackTarget } from "./combat/pipeline";
-import { applyDamageAmount } from "./combat/pipeline";
 import { startRangedAttack, stepProjectiles } from "./combat/ranged";
 import { computeDashDelta, DASH_COOLDOWN_MS } from "./dash";
 import { canDealContactDamage, spawnEnemy, stepEnemyMovement } from "./enemy";
@@ -42,7 +47,24 @@ import { attemptPickup, chooseLootDrop, isNearGroundLoot, spawnGroundLoot } from
 import { computeMovementDelta, PLAYER_SPEED } from "./movement";
 import { createRng } from "./prng";
 import { buildDeathResult, buildExtractionResult } from "./run-result";
-import type { Enemy, GroundLoot, InputState, RunResult, Vec2, Wall, World } from "./world";
+import { chooseSkillChipDrop, isNearSkillChip, spawnSkillChip } from "./skill-chip";
+import {
+  aggregateSkillEffects,
+  applyDamageToPlayer,
+  grantShield,
+  STUN_DURATION_MS,
+} from "./skill-effects";
+import { EMPTY_SKILL_LOADOUT, type SkillLoadout } from "./skill-loadout";
+import type {
+  Enemy,
+  GroundLoot,
+  InputState,
+  RunResult,
+  SkillChip,
+  Vec2,
+  Wall,
+  World,
+} from "./world";
 
 /** The fixed simulation step, in milliseconds (technical plan §9.3). */
 export const SIMULATION_DT_MS = 50;
@@ -86,15 +108,26 @@ export interface SimulationConfig {
    * least `extraction.ts`'s `ACTIVE_EXTRACTION_POINT_COUNT` (2) entries.
    */
   readonly extractionCandidatePoints: readonly Vec2[];
-  /** Seeds the PRNG used for enemy spawn/loot/extraction selection (technical plan §9.4). */
+  /**
+   * The player's pre-run permanent skill loadout (M3.2), already validated by
+   * `skill-loadout.ts`'s `createSkillLoadout` — an invalid selection never
+   * reaches this boundary. Defaults to {@link EMPTY_SKILL_LOADOUT}.
+   */
+  readonly skillLoadout?: SkillLoadout;
+  /**
+   * Wildcard skill chips scattered on the map at run start (M3.7), one per
+   * point, mirroring `groundLootSpawnPoints`. Defaults to none.
+   */
+  readonly skillChipSpawnPoints?: readonly Vec2[];
+  /** Seeds the PRNG used for enemy spawn/loot/extraction/skill-chip selection (technical plan §9.4). */
   readonly seed: number;
 }
 
 /**
  * Build the initial `World` for a local run: the player at `playerStart`,
- * the static map walls, one chaser enemy, scattered ground loot, and the
- * initial active extraction points — all spawned deterministically from
- * `config.seed`.
+ * the static map walls, one chaser enemy, scattered ground loot and skill
+ * chips, and the initial active extraction points — all spawned
+ * deterministically from `config.seed`.
  */
 export function createSimulation(config: SimulationConfig): World {
   const rng = createRng(config.seed);
@@ -102,6 +135,10 @@ export function createSimulation(config: SimulationConfig): World {
   const groundLootSpawnPoints = config.groundLootSpawnPoints ?? [];
   const groundLoot: GroundLoot[] = groundLootSpawnPoints.map((position, index) =>
     spawnGroundLoot(chooseLootDrop(rng), position, `loot-start-${String(index)}`),
+  );
+  const skillChipSpawnPoints = config.skillChipSpawnPoints ?? [];
+  const skillChips: SkillChip[] = skillChipSpawnPoints.map((position, index) =>
+    spawnSkillChip(chooseSkillChipDrop(rng), position, `chip-start-${String(index)}`),
   );
   const extractionPoints = spawnExtractionPoints(config.extractionCandidatePoints, rng);
 
@@ -112,6 +149,7 @@ export function createSimulation(config: SimulationConfig): World {
       facing: 0,
       health: PLAYER_MAX_HEALTH,
       maxHealth: PLAYER_MAX_HEALTH,
+      shieldHp: 0,
       alive: true,
       meleeWeapon: config.meleeWeapon,
       rangedWeapon: config.rangedWeapon,
@@ -122,11 +160,14 @@ export function createSimulation(config: SimulationConfig): World {
       inventory: createEmptyInventory(),
       secureSlot: null,
       extractionProgressMs: 0,
+      skillLoadout: config.skillLoadout ?? EMPTY_SKILL_LOADOUT,
+      wildcardSkill: null,
     },
     walls: config.walls,
     projectiles: [],
     enemies: [enemy],
     groundLoot,
+    skillChips,
     extractionPoints,
     extractionCandidatePoints: config.extractionCandidatePoints,
     runResult: null,
@@ -144,12 +185,13 @@ export interface StepResult {
 /**
  * Advance the world by exactly one fixed step: inventory intents, movement +
  * collision, dash, aim, cooldowns, the melee/ranged attack pipeline (with
- * carried-loot build effects applied) against `world.enemies`, the chaser's
- * own movement + contact damage, ground-loot pickup, extraction-point
- * rotation and channeling, and run-ending. Once the player's health reaches
- * zero or a `runResult` has been recorded, every subsequent call is a full
- * no-op (M1.10/M2.8) — the caller (`PlayScene`) is expected to stop calling
- * this once the run has ended, but the engine enforces it either way.
+ * per-attack skill-effect aggregation and carried-loot build effects
+ * applied) against `world.enemies`, the chaser's own movement + shield-aware
+ * contact damage, ground-loot/skill-chip pickup, extraction-point rotation
+ * and channeling, and run-ending. Once the player's health reaches zero or a
+ * `runResult` has been recorded, every subsequent call is a full no-op
+ * (M1.10/M2.8) — the caller (`PlayScene`) is expected to stop calling this
+ * once the run has ended, but the engine enforces it either way.
  */
 export function stepSimulation(world: World, input: InputState): StepResult {
   if (!world.player.alive || world.runResult !== null) {
@@ -179,6 +221,19 @@ export function stepSimulation(world: World, input: InputState): StepResult {
   const buildEffects = aggregateBuildEffects(player.inventory);
   const maxHealth = effectiveMaxHealth(PLAYER_MAX_HEALTH, buildEffects);
   player = { ...player, maxHealth, health: Math.min(player.health, maxHealth) };
+
+  // Skill-effect aggregation (M3.3): the player's active skills are the
+  // permanent loadout plus the wildcard (if any, from *before* this step's
+  // pickup — a newly-found chip applies starting next step, the same
+  // treatment M2 gives a newly-picked-up loot item's build effects).
+  // Aggregated separately per weapon category, since tag-gating happens per
+  // attack, not at loadout-selection time (`docs/M3_ISSUES.md` §1).
+  const activeSkills: readonly SkillDefinition[] =
+    player.wildcardSkill === null
+      ? player.skillLoadout
+      : [...player.skillLoadout, player.wildcardSkill];
+  const meleeSkillEffects = aggregateSkillEffects(activeSkills, player.meleeWeapon.tags);
+  const rangedSkillEffects = aggregateSkillEffects(activeSkills, player.rangedWeapon.tags);
 
   // Movement + collision (M1.3/M1.5), at the carried-loot-adjusted move speed.
   const speed = effectiveMoveSpeed(PLAYER_SPEED, buildEffects);
@@ -226,10 +281,12 @@ export function stepSimulation(world: World, input: InputState): StepResult {
   let workingTargets: readonly AttackTarget[] = world.enemies;
   let hitEvents: readonly HitEvent[] = [];
   let projectiles = world.projectiles;
+  let stunnedTargetIds: readonly string[] = [];
+  let shieldHp = player.shieldHp;
 
-  // Melee (M1.6/M1.7, carried-loot effects M2.4): start a new swing, or
-  // advance an in-flight one and resolve its hits exactly once, when it
-  // first enters the active window.
+  // Melee (M1.6/M1.7, carried-loot effects M2.4, skill effects M3.3): start a
+  // new swing, or advance an in-flight one and resolve its hits exactly
+  // once, when it first enters the active window.
   if (player.meleeAttack === null) {
     if (input.attackPressed) {
       const startResult = startMeleeAttack(
@@ -237,13 +294,15 @@ export function stepSimulation(world: World, input: InputState): StepResult {
         player.meleeWeapon,
         player.meleeCooldownMs,
         buildEffects,
+        meleeSkillEffects,
       );
       if (startResult.started) {
         player = {
           ...player,
           meleeAttack: startResult.state,
-          // The effective (post-carried-loot) interval, so an attack-speed
-          // bonus actually shortens the next cooldown (`docs/M2_ISSUES.md` M2.4).
+          // The effective (post-skill, post-carried-loot) interval, so an
+          // attack-speed/recovery bonus actually shortens the next cooldown
+          // (`docs/M2_ISSUES.md` M2.4, `docs/M3_ISSUES.md` M3.3).
           meleeCooldownMs: startResult.state.weapon.attackIntervalMs,
         };
       }
@@ -251,16 +310,24 @@ export function stepSimulation(world: World, input: InputState): StepResult {
   } else {
     let meleeAttack = advanceMeleeAttack(player.meleeAttack, SIMULATION_DT_MS);
     if (!meleeAttack.hasResolvedHits && meleePhase(meleeAttack) === "active") {
-      const resolved = resolveMeleeHits(meleeAttack, workingTargets);
+      const resolved = resolveMeleeHits(meleeAttack, workingTargets, world.rng);
       workingTargets = resolved.updatedTargets;
       hitEvents = [...hitEvents, ...resolved.hitEvents];
+      stunnedTargetIds = resolved.stunnedTargetIds;
+      // Shield-on-hit (M3.5): granted once per melee hit landed this step.
+      if (meleeSkillEffects.shieldOnHitAdd > 0) {
+        resolved.hitEvents.forEach(() => {
+          shieldHp = grantShield(shieldHp, meleeSkillEffects.shieldOnHitAdd);
+        });
+      }
       meleeAttack = { ...meleeAttack, hasResolvedHits: true };
     }
     player = { ...player, meleeAttack: isMeleeAttackFinished(meleeAttack) ? null : meleeAttack };
   }
 
-  // Ranged (M1.6/M1.8, carried-loot effects M2.4): fire a new volley; the
-  // shared hard caps (`caps.ts`) are enforced inside `startRangedAttack`.
+  // Ranged (M1.6/M1.8, carried-loot effects M2.4, skill effects M3.3): fire a
+  // new volley; the shared hard caps (`caps.ts`) are enforced inside
+  // `startRangedAttack`.
   if (input.secondaryAttackPressed) {
     const fireResult = startRangedAttack(
       actor,
@@ -269,6 +336,7 @@ export function stepSimulation(world: World, input: InputState): StepResult {
       projectiles.length,
       world.tick,
       buildEffects,
+      rangedSkillEffects,
     );
     if (fireResult.started) {
       projectiles = [...projectiles, ...fireResult.projectiles];
@@ -276,8 +344,9 @@ export function stepSimulation(world: World, input: InputState): StepResult {
     }
   }
 
-  // Advance every live projectile: move, resolve against a wall (swept,
-  // D-1) or a target, or expire.
+  // Advance every live projectile: steer (homing), move, resolve against a
+  // wall (bounce or stop, swept per axis — D-1/M3.4) or a target (pierce or
+  // consume), or expire (or return once, M3.4).
   const projectileStep = stepProjectiles(
     projectiles,
     SIMULATION_DT_MS,
@@ -288,13 +357,23 @@ export function stepSimulation(world: World, input: InputState): StepResult {
   projectiles = projectileStep.projectiles;
   workingTargets = projectileStep.updatedTargets;
   hitEvents = [...hitEvents, ...projectileStep.hitEvents];
+  // Shield-on-hit (M3.5): granted once per ranged hit landed this step.
+  if (rangedSkillEffects.shieldOnHitAdd > 0) {
+    projectileStep.hitEvents.forEach(() => {
+      shieldHp = grantShield(shieldHp, rangedSkillEffects.shieldOnHitAdd);
+    });
+  }
+  player = { ...player, shieldHp };
 
-  // Merge combat-resolved health back into the enemy collection, split into
-  // survivors and this step's kills (M1.9 requirement 3: "dies ... and is
-  // removed"; M2.6: a kill drops loot).
+  // Merge combat-resolved health (and any melee-inflicted stun, M3.5) back
+  // into the enemy collection, split into survivors and this step's kills
+  // (M1.9 requirement 3: "dies ... and is removed"; M2.6: a kill drops loot).
   const mergedEnemies: Enemy[] = world.enemies.map((enemy) => {
     const updated = workingTargets.find((target) => target.id === enemy.id);
-    return updated ? { ...enemy, health: updated.health } : enemy;
+    const withHealth = updated ? { ...enemy, health: updated.health } : enemy;
+    return stunnedTargetIds.includes(enemy.id)
+      ? { ...withHealth, stunnedMs: STUN_DURATION_MS }
+      : withHealth;
   });
   const killedThisStep = mergedEnemies.filter((enemy) => enemy.health <= 0);
   let enemies: Enemy[] = mergedEnemies.filter((enemy) => enemy.health > 0);
@@ -305,9 +384,13 @@ export function stepSimulation(world: World, input: InputState): StepResult {
     groundLoot = [...groundLoot, spawnGroundLoot(definition, killed.position, `loot-${killed.id}`)];
   }
 
-  // Chaser movement + contact damage (M1.9/M1.10). Enemies killed above are
-  // already removed, so a dead enemy cannot also deal contact damage this step.
+  // Chaser movement + shield-aware contact damage (M1.9/M1.10, shield M3.5).
+  // Enemies killed above are already removed, so a dead enemy cannot also
+  // deal contact damage this step. A stunned enemy still deals contact
+  // damage on touch (`docs/M3_ISSUES.md` M3.5: stun disables aggression, not
+  // hurtbox/hitbox presence).
   let playerHealth = player.health;
+  let playerShieldHp = player.shieldHp;
   let playerAlive = player.alive;
   let tookContactDamageThisStep = false;
   enemies = enemies.map((enemy) => {
@@ -319,7 +402,12 @@ export function stepSimulation(world: World, input: InputState): StepResult {
       grid,
     );
     if (playerAlive && canDealContactDamage(moved, player)) {
-      playerHealth = applyDamageAmount(playerHealth, moved.contactDamage);
+      const damaged = applyDamageToPlayer(
+        { shieldHp: playerShieldHp, health: playerHealth },
+        moved.contactDamage,
+      );
+      playerShieldHp = damaged.shieldHp;
+      playerHealth = damaged.health;
       tookContactDamageThisStep = true;
       if (playerHealth <= 0) {
         playerAlive = false;
@@ -328,7 +416,7 @@ export function stepSimulation(world: World, input: InputState): StepResult {
     }
     return moved;
   });
-  player = { ...player, health: playerHealth, alive: playerAlive };
+  player = { ...player, health: playerHealth, shieldHp: playerShieldHp, alive: playerAlive };
 
   // Ground-loot pickup (M2.6): while interact is held and the player
   // overlaps a ground-loot entity, attempt to add it to the inventory;
@@ -341,6 +429,19 @@ export function stepSimulation(world: World, input: InputState): StepResult {
         player = { ...player, inventory: pickup.inventory };
         groundLoot = groundLoot.filter((loot) => loot.id !== nearby.id);
       }
+    }
+  }
+
+  // Wildcard skill-chip pickup (M3.7): while interact is held and the player
+  // overlaps a chip, it always replaces the current wildcard skill (concept
+  // §10: "a new chip may replace the current one") — unlike loot pickup,
+  // there is no refusal case.
+  let skillChips = world.skillChips;
+  if (input.interactPressed && playerAlive) {
+    const nearbyChip = skillChips.find((chip) => isNearSkillChip(player, chip));
+    if (nearbyChip !== undefined) {
+      player = { ...player, wildcardSkill: nearbyChip.definition };
+      skillChips = skillChips.filter((chip) => chip.id !== nearbyChip.id);
     }
   }
 
@@ -362,7 +463,9 @@ export function stepSimulation(world: World, input: InputState): StepResult {
   player = { ...player, extractionProgressMs };
 
   // Run ending (M2.8): death or a completed extraction channel both end the
-  // run, converting carried loot differently.
+  // run, converting carried loot differently. Either way, the wildcard skill
+  // and shield are cleared (concept §10: the wildcard "drops or disappears
+  // on death"; nothing persists past a run yet, M5/M7).
   let runResult: RunResult | null = world.runResult;
   if (!playerAlive) {
     runResult = buildDeathResult(player.inventory, player.secureSlot);
@@ -374,10 +477,22 @@ export function stepSimulation(world: World, input: InputState): StepResult {
           spawnGroundLoot(item, player.position, `loot-death-${String(index)}`),
         ),
     ];
-    player = { ...player, inventory: createEmptyInventory(), secureSlot: null };
+    player = {
+      ...player,
+      inventory: createEmptyInventory(),
+      secureSlot: null,
+      wildcardSkill: null,
+      shieldHp: 0,
+    };
   } else if (extractionProgressMs >= EXTRACTION_CHANNEL_MS) {
     runResult = buildExtractionResult(player.inventory, player.secureSlot);
-    player = { ...player, inventory: createEmptyInventory(), secureSlot: null };
+    player = {
+      ...player,
+      inventory: createEmptyInventory(),
+      secureSlot: null,
+      wildcardSkill: null,
+      shieldHp: 0,
+    };
   }
 
   return {
@@ -387,6 +502,7 @@ export function stepSimulation(world: World, input: InputState): StepResult {
       projectiles,
       enemies,
       groundLoot,
+      skillChips,
       extractionPoints,
       runResult,
       tick: world.tick + 1,

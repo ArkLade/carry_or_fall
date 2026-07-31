@@ -1,11 +1,12 @@
 # Content Authoring
 
-Status: **M2 in progress.** §3 (weapons), §5 (loot), and §6 (enemies) are shipped — `basic_sword`,
-`basic_bow`, `chaser`, and the six `ALL_LOOT` items are real data in `@carry-or-fall/game-content`,
-read by the shared attack pipeline and `build-effects.ts` in `@carry-or-fall/simulation-core`. §4
-(skills) remains forward-looking (M3). This document explains how to add a weapon, armor type,
-skill, loot item, or enemy as a **data definition** — not as new engine code. This follows the
-technical plan §7.2 and §43 and the `docs/DEVELOPMENT_RULES.md` rule that content is data-driven.
+Status: **M3 shipped.** §3 (weapons), §4 (skills), §5 (loot), and §6 (enemies) are all shipped —
+`basic_sword`, `basic_bow`, `chaser`, the six `ALL_LOOT` items, and the ten `ALL_SKILLS` skills are
+real data in `@carry-or-fall/game-content`, read by the shared attack pipeline, `build-effects.ts`,
+and `skill-effects.ts` in `@carry-or-fall/simulation-core`. This document explains how to add a
+weapon, armor type, skill, loot item, or enemy as a **data definition** — not as new engine code.
+This follows the technical plan §7.2 and §43 and the `docs/DEVELOPMENT_RULES.md` rule that content
+is data-driven.
 
 > The core rule: **adding an ordinary weapon, skill, or loot item should require a content
 > definition plus tests, not a rewrite of the combat engine** (`DEVELOPMENT_RULES.md`, "Content and
@@ -112,17 +113,35 @@ export const basicBow: WeaponDefinition = {
 Note that a melee weapon still declares projectile limits (all `0`): the caps exist for every
 weapon so a later projectile-granting skill cannot uncap it.
 
-## 4. Skills — data-driven, tag-gated (M3)
+## 4. Skills — data-driven, tag-gated (M3, shipped)
 
 Skills modify shared combat primitives and declare compatibility through tags rather than custom
-code (concept §9.1–§9.3, §29.2):
+code (concept §9.1–§9.3, §29.2). `effects` is a **typed shape** (`SkillEffects`), not a free-form
+bag: it only recognizes the eleven keys `packages/simulation-core/src/skill-effects.ts`'s
+`aggregateSkillEffects` actually sums (or, for `damageAfterBounceMultiplier`, multiplies) and caps,
+so a mistyped key is a compile error, not a silently inert field — the same discipline §5 already
+applies to loot's `buildEffects`.
 
 ```ts
+export interface SkillEffects {
+  readonly projectileCountAdd?: number;
+  readonly bounceCountAdd?: number;
+  readonly damageAfterBounceMultiplier?: number;
+  readonly pierceCountAdd?: number;
+  readonly returnEnabled?: boolean;
+  readonly homingStrengthAdd?: number;
+  readonly rangeMultiplierAdd?: number;
+  readonly arcDegreesAdd?: number;
+  readonly recoveryReductionAdd?: number;
+  readonly stunChanceAdd?: number;
+  readonly shieldOnHitAdd?: number;
+}
+
 export interface SkillDefinition extends ContentDefinition {
   readonly kind: "skill";
   readonly slotCost: 1 | 2;
   readonly requiresTags: readonly string[];
-  readonly effects: Readonly<Record<string, number | boolean>>;
+  readonly effects: SkillEffects;
   readonly limits: Readonly<Record<string, number>>;
 }
 
@@ -136,8 +155,32 @@ export const ricochet: SkillDefinition = {
 } as const;
 ```
 
-A skill's `limits` never override the shared hard caps; they are the skill's own ceiling, clamped
-by the engine's global cap.
+`requiresTags` is matched against a weapon's `tags` with "any overlap" semantics, checked **per
+attack** (`combat/pipeline.ts` stage 4), not at loadout-selection time: a skill whose tags don't
+match the weapon currently in use is legally selected but contributes nothing to that attack. Both
+`basicSword` and `basicBow` (§3) carry a shared `attack` tag alongside their category tag, so a
+skill meant to apply to either weapon (e.g. `bulwark_strike`) can require `["attack"]` instead of
+listing every category tag.
+
+A skill's `limits` never override the shared hard caps; they are the skill's own documented ceiling,
+informational alongside the actual enforcement point. Three `SkillEffects` keys
+(`projectileCountAdd`, `bounceCountAdd`, `pierceCountAdd`) map onto an existing `combat/caps.ts` §13.4
+cap and are never given a second, duplicate ceiling in `skill-effects.ts`; every other key is capped
+there (anti-snowball, concept §30.2/§31, extended from loot's `build-effects.ts` to skills).
+
+`ALL_SKILLS` (`packages/game-content/src/skills.ts`) ships ten skills: `multishot`, `ricochet`,
+`piercing_rounds`, `returning_shot` (the one 2-slot rare skill, `docs/DECISIONS.md`), and
+`homing_arrows` (`projectile`-tagged); `extended_reach`, `swift_strikes`, `stunning_blows`, and
+`wide_arc` (`melee`-tagged); `bulwark_strike` (`attack`-tagged). `ricochet` matches concept §29.2's
+worked example exactly; the other nine realize concept §9.4's four example combinations and are
+proposed, balance-deferred values (concept §12.3), like every other content number in this document.
+
+The permanent skill loadout is validated, not clamped: `packages/simulation-core/src/
+skill-loadout.ts`'s `createSkillLoadout(skillIds)` rejects an unknown id, a duplicate id, or a
+selection whose summed `slotCost` exceeds `MAX_SKILL_SLOTS` (3) — a structural invalidity has no
+sensible smaller version, so it is refused, matching M2's precedent for a full inventory or an
+already-occupied secure slot. By contrast, a *legal* loadout's summed effect magnitude is clamped in
+`skill-effects.ts`, exactly like M2's `build-effects.ts` clamps carried loot.
 
 ## 5. Loot items — five-category points (M2, shipped)
 
@@ -145,8 +188,10 @@ Ordinary loot has fixed, non-random point values (concept §6.6, §29.3). `build
 shape, not a free-form bag: it only recognizes the keys `packages/simulation-core/src/
 build-effects.ts`'s `aggregateBuildEffects` actually sums and caps, so a mistyped key is a compile
 error, not a silently inert field. An item may declare none, one, or several of these keys — a
-loot item with points but no active-build role (e.g. `signal`-leaning loot; homing/detection
-mechanics that would consume a signal effect are M3/later, not implemented yet) is valid.
+loot item with points but no active-build role (e.g. `signal`-leaning loot) is valid. M3's
+`homing_arrows` skill (§4) is the real homing mechanic; `LootBuildEffects` still has no
+signal-flavored key of its own, since loot and skills are two separate, parallel capped pipelines
+(`docs/M3_EXECUTION_PLAN.md` §2.3) and no loot item currently declares one.
 
 ```ts
 export interface LootDefinition extends ContentDefinition {

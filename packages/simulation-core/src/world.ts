@@ -11,12 +11,14 @@
 import type {
   EnemyDefinition,
   LootDefinition,
+  SkillDefinition,
   WeaponDefinition,
 } from "@carry-or-fall/game-content";
 
 import type { Inventory, SecureSlot } from "./inventory";
 import type { PointTotals } from "./points";
 import type { Rng } from "./prng";
+import type { SkillLoadout } from "./skill-loadout";
 
 export type { Vec2 } from "./vec2";
 import type { Vec2 } from "./vec2";
@@ -42,6 +44,14 @@ import type { Vec2 } from "./vec2";
  * never contributes to the build. `extractionProgressMs` tracks an in-progress
  * extraction channel (`extraction.ts`), reset to `0` whenever it is
  * interrupted.
+ *
+ * `skillLoadout`/`wildcardSkill` (M3, concept §8.3/§10) are the skill state:
+ * `skillLoadout` is the up-to-three permanent skills chosen before the run
+ * (validated by `skill-loadout.ts`'s `createSkillLoadout`, never changes
+ * in-run); `wildcardSkill` is the single temporary skill found mid-run (`null`
+ * until a `SkillChip` is picked up), replaced freely and lost on death.
+ * `shieldHp` (concept §9.2 "shield generation") is a capped pool that absorbs
+ * damage before `health` (`skill-effects.ts`'s `applyDamageToPlayer`).
  */
 export interface Player {
   readonly position: Vec2;
@@ -49,6 +59,7 @@ export interface Player {
   readonly facing: number;
   readonly health: number;
   readonly maxHealth: number;
+  readonly shieldHp: number;
   readonly alive: boolean;
   readonly meleeWeapon: WeaponDefinition;
   readonly rangedWeapon: WeaponDefinition;
@@ -59,6 +70,8 @@ export interface Player {
   readonly inventory: Inventory;
   readonly secureSlot: SecureSlot;
   readonly extractionProgressMs: number;
+  readonly skillLoadout: SkillLoadout;
+  readonly wildcardSkill: SkillDefinition | null;
 }
 
 /**
@@ -75,12 +88,19 @@ export interface MeleeAttackState {
 }
 
 /**
- * A live ranged projectile (M1.8). Runtime shape is intentionally minimal:
- * M1's bow has no bounce/pierce/return/split behavior (`docs/
- * M1_EXECUTION_PLAN.md` §7), so a projectile simply travels until it hits one
- * target, is stopped by a wall (swept collision, `combat/ranged.ts` —
- * `docs/M1_ISSUES.md` D-1, resolved), or its lifespan expires — removed in
- * every case, never bounced.
+ * A live ranged projectile (M1.8; bounce/pierce/return/homing added M3.4,
+ * `docs/M3_ISSUES.md` M3.4). The base weapon still fires a plain
+ * straight-line projectile (concept §29.2: bounce/pierce/return/homing are
+ * skill effects, not base-weapon behavior) — these fields default to "no
+ * effect" and are only ever seeded to something else by
+ * `combat/ranged.ts`'s `startRangedAttack` from the attacker's aggregated
+ * `SkillEffects`. `hitTargetIds` prevents a piercing projectile from hitting
+ * the same target twice while still overlapping it. `canReturn`/
+ * `returnsSoFar` are checked against `combat/caps.ts`'s
+ * `canProjectileReturn` each time the projectile would otherwise expire, so
+ * cap 4 (no more than one return) is exercised from real gameplay, not just
+ * as a standalone function test. Split is not implemented
+ * (`docs/M3_ISSUES.md` §1): no field or behavior for it exists.
  */
 export interface Projectile {
   readonly id: string;
@@ -89,6 +109,13 @@ export interface Projectile {
   readonly radius: number;
   readonly damage: number;
   readonly remainingLifespanMs: number;
+  readonly bouncesRemaining: number;
+  readonly piercesRemaining: number;
+  readonly canReturn: boolean;
+  readonly returnsSoFar: number;
+  readonly homingStrength: number;
+  readonly postBounceDamageMultiplier: number;
+  readonly hitTargetIds: readonly string[];
 }
 
 /**
@@ -96,6 +123,10 @@ export interface Projectile {
  * stats copied from its `EnemyDefinition` (`@carry-or-fall/game-content`) at
  * spawn time. `contactCooldownMs` paces contact damage so touching the player
  * deals `contactDamage` periodically, not every single fixed step.
+ * `stunnedMs` (M3.5, `stunning_blows`) counts down a stun applied by a melee
+ * hit; while positive, `enemy.ts`'s `stepEnemyMovement` skips the chaser's
+ * move-toward-player step (contact damage is unaffected by stun — a
+ * deliberate scope choice, `docs/M3_ISSUES.md` M3.5).
  */
 export interface Enemy {
   readonly id: string;
@@ -109,6 +140,7 @@ export interface Enemy {
   readonly contactDamage: number;
   readonly contactDamageIntervalMs: number;
   readonly contactCooldownMs: number;
+  readonly stunnedMs: number;
 }
 
 /**
@@ -131,6 +163,20 @@ export interface Wall {
 export interface GroundLoot {
   readonly id: string;
   readonly definition: LootDefinition;
+  readonly position: Vec2;
+  readonly radius: number;
+}
+
+/**
+ * A pickup-able wildcard skill chip lying on the ground (M3.7, concept §10,
+ * `docs/M3_ISSUES.md` M3.7): scattered on the local test map at run start,
+ * exactly like M2.6's `GroundLoot`. Picking one up always replaces the
+ * player's current `wildcardSkill` (concept §10: "a new chip may replace the
+ * current one") — unlike loot pickup, there is no refusal case.
+ */
+export interface SkillChip {
+  readonly id: string;
+  readonly definition: SkillDefinition;
   readonly position: Vec2;
   readonly radius: number;
 }
@@ -202,7 +248,8 @@ export interface InputState {
  * extraction-point rotation stay part of one deterministic sequence for the
  * whole run. `extractionCandidatePoints` is the fixed candidate list
  * extraction points rotate among; it never changes after creation, like
- * `walls`.
+ * `walls`. `skillChips` (M3.7) are wildcard-skill pickups scattered on the
+ * map, the skill counterpart of `groundLoot`.
  */
 export interface World {
   readonly player: Player;
@@ -210,6 +257,7 @@ export interface World {
   readonly projectiles: readonly Projectile[];
   readonly enemies: readonly Enemy[];
   readonly groundLoot: readonly GroundLoot[];
+  readonly skillChips: readonly SkillChip[];
   readonly extractionPoints: readonly ExtractionPoint[];
   readonly extractionCandidatePoints: readonly Vec2[];
   readonly runResult: RunResult | null;

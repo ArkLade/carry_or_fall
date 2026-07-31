@@ -300,3 +300,124 @@ milestone, not implemented yet).
 - **Consequences:** `v0.1.0-local-combat` is not a good playable build. The first
   tag with correct collision is the M2 tag, `v0.2.0-loot-extraction`.
 - **Status:** Approved.
+
+## D29. One two-slot rare skill; loadout selection rejects, effect magnitude clamps
+
+- **Date:** 2026-07-31.
+- **Decision:** M3 ships exactly one 2-slot skill, `returning_shot` (concept §9.4's "Returning
+  Projectiles"); every other of the ten `ALL_SKILLS` costs 1 slot. Slot cost is validated by
+  `packages/simulation-core/src/skill-loadout.ts`'s `createSkillLoadout(skillIds)`, which sums
+  every selected skill's `slotCost` against `MAX_SKILL_SLOTS = 3` and **rejects** — a typed
+  `{ ok: false, reason }`, never a silently trimmed loadout — a selection with an unknown id, a
+  duplicate id, or a total slot cost over the budget. Separately, a *legal* loadout's summed effect
+  *magnitude* (e.g. stacking `stunChanceAdd` from the permanent loadout and an identical wildcard)
+  is **clamped** in `skill-effects.ts`, exactly like M2's `build-effects.ts` already clamps carried
+  loot.
+- **Reason:** Concept §8.3 permits "strong rare skills may cost two slots" without requiring one to
+  exist; shipping exactly one is enough to prove the two-slot mechanic works (`returning_shot` plus
+  one 1-slot skill fits; plus two 1-slot skills does not) without inventing several rare skills with
+  no numeric source in either authoritative document. The reject-vs-clamp split follows the existing
+  M2 precedent directly: a full inventory or an already-occupied secure slot is refused (no smaller
+  version of "select four slots' worth of skills" exists), while carried-loot build effects are
+  clamped (a legal build must keep working, just capped) — M3 extends the same rule to skills rather
+  than inventing a third policy.
+- **Consequences:** `createSkillLoadout` is the one validation boundary a pre-run loadout choice must
+  pass through before it ever reaches `createSimulation` (client `LoadoutScene` calls it live, per
+  toggle). `skill-effects.ts`'s caps (and, for bounce/pierce/return/search-radius, the pre-existing
+  `combat/caps.ts` §13.4 ceilings) are the only place effect magnitude is bounded; no function
+  refuses or throws for exceeding one.
+- **Status:** Approved.
+
+## D30. Wildcard skill chips are scattered ground pickups, not a boss-core drop
+
+- **Date:** 2026-07-31.
+- **Decision:** M3's wildcard skill chip (concept §10) is a `SkillChip` ground entity scattered on
+  the local test map at run start — the skill counterpart of M2.6's `GroundLoot` scattering, using
+  the same non-goal workaround (no new enemy type, no boss). Its skill is chosen via the seeded RNG
+  from the same `ALL_SKILLS` pool the permanent loadout draws from, not a boss-exclusive subset.
+- **Reason:** Concept §10 (wildcard) and concept §11 (boss skill cores) are two separate systems;
+  §10 names no source for the temporary chip, while §11's mechanic is explicitly boss-gated, and
+  bosses are M7 (`docs/M2_ISSUES.md` §1 already deferred all boss content). M3 has no boss and adds
+  no new enemy type, so a boss-core-sourced wildcard is not achievable this milestone; scattering
+  chips is the same treatment M2.6 already gave ordinary loot for the identical reason.
+- **Consequences:** Every wildcard chip a player can find in M3 grants an ordinary skill, including
+  the 2-slot `returning_shot` — there is no boss-exclusive skill roster yet. When M7 adds boss skill
+  cores, they become a second, boss-exclusive wildcard source alongside (not replacing) this one.
+- **Status:** Approved.
+
+## D31. Pre-run skill selection is a local, non-persistent client screen, not a lobby
+
+- **Date:** 2026-07-31.
+- **Decision:** A new client-only `LoadoutScene` is shown before `PlayScene`. It lets the player
+  toggle up to three permanent skills (validated live against `createSkillLoadout`, D29) and press
+  Enter to start a run with the confirmed loadout, passed as Phaser scene data. A documented default
+  loadout (`ricochet`, `extended_reach`, `bulwark_strike`) is pre-selected. Nothing is written to
+  storage; the choice does not survive a page reload; there is no networked matchmaking or waiting
+  room.
+- **Reason:** Concept §8.3 requires skills to be "selected before entering the match," and technical
+  plan §38 M3 lists "three pre-run skill slots" as a played deliverable, not just internal engine
+  state — but M3 still has no account or lobby (M5/M6, D9/D16). A local menu screen is not a lobby (a
+  lobby implies matchmaking or a multiplayer waiting room; this is a single-player menu, the same
+  category of thing as M2's Enter-to-restart convenience) and needs no persistence to exist.
+- **Consequences:** `main.ts`'s scene order changes: `LoadoutScene` is now the client's entry scene,
+  ahead of `PlayScene` (previously the direct entry point per `docs/M1_EXECUTION_PLAN.md` §9). The
+  Enter-to-restart convenience keeps the same loadout across a restart (an in-memory scene field, not
+  persistence) so a human can playtest repeatedly without returning to the picker every run. When M5
+  adds accounts and M6 adds lobbies, this screen's validation logic (`createSkillLoadout`) is reused;
+  its ephemeral, no-persistence framing is what changes.
+- **Status:** Approved.
+
+## D32. Playwright pulled forward from M5 to M3; browser suite runs as a separate CI job
+
+- **Date:** 2026-07-31.
+- **Decision:** Add `@playwright/test` (pinned `1.62.1`) as a client devDependency and install the
+  Chromium browser binary, superseding `docs/TEST_PLAN.md` §2.3's earlier "Playwright is not
+  installed... add it around M5" deferral — that section is corrected in this same change so it and
+  this entry do not contradict each other. The suite (`apps/client/e2e/*.spec.ts`) runs as a
+  **separate CI job**, not a seventh step in the existing six-gate `verify` job.
+- **Reason:** A prior M3 follow-up task reported, for the fourth consecutive session, that it could
+  not visually verify client behavior — no browser automation capability existed. That gap blocked
+  diagnosing a reported "skills don't behave correctly in the running game" defect: 273 unit tests
+  already proved every effect function correct in isolation, so the only way to find a wiring defect
+  between the real client and the simulation (if one existed) was to actually drive a browser.
+  Technical plan §30.3 already requires this layer, and §38 M4's "two real browsers can play" exit
+  criterion presupposes it, so this is required infrastructure arriving two milestones early, not new
+  scope. Running the suite as a separate job (not a seventh gate) follows from the task's explicit
+  "do not slow or destabilize the existing six gates": a real Chromium instance, animation-frame
+  timing, and live-enemy navigation are categorically slower and more failure-prone than the six
+  fast, deterministic gates, and mixing them would make the fast gates' signal noisier.
+- **Consequences:** `pnpm-lock.yaml` gains Playwright and its transitive packages; no `allowBuilds`
+  entry was needed in `pnpm-workspace.yaml` — verified empirically that `@playwright/test`/
+  `playwright-core`/`playwright` ship no npm install/postinstall build script under pnpm 11's
+  build-script gate, so `pnpm install` did not require one. Browser binaries are fetched separately
+  via `playwright install chromium` (already how Playwright is meant to be used; not a pnpm
+  build-script concern). A dev-only, read-only debug hook
+  (`apps/client/src/debug/debug-hook.ts`, `docs/TEST_PLAN.md` §2.3) was added so tests can observe
+  simulation state through the `<canvas>` Phaser renders to; it is gated on `import.meta.env.DEV`
+  and verified absent from the production bundle by a `test:integration` assertion. Building this
+  gate correctly surfaced and fixed a real, pre-existing defect: the shared root `.env`'s
+  `NODE_ENV=development` (there for the server, D20) was also leaking into Vite's own
+  production/development detection for the **client** build, via `envDir` pointing at that same
+  file — `import.meta.env.DEV` stayed `true` even inside `vite build`'s output. Fixed in
+  `apps/client/vite.config.ts` by defining `import.meta.env.DEV`/`PROD` explicitly from Vite's
+  `command` parameter (reliably `"serve"` vs `"build"`) instead of trusting the NODE_ENV-influenced
+  default. This means the debug hook would have shipped in every production client bundle built
+  before this fix, undetected, until this verification capability was built specifically to catch
+  it.
+- **Status:** Approved.
+
+## D33. Knockback deferred; M3 ships ten skills
+
+- **Decision:** M3 ships ten skills. A knockback skill is not added, so concept
+  §9.4's Defensive Melee Combination (Shield on Attack, Knockback, Wide Arc) is
+  covered only in part. Knockback is added in a later content milestone.
+- **Reason:** The concept document is authoritative for gameplay and names four
+  example combinations; covering all four needs eleven skills, one past technical
+  plan §38 M3's "8 to 10". The plan's range scopes M3, not the game's total skill
+  count. Knockback is also a §9.2 core primitive that simulation-core does not
+  implement — a displacement effect on hit — so it is a primitive addition, not a
+  content addition, and does not belong in a milestone that is otherwise closing.
+- **Consequences:** Three of four §9.4 combinations are fully playable. Adding
+  knockback later requires a new primitive in simulation-core plus a content
+  definition, and serves as a live check that the data-driven claim holds.
+- **Status:** Approved.

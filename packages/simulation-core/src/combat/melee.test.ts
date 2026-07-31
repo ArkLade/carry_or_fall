@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { basicSword } from "@carry-or-fall/game-content";
 
+import { createRng } from "../prng";
+import { NO_SKILL_EFFECTS } from "../skill-effects";
 import {
   advanceMeleeAttack,
   isMeleeAttackFinished,
@@ -11,6 +13,11 @@ import {
   startMeleeAttack,
 } from "./melee";
 import type { AttackActor, AttackTarget } from "./pipeline";
+
+/** Rolls "never succeeds" — for tests where a stun chance of 0 should never trigger regardless. */
+const NEVER_ROLLS: Pick<ReturnType<typeof createRng>, "next"> = { next: () => 0.999 };
+/** Rolls "always succeeds" — for tests that force a stun roll to land. */
+const ALWAYS_ROLLS: Pick<ReturnType<typeof createRng>, "next"> = { next: () => 0 };
 
 const ACTOR: AttackActor = { position: { x: 100, y: 100 }, facing: 0, radius: 16 };
 
@@ -99,7 +106,11 @@ describe("resolveMeleeHits (stages 8-9: resolve hits, apply damage/status)", () 
       health: 20,
     };
 
-    const { updatedTargets, hitEvents } = resolveMeleeHits(result.state, [target]);
+    const { updatedTargets, hitEvents, stunnedTargetIds } = resolveMeleeHits(
+      result.state,
+      [target],
+      NEVER_ROLLS,
+    );
 
     expect(updatedTargets).toHaveLength(1);
     expect(updatedTargets[0]!.health).toBe(20 - basicSword.damage);
@@ -108,6 +119,8 @@ describe("resolveMeleeHits (stages 8-9: resolve hits, apply damage/status)", () 
     expect(hitEvents).toEqual([
       { targetId: "enemy-1", damage: basicSword.damage, position: target.position },
     ]);
+    // basic_sword's base stunChance is 0, so no roll should ever land regardless of rng.
+    expect(stunnedTargetIds).toEqual([]);
   });
 
   it("does not damage a target outside the swing's arc", () => {
@@ -120,9 +133,34 @@ describe("resolveMeleeHits (stages 8-9: resolve hits, apply damage/status)", () 
       health: 20,
     };
 
-    const { updatedTargets, hitEvents } = resolveMeleeHits(result.state, [target]);
+    const { updatedTargets, hitEvents, stunnedTargetIds } = resolveMeleeHits(
+      result.state,
+      [target],
+      NEVER_ROLLS,
+    );
 
     expect(updatedTargets).toEqual([target]);
     expect(hitEvents).toEqual([]);
+    expect(stunnedTargetIds).toEqual([]);
+  });
+
+  it("stuns a hit target when a skill grants stun chance and the roll succeeds", () => {
+    const result = startMeleeAttack(ACTOR, basicSword, 0, undefined, {
+      ...NO_SKILL_EFFECTS,
+      stunChanceAdd: 0.5,
+    });
+    if (!result.started) throw new Error("expected started");
+    const target: AttackTarget = {
+      id: "enemy-1",
+      position: { x: 140, y: 100 },
+      radius: 8,
+      health: 20,
+    };
+
+    const succeeded = resolveMeleeHits(result.state, [target], ALWAYS_ROLLS);
+    expect(succeeded.stunnedTargetIds).toEqual(["enemy-1"]);
+
+    const failed = resolveMeleeHits(result.state, [target], NEVER_ROLLS);
+    expect(failed.stunnedTargetIds).toEqual([]);
   });
 });

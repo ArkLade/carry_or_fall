@@ -20,6 +20,7 @@ describe("spawnEnemy", () => {
     expect(enemy.contactDamageIntervalMs).toBe(chaser.contactDamageIntervalMs);
     expect(enemy.radius).toBe(18);
     expect(enemy.contactCooldownMs).toBe(0);
+    expect(enemy.stunnedMs).toBe(0);
   });
 
   it("chooses a spawn point deterministically from the seed (M1.9 requirement 4)", () => {
@@ -58,6 +59,7 @@ function buildEnemy(overrides: Partial<Enemy> = {}): Enemy {
     contactDamage: chaser.contactDamage,
     contactDamageIntervalMs: chaser.contactDamageIntervalMs,
     contactCooldownMs: 0,
+    stunnedMs: 0,
     ...overrides,
   };
 }
@@ -99,6 +101,34 @@ describe("stepEnemyMovement (chaser behavior, M1.9)", () => {
     const moved = stepEnemyMovement(enemy, { x: 0, y: 0 }, 50, 0.05, NO_WALLS);
     expect(Number.isFinite(moved.position.x)).toBe(true);
     expect(Number.isFinite(moved.position.y)).toBe(true);
+  });
+});
+
+describe("stun (M3.5)", () => {
+  it("skips the chase step while stunned", () => {
+    const enemy = buildEnemy({ position: { x: 100, y: 0 }, stunnedMs: 500 });
+    const moved = stepEnemyMovement(enemy, { x: 0, y: 0 }, 50, 0.05, NO_WALLS);
+    expect(moved.position).toEqual(enemy.position);
+  });
+
+  it("ticks stunnedMs down every step regardless of behavior", () => {
+    const enemy = buildEnemy({ stunnedMs: 100 });
+    const moved = stepEnemyMovement(enemy, { x: 0, y: 0 }, 50, 0.05, NO_WALLS);
+    expect(moved.stunnedMs).toBe(50);
+  });
+
+  it("never lets stunnedMs go negative", () => {
+    const enemy = buildEnemy({ stunnedMs: 20 });
+    const moved = stepEnemyMovement(enemy, { x: 0, y: 0 }, 50, 0.05, NO_WALLS);
+    expect(moved.stunnedMs).toBe(0);
+  });
+
+  it("resumes chasing once stunnedMs reaches zero", () => {
+    const enemy = buildEnemy({ position: { x: 100, y: 0 }, stunnedMs: 50 });
+    const stillStunned = stepEnemyMovement(enemy, { x: 0, y: 0 }, 50, 0.05, NO_WALLS);
+    expect(stillStunned.stunnedMs).toBe(0);
+    const resumed = stepEnemyMovement(stillStunned, { x: 0, y: 0 }, 50, 0.05, NO_WALLS);
+    expect(resumed.position.x).toBeLessThan(stillStunned.position.x);
   });
 });
 

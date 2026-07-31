@@ -24,10 +24,20 @@
  * fields, plus its own stats), so `simulation.ts` passes `world.enemies`
  * directly wherever an `AttackTarget[]` is expected — no separate enemy
  * combat path was written.
+ *
+ * M3 (`docs/M3_ISSUES.md` M3.3) fills in stage 4, `applyEquippedSkills`: the
+ * weapon-shape effects (range, arc, recovery, projectile count, stun chance)
+ * are applied to an effective `WeaponDefinition` copy here, exactly like
+ * stage 5 already does for carried loot; the non-weapon-shape effects
+ * (bounce/pierce/return/homing are per-projectile runtime state; shield-on-
+ * hit is a player-level effect) are carried forward on
+ * `AttackDefinition.skillEffects` for `combat/ranged.ts` and `simulation.ts`
+ * to read.
  */
 import type { WeaponDefinition } from "@carry-or-fall/game-content";
 
 import { applyBuildEffectsToWeapon, type BuildEffects, NO_BUILD_EFFECTS } from "../build-effects";
+import { NO_SKILL_EFFECTS, type SkillEffects } from "../skill-effects";
 import type { Vec2 } from "../vec2";
 
 /** The minimal actor shape the pipeline needs: where it is and which way it faces. */
@@ -48,11 +58,18 @@ export interface AttackTarget {
   readonly health: number;
 }
 
-/** The attack, fully parameterized from the actor and weapon (stage 3). */
+/**
+ * The attack, fully parameterized from the actor and weapon (stage 3).
+ * `skillEffects` starts as {@link NO_SKILL_EFFECTS} at stage 3 and is set to
+ * the real aggregated value by stage 4 (`applyEquippedSkills`); later stages
+ * and callers (`combat/ranged.ts`, `simulation.ts`) read it for the effects
+ * that are not weapon-shape mutations.
+ */
 export interface AttackDefinition {
   readonly weapon: WeaponDefinition;
   readonly origin: Vec2;
   readonly facing: number;
+  readonly skillEffects: SkillEffects;
 }
 
 export type AttackDenialReason = "invalid_actor" | "cooldown";
@@ -86,12 +103,41 @@ export function buildAttackDefinition(
   actor: AttackActor,
   weapon: WeaponDefinition,
 ): AttackDefinition {
-  return { weapon, origin: actor.position, facing: actor.facing };
+  return { weapon, origin: actor.position, facing: actor.facing, skillEffects: NO_SKILL_EFFECTS };
 }
 
-/** Stage 4: apply equipped skills. Pass-through in M1 — M3 adds real skill effects here. */
-export function applyEquippedSkills(definition: AttackDefinition): AttackDefinition {
-  return definition;
+/**
+ * Stage 4: apply equipped skills (M3, `docs/M3_ISSUES.md` M3.3). Applies the
+ * weapon-shape effects to an effective `WeaponDefinition` copy — only the
+ * fields the weapon's category actually declares are touched, so a ranged
+ * weapon never gains melee-only fields or vice versa — and carries the full
+ * `skillEffects` value forward for later stages/callers to read. Defaults to
+ * {@link NO_SKILL_EFFECTS} so a caller with no equipped skills is a no-op.
+ */
+export function applyEquippedSkills(
+  definition: AttackDefinition,
+  skillEffects: SkillEffects = NO_SKILL_EFFECTS,
+): AttackDefinition {
+  const { weapon } = definition;
+  const effectiveWeapon: WeaponDefinition = {
+    ...weapon,
+    ...(weapon.rangePx === undefined
+      ? {}
+      : { rangePx: weapon.rangePx * (1 + skillEffects.rangeMultiplierAdd) }),
+    ...(weapon.arcDegrees === undefined
+      ? {}
+      : { arcDegrees: weapon.arcDegrees + skillEffects.arcDegreesAdd }),
+    ...(weapon.recoveryMs === undefined
+      ? {}
+      : { recoveryMs: weapon.recoveryMs * (1 - skillEffects.recoveryReductionAdd) }),
+    ...(weapon.stunChance === undefined
+      ? {}
+      : { stunChance: Math.min(1, Math.max(0, weapon.stunChance + skillEffects.stunChanceAdd)) }),
+    ...(weapon.projectileCount === undefined
+      ? {}
+      : { projectileCount: weapon.projectileCount + skillEffects.projectileCountAdd }),
+  };
+  return { ...definition, weapon: effectiveWeapon, skillEffects };
 }
 
 /**
@@ -112,13 +158,17 @@ export function applyCarriedLootModifiers(
  * Runs stages 1-5 and reports whether the attack may proceed. Shared by
  * `combat/melee.ts` and `combat/ranged.ts` so both weapon categories are
  * gated identically, matching invariant 8 ("Real pipeline"). `carriedEffects`
- * defaults to {@link NO_BUILD_EFFECTS} for callers with no carried loot.
+ * defaults to {@link NO_BUILD_EFFECTS} for callers with no carried loot;
+ * `skillEffects` defaults to {@link NO_SKILL_EFFECTS} for callers with no
+ * equipped skills (M3). Skills (stage 4) apply before carried loot (stage 5),
+ * matching technical plan §13.1's pipeline order.
  */
 export function prepareAttack(
   actor: AttackActor,
   weapon: WeaponDefinition,
   cooldownRemainingMs: number,
   carriedEffects: BuildEffects = NO_BUILD_EFFECTS,
+  skillEffects: SkillEffects = NO_SKILL_EFFECTS,
 ): AttackPreparation {
   if (!isValidActor(actor)) {
     return { ready: false, reason: "invalid_actor" };
@@ -128,7 +178,7 @@ export function prepareAttack(
   }
 
   const definition = applyCarriedLootModifiers(
-    applyEquippedSkills(buildAttackDefinition(actor, weapon)),
+    applyEquippedSkills(buildAttackDefinition(actor, weapon), skillEffects),
     carriedEffects,
   );
   return { ready: true, definition };

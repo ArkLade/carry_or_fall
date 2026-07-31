@@ -14,6 +14,11 @@ out/
 coverage/
 .vitest/
 
+# Playwright output (docs/TEST_PLAN.md §2.3)
+apps/client/test-results/
+apps/client/playwright-report/
+apps/client/blob-report/
+
 # Vite / caches
 .vite/
 
