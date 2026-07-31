@@ -70,6 +70,17 @@ describe("cap 1 (max projectiles per attack) enforced end-to-end through startRa
     if (!result.started) throw new Error("expected started");
     expect(result.projectiles.length).toBe(MAX_PROJECTILES_PER_ATTACK);
   });
+
+  it("clamps a skill claiming an enormous projectileCountAdd, driven through the real skill pipeline (M3.3)", () => {
+    // multishot alone (+2) wouldn't exceed 8 from basic_bow's base of 1; a
+    // fabricated projectileCountAdd proves the cap holds regardless of how
+    // large a real (or future) skill's contribution might be.
+    const skillEffects = { ...NO_SKILL_EFFECTS, projectileCountAdd: 999 };
+    const result = startRangedAttack(ACTOR, GENEROUS_BOW, 0, 0, 0, undefined, skillEffects);
+    expect(result.started).toBe(true);
+    if (!result.started) throw new Error("expected started");
+    expect(result.projectiles.length).toBe(MAX_PROJECTILES_PER_ATTACK);
+  });
 });
 
 describe("cap 7 (per-player active projectile cap) enforced end-to-end through startRangedAttack", () => {
