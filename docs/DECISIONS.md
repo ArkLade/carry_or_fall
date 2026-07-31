@@ -287,52 +287,16 @@ milestone, not implemented yet).
   Settings → Actions → General.
 - **Status:** Approved.
 
-## D26. Projectile and dash collision defects moved to M2 — SUPERSEDED
 
-- **Original decision:** D-1 (projectiles pass through walls) and D-2 (dash
-  tunnels through thin walls) are not fixed in M1. Both are moved into M2 and
-  must be fixed before M2 loot and extraction work is declared done.
-- **Original reason:** M1's three §38 exit criteria are met without them. Both
-  share one root cause — `resolveAxisMovement` is a discrete landing-position
-  check rather than a swept path check — so they are one fix, not two, and are
-  better done together.
-- **Original consequences:** Ranged combat has no line of sight to break until
-  this is fixed; combat balance must not be judged before then. The §13.4
-  bounce cap may be exercising an unreachable code path.
-- **Superseded:** this decision was reversed before it was ever committed. D-1
-  and D-2 were fixed directly in M1, not deferred, using exactly the shared
-  swept-collision approach this entry anticipated —
-  `sweptCircleIntersectsWall` in `packages/simulation-core/src/collision.ts`,
-  used by both `resolveAxisMovement` (actor movement and the dash) and
-  `combat/ranged.ts`'s `stepProjectiles`. See `docs/M1_ISSUES.md` D-1/D-2
-  (marked resolved) for the fix and its regression tests. The bounce-cap
-  caveat still holds as written: `MAX_BOUNCES`/`clampBounceCount` remain
-  unreachable from running gameplay, because no mechanic produces a bounce
-  yet (M3's `ricochet` skill) — this fix deliberately did not add one.
-- **Status:** Superseded (see above); no longer in force.
+## D28. v0.1.0-local-combat predates the D-1/D-2 collision fix
 
-## D27. M2 secure slot protects within the local run only; no cross-run persistence
-
-- **Date:** 2026-07-31.
-- **Decision:** In M2, the secure slot's guarantee is scoped to the current local run only. An
-  item placed in the secure slot never drops on death (unlike normal inventory) and converts into
-  the run's point totals identically whether the run ends by death or by successful extraction
-  (`docs/M2_ISSUES.md`, `packages/simulation-core/src/run-result.ts`). It does **not** survive a
-  browser refresh, a process restart, or accumulate across separate runs — M2 writes the run
-  result nowhere durable; the run-result screen is the only place it is ever shown.
-- **Reason:** `docs/DEVELOPMENT_RULES.md` requires that, once the secure slot is truly
-  implemented, "insertion must be persisted before it is reported successful, so a server crash
-  cannot invalidate the protection promise." That requirement describes the real M5
-  implementation, where an authoritative server and a database both exist. M2 has neither (D9,
-  D16, D22): there is no server to crash mid-match and no account or database row for "permanent
-  progress" to be written into yet. Concept §7.2/§4.3–4.4 describe the secure slot surviving death
-  and converting to "permanent progress," but that promise is only meaningful once M5 gives
-  "permanent" somewhere durable to mean. Implementing a fake persistence layer now, or silently
-  claiming the M5 guarantee already holds, would both be worse than stating the gap plainly.
-- **Consequences:** M2's secure slot is real and testable within a single local run (it changes
-  behavior — no drop on death, uniform conversion — and is covered by tests), but the "permanent"
-  half of its promise is deferred, not delivered. M5 must implement the real persisted settlement
-  path (technical plan §18's atomic settlement function, per D22) before the secure slot's
-  protection promise is honest at the account level; M2 must not be cited as evidence that promise
-  is already met.
-- **Status:** Approved (scopes M2); superseded when M5 ships real persistence.
+- **Decision:** The public tag `v0.1.0-local-combat` points at a commit where
+  projectiles pass through walls (D-1) and a dash can tunnel through a thin wall
+  (D-2). The tag is not moved, because it is already published. The collision fix
+  travels to `main` with the M2 merge instead.
+- **Reason:** Moving a published tag rewrites history other people may already
+  have. Cherry-picking the fix onto `main` separately was attempted and abandoned
+  as unnecessary complexity, since M2 carries the same commit.
+- **Consequences:** `v0.1.0-local-combat` is not a good playable build. The first
+  tag with correct collision is the M2 tag, `v0.2.0-loot-extraction`.
+- **Status:** Approved.
