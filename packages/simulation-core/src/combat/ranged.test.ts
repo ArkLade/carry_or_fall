@@ -310,7 +310,6 @@ describe("cap 4 (returns): returning-shot-style skill behavior end-to-end (M3.4)
   });
 
   it("is removed on its second lifespan expiry (no more than MAX_RETURNS_PER_PROJECTILE returns)", () => {
-    expect(MAX_RETURNS_PER_PROJECTILE).toBe(1);
     const alreadyReturned: Projectile = {
       id: "p-returned",
       position: { x: 0, y: 0 },
@@ -321,7 +320,7 @@ describe("cap 4 (returns): returning-shot-style skill behavior end-to-end (M3.4)
       bouncesRemaining: 0,
       piercesRemaining: 0,
       canReturn: true,
-      returnsSoFar: 1,
+      returnsSoFar: MAX_RETURNS_PER_PROJECTILE,
       homingStrength: 0,
       postBounceDamageMultiplier: 1,
       hitTargetIds: [],

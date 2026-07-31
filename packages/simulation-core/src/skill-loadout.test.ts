@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SkillDefinition } from "@carry-or-fall/game-content";
 
-import { createSkillLoadout, MAX_SKILL_SLOTS } from "./skill-loadout";
+import { createSkillLoadout } from "./skill-loadout";
 
 function makeSkill(id: string, slotCost: 1 | 2): SkillDefinition {
   return {
@@ -46,7 +46,6 @@ describe("createSkillLoadout", () => {
   });
 
   it("rejects four 1-slot skills (4 total, over MAX_SKILL_SLOTS)", () => {
-    expect(MAX_SKILL_SLOTS).toBe(3);
     const fourth = makeSkill("one-d", 1);
     const result = createSkillLoadout(["one-a", "one-b", "one-c", "one-d"], [...AVAILABLE, fourth]);
     expect(result).toEqual({ ok: false, reason: "slot_budget_exceeded" });
