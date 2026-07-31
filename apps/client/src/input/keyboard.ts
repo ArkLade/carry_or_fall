@@ -33,8 +33,12 @@ export class KeyboardInput {
   private readonly slotKeys: readonly Phaser.Input.Keyboard.Key[];
   /** Toggles the inventory HUD panel; read by `PlayScene`, not part of `InputState` (client-only UI). */
   readonly inventoryToggle: Phaser.Input.Keyboard.Key;
-  /** Starts a fresh local run once the current one has ended; a playtest convenience, not a lobby. */
-  readonly restart: Phaser.Input.Keyboard.Key;
+  /**
+   * Acknowledges the run result once the current run has ended, handing off
+   * to `LoadoutScene` to pick the next run's skills (concept §8.3). A local
+   * scene transition, not a lobby.
+   */
+  readonly confirmRunResult: Phaser.Input.Keyboard.Key;
 
   constructor(scene: Phaser.Scene) {
     const keyboard = scene.input.keyboard;
@@ -54,7 +58,7 @@ export class KeyboardInput {
       (code) => keyboard.addKey(code),
     );
     this.inventoryToggle = keyboard.addKey(Codes.I);
-    this.restart = keyboard.addKey(Codes.ENTER);
+    this.confirmRunResult = keyboard.addKey(Codes.ENTER);
   }
 
   /** The current normalized movement + dash/interact intent and any one-shot discard/secure request. */

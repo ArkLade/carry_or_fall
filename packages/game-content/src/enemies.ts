@@ -25,7 +25,13 @@ export const chaser: EnemyDefinition = {
   id: "chaser",
   kind: "enemy",
   behavior: "chaser",
-  health: 20,
+  // Raised 20 -> 100 for M4 prep: at 20 health a chaser died to a single
+  // basic_sword swing (12 damage) plus a stray hit, so no fight lasted long
+  // enough for skill effects, stun, or shield to matter in a playtest. At 100
+  // a sword kill takes 9 landed swings, which is what makes those systems
+  // observable. Still proposed and balance-deferred, like every other number
+  // in this file.
+  health: 100,
   moveSpeed: 90,
   contactDamage: 5,
   contactDamageIntervalMs: 500,

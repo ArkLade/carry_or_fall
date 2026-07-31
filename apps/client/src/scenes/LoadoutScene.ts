@@ -53,10 +53,26 @@ const DIGIT_CODES = [
 ];
 
 export class LoadoutScene extends Phaser.Scene {
+  /**
+   * Survives a return trip from `PlayScene` (Phaser reuses the scene
+   * instance), so the previous run's choice is pre-selected and the player
+   * adjusts rather than rebuilding from scratch. In-memory only — a page
+   * reload constructs a fresh scene and falls back to the documented default
+   * (`docs/DECISIONS.md` D31: nothing here implies account or profile
+   * storage, which is M5).
+   */
   private selectedIds: string[] = [...DEFAULT_SKILL_LOADOUT_IDS];
   private rejectedMessage = "";
   private digitKeys: Phaser.Input.Keyboard.Key[] = [];
   private startKey!: Phaser.Input.Keyboard.Key;
+  /**
+   * `PlayScene` hands control back on an Enter press, so Enter is typically
+   * still physically held when this scene starts. Without waiting for a
+   * release, that same hold would immediately satisfy the start check and
+   * bounce straight back into a run, making the loadout screen unusable
+   * after the first run.
+   */
+  private awaitingStartKeyRelease = true;
   private titleText!: Phaser.GameObjects.Text;
   private listText!: Phaser.GameObjects.Text;
   private statusText!: Phaser.GameObjects.Text;
@@ -73,6 +89,9 @@ export class LoadoutScene extends Phaser.Scene {
     }
     this.digitKeys = DIGIT_CODES.map((code) => keyboard.addKey(code));
     this.startKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER);
+    this.awaitingStartKeyRelease = true;
+    // A refusal from a previous visit must not greet the player on arrival.
+    this.rejectedMessage = "";
 
     this.titleText = this.add
       .text(camera.centerX, 40, "Choose your loadout (up to 3 slots)", {
@@ -113,6 +132,17 @@ export class LoadoutScene extends Phaser.Scene {
       if (Phaser.Input.Keyboard.JustDown(this.digitKeys[i]!)) {
         this.toggleSkill(i);
       }
+    }
+
+    if (this.awaitingStartKeyRelease) {
+      // Drain any pending just-down state every frame while waiting, so a
+      // hold carried over from `PlayScene` cannot fire the instant the guard
+      // lifts. Digit toggles above stay live throughout.
+      void Phaser.Input.Keyboard.JustDown(this.startKey);
+      if (!this.startKey.isDown) {
+        this.awaitingStartKeyRelease = false;
+      }
+      return;
     }
 
     if (Phaser.Input.Keyboard.JustDown(this.startKey)) {

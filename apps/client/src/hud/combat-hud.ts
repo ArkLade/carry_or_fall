@@ -25,7 +25,7 @@ function formatRunResult(result: RunResult): string {
       pointsGained.motion,
     )} G${String(pointsGained.guard)} S${String(pointsGained.signal)}`,
     `Converted ${String(result.itemsConverted)} · Lost ${String(result.itemsLost)}`,
-    "Press Enter for a new run",
+    "Press Enter to choose your next loadout",
   ].join("\n");
 }
 

@@ -253,12 +253,19 @@ export const chaser: EnemyDefinition = {
   id: "chaser",
   kind: "enemy",
   behavior: "chaser",
-  health: 20,
+  health: 100,
   moveSpeed: 90,
   contactDamage: 5,
   contactDamageIntervalMs: 500,
 } as const;
 ```
+
+`health` was raised from `20` to `100` during M4 preparation: at `20` a chaser died to a single
+`basic_sword` swing, so no fight lasted long enough for skill effects, stun, or shield to be
+observable in a playtest. Like every other number in this document it stays proposed and
+balance-deferred (concept §12.3). Note that the number of enemies a run spawns is **not** a
+content value — it is `SimulationConfig.enemyCount`, supplied by the map (`PlayScene`), because
+enemy count is a property of a map's encounter design rather than of the enemy definition.
 
 ## 7. How to add a content item
 
