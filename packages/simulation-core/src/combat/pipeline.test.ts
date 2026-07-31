@@ -38,7 +38,10 @@ describe("prepareAttack (stages 1-5)", () => {
     const result = prepareAttack(ACTOR, basicSword, 0);
     expect(result.ready).toBe(true);
     if (!result.ready) throw new Error("expected ready");
-    expect(result.definition.weapon).toBe(basicSword);
+    // Stage 5 (carried-loot modifiers, M2) always returns an effective copy,
+    // even under NO_BUILD_EFFECTS, so this is equal-by-value, not the same
+    // reference as `basicSword`.
+    expect(result.definition.weapon).toEqual(basicSword);
     expect(result.definition.origin).toEqual(ACTOR.position);
     expect(result.definition.facing).toBe(ACTOR.facing);
   });

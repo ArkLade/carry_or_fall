@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import { basicBow, type WeaponDefinition } from "@carry-or-fall/game-content";
 
+import { buildWallGrid } from "../collision";
+import type { Wall } from "../world";
 import { MAX_PROJECTILES_PER_ATTACK } from "./caps";
 import type { AttackActor, AttackTarget } from "./pipeline";
 import { PROJECTILE_LIFESPAN_MS, startRangedAttack, stepProjectiles } from "./ranged";
 
 const ACTOR: AttackActor = { position: { x: 0, y: 0 }, facing: 0, radius: 16 };
+const NO_WALLS = buildWallGrid([]);
 
 describe("startRangedAttack", () => {
   it("refuses to fire while the bow's cooldown has not elapsed", () => {
@@ -70,7 +73,7 @@ describe("stepProjectiles", () => {
     const result = startRangedAttack(ACTOR, basicBow, 0, 0, 0);
     if (!result.started) throw new Error("expected started");
 
-    const { projectiles } = stepProjectiles(result.projectiles, 50, 0.05, []);
+    const { projectiles } = stepProjectiles(result.projectiles, 50, 0.05, [], NO_WALLS);
     expect(projectiles).toHaveLength(1);
     expect(projectiles[0]!.position.x).toBeCloseTo(basicBow.projectileSpeed! * 0.05, 6);
   });
@@ -82,7 +85,7 @@ describe("stepProjectiles", () => {
     let projectiles = result.projectiles;
     const stepsToExpire = Math.ceil(PROJECTILE_LIFESPAN_MS / 50) + 1;
     for (let i = 0; i < stepsToExpire; i += 1) {
-      ({ projectiles } = stepProjectiles(projectiles, 50, 0.05, []));
+      ({ projectiles } = stepProjectiles(projectiles, 50, 0.05, [], NO_WALLS));
     }
     expect(projectiles).toHaveLength(0);
   });
@@ -103,6 +106,7 @@ describe("stepProjectiles", () => {
       50,
       0.05,
       [target],
+      NO_WALLS,
     );
 
     expect(projectiles).toHaveLength(0); // consumed on hit, no pierce behavior in M1
@@ -121,8 +125,61 @@ describe("stepProjectiles", () => {
     const result = startRangedAttack(ACTOR, basicBow, 0, 0, 0);
     if (!result.started) throw new Error("expected started");
 
-    const { updatedTargets, hitEvents } = stepProjectiles(result.projectiles, 50, 0.05, [target]);
+    const { updatedTargets, hitEvents } = stepProjectiles(
+      result.projectiles,
+      50,
+      0.05,
+      [target],
+      NO_WALLS,
+    );
     expect(updatedTargets).toEqual([target]);
     expect(hitEvents).toEqual([]);
+  });
+});
+
+describe("stepProjectiles: wall collision (D-1, resolved)", () => {
+  it("[D-1] stops and removes a fast projectile that would otherwise cross a thin wall in one step", () => {
+    // basic_bow covers 30px/step (600px/s * 0.05s), wider than this 15px wall.
+    const wall: Wall = { x: 10, y: -50, width: 15, height: 100 };
+    const grid = buildWallGrid([wall]);
+    const result = startRangedAttack(ACTOR, basicBow, 0, 0, 0);
+    if (!result.started) throw new Error("expected started");
+
+    const { projectiles } = stepProjectiles(result.projectiles, 50, 0.05, [], grid);
+    expect(projectiles).toHaveLength(0);
+  });
+
+  it("[D-1] a wall stops the projectile before it can hit a target on the far side", () => {
+    const wall: Wall = { x: 10, y: -50, width: 15, height: 100 };
+    const grid = buildWallGrid([wall]);
+    const target: AttackTarget = {
+      id: "enemy-1",
+      position: { x: 60, y: 0 },
+      radius: 8,
+      health: 20,
+    };
+    const result = startRangedAttack(ACTOR, basicBow, 0, 0, 0);
+    if (!result.started) throw new Error("expected started");
+
+    const { projectiles, updatedTargets, hitEvents } = stepProjectiles(
+      result.projectiles,
+      50,
+      0.05,
+      [target],
+      grid,
+    );
+    expect(projectiles).toHaveLength(0);
+    expect(updatedTargets).toEqual([target]); // undamaged — the wall protected it
+    expect(hitEvents).toEqual([]);
+  });
+
+  it("does not stop a projectile whose path has no wall in it", () => {
+    const wall: Wall = { x: 10_000, y: 10_000, width: 15, height: 100 }; // far away
+    const grid = buildWallGrid([wall]);
+    const result = startRangedAttack(ACTOR, basicBow, 0, 0, 0);
+    if (!result.started) throw new Error("expected started");
+
+    const { projectiles } = stepProjectiles(result.projectiles, 50, 0.05, [], grid);
+    expect(projectiles).toHaveLength(1);
   });
 });

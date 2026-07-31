@@ -1,7 +1,6 @@
-import { basicBow, basicSword, chaser } from "@carry-or-fall/game-content";
+import { basicBow, basicSword, chaser, honingStone } from "@carry-or-fall/game-content";
 import { describe, expect, it } from "vitest";
 
-import { CONTACT_DAMAGE_COOLDOWN_MS } from "./enemy";
 import { PLAYER_SPEED } from "./movement";
 import {
   createSimulation,
@@ -21,6 +20,9 @@ const NO_INPUT: InputState = {
   attackPressed: false,
   secondaryAttackPressed: false,
   dashPressed: false,
+  interactPressed: false,
+  discardSlotIndex: null,
+  secureSlotIndex: null,
 };
 const MOVE_RIGHT: InputState = { ...NO_INPUT, moveX: 1 };
 const ATTACK: InputState = { ...NO_INPUT, attackPressed: true };
@@ -28,6 +30,13 @@ const FIRE: InputState = { ...NO_INPUT, secondaryAttackPressed: true };
 const DASH_RIGHT: InputState = { ...NO_INPUT, moveX: 1, dashPressed: true };
 
 const FAR_AWAY_SPAWN = { x: 100_000, y: 100_000 };
+// Far from every wall/enemy position used by the M1-era tests below, so the
+// (M2) extraction points never interfere with M1's combat/movement assertions.
+const FAR_AWAY_EXTRACTION_CANDIDATES = [
+  { x: 500_000, y: 0 },
+  { x: 600_000, y: 0 },
+  { x: 700_000, y: 0 },
+];
 
 function newSimulation(overrides: Partial<SimulationConfig> = {}) {
   return createSimulation({
@@ -37,6 +46,7 @@ function newSimulation(overrides: Partial<SimulationConfig> = {}) {
     rangedWeapon: basicBow,
     enemyDefinition: chaser,
     enemySpawnPoints: [FAR_AWAY_SPAWN],
+    extractionCandidatePoints: FAR_AWAY_EXTRACTION_CANDIDATES,
     seed: 1,
     ...overrides,
   });
@@ -52,6 +62,7 @@ describe("createSimulation", () => {
       rangedWeapon: basicBow,
       enemyDefinition: chaser,
       enemySpawnPoints: [FAR_AWAY_SPAWN],
+      extractionCandidatePoints: FAR_AWAY_EXTRACTION_CANDIDATES,
       seed: 1,
     });
     expect(world.player.position).toEqual({ x: 5, y: 7 });
@@ -181,17 +192,48 @@ describe("stepSimulation: dash (M1.S1)", () => {
   });
 
   it("is blocked by a wall exactly like ordinary movement", () => {
-    // Deliberately much thicker than DASH_DISTANCE_PX: collision here is a
-    // discrete check on the landing position only (no swept/continuous
-    // check), so a wall thinner than the dash distance can be jumped clean
-    // over — see the "dash can tunnel through a thin wall" note recorded in
-    // docs/M1_ISSUES.md's Known deferred defects. This test asserts the dash
-    // *does* respect collision, using a wall thick enough not to trigger
-    // that separate, already-flagged limitation.
     const wall: Wall = { x: 30, y: -200, width: 300, height: 400 };
     const world = newSimulation({ walls: [wall] });
     const { world: next } = stepSimulation(world, DASH_RIGHT);
     expect(next.player.position.x + next.player.radius).toBeLessThanOrEqual(wall.x);
+  });
+
+  it("[D-2 regression] does not tunnel through a wall thinner than DASH_DISTANCE_PX (140px)", () => {
+    // This is the exact scenario docs/M1_ISSUES.md's D-2 describes: a 20px
+    // wall — the compact test map's actual wall thickness — is far thinner
+    // than one dash, so the discrete (landing-position-only) check used to
+    // let the dash land clean on the other side, undetected. Run against the
+    // pre-fix code, this test fails (player ends up past the wall).
+    const wall: Wall = { x: 30, y: -200, width: 20, height: 400 };
+    const world = newSimulation({ walls: [wall] });
+    const { world: next } = stepSimulation(world, DASH_RIGHT);
+    expect(next.player.position.x + next.player.radius).toBeLessThanOrEqual(wall.x);
+  });
+});
+
+describe("stepSimulation: swept wall collision fixes D-1 and D-2 (docs/M1_ISSUES.md)", () => {
+  it("[D-1] stops a fast projectile that would otherwise cross a thin interior wall in one step", () => {
+    // basic_bow travels 600 * 0.05 = 30px per step — already wider than this
+    // 15px wall, so the old discrete endpoint-only check for projectiles
+    // (there wasn't one at all) let it land clean on the far side. Run
+    // against the pre-fix code, this test fails (the projectile survives,
+    // positioned past the wall).
+    const wall: Wall = { x: 10, y: -50, width: 15, height: 100 };
+    let world = newSimulation({ walls: [wall] });
+    ({ world } = stepSimulation(world, FIRE));
+    expect(world.projectiles).toHaveLength(0);
+  });
+
+  it("[D-1] a wall between the player and the enemy stops the projectile before it can hit the enemy", () => {
+    // Enemy sits far enough past the wall that reaching it takes a second
+    // step; run against the pre-fix code, the projectile is not stopped by
+    // the wall and damages the enemy on the second step, failing this test.
+    const wall: Wall = { x: 10, y: -50, width: 15, height: 100 };
+    let world = newSimulation({ walls: [wall], enemySpawnPoints: [{ x: 60, y: 0 }] });
+    ({ world } = stepSimulation(world, FIRE));
+    ({ world } = stepSimulation(world, NO_INPUT));
+    expect(world.enemies[0]!.health).toBe(chaser.health);
+    expect(world.projectiles).toHaveLength(0);
   });
 });
 
@@ -269,7 +311,7 @@ describe("stepSimulation: chaser movement and contact damage (M1.9/M1.10)", () =
     expect(world.player.health).toBe(PLAYER_MAX_HEALTH - chaser.contactDamage);
 
     // After the contact cooldown fully elapses, contact damage can apply again.
-    const stepsToCooldown = Math.ceil(CONTACT_DAMAGE_COOLDOWN_MS / SIMULATION_DT_MS);
+    const stepsToCooldown = Math.ceil(chaser.contactDamageIntervalMs / SIMULATION_DT_MS);
     for (let i = 0; i < stepsToCooldown; i += 1) {
       ({ world } = stepSimulation(world, NO_INPUT));
     }
@@ -302,6 +344,229 @@ describe("stepSimulation: player health and death (M1.10)", () => {
 
     const { world: next, hitEvents } = stepSimulation(world, MOVE_RIGHT);
     expect(next).toEqual(world); // fully frozen: not even movement applies
+    expect(hitEvents).toEqual([]);
+  });
+});
+
+const INTERACT: InputState = { ...NO_INPUT, interactPressed: true };
+
+describe("stepSimulation: loot pickup (M2.6)", () => {
+  it("adds a nearby ground-loot item to the inventory while interact is held", () => {
+    let world = newSimulation({ groundLootSpawnPoints: [{ x: 0, y: 0 }] });
+    expect(world.groundLoot).toHaveLength(1);
+    ({ world } = stepSimulation(world, INTERACT));
+    expect(world.player.inventory[0]?.id).toBe(honingStone.id);
+    expect(world.groundLoot).toHaveLength(0); // picked up, removed from the ground
+  });
+
+  it("does nothing when no ground loot is nearby", () => {
+    let world = newSimulation({ groundLootSpawnPoints: [{ x: 100_000, y: 100_000 }] });
+    ({ world } = stepSimulation(world, INTERACT));
+    expect(world.player.inventory.every((slot) => slot === null)).toBe(true);
+    expect(world.groundLoot).toHaveLength(1);
+  });
+});
+
+describe("stepSimulation: carried loot changes build (M2.4 exit criterion)", () => {
+  it("a picked-up damageAdd item increases the damage an attack actually deals", () => {
+    // Seed 1 with a single enemy-spawn candidate and a single ground-loot
+    // point deterministically drops honing_stone (damageAdd: 3) — see the
+    // brute-force check in this task's execution notes; if ALL_LOOT's order
+    // or the loot-table size ever changes, re-derive this seed/assertion.
+    let world = newSimulation({
+      enemySpawnPoints: [{ x: 40, y: 0 }],
+      groundLootSpawnPoints: [{ x: 0, y: 0 }],
+    });
+    ({ world } = stepSimulation(world, INTERACT));
+    expect(world.player.inventory[0]?.id).toBe(honingStone.id);
+
+    ({ world } = stepSimulation(world, ATTACK));
+    const stepsToActive = Math.ceil(basicSword.windupMs! / SIMULATION_DT_MS);
+    for (let i = 0; i < stepsToActive; i += 1) {
+      ({ world } = stepSimulation(world, NO_INPUT));
+    }
+    expect(world.enemies[0]!.health).toBe(chaser.health - (basicSword.damage + 3));
+  });
+});
+
+describe("stepSimulation: secure slot removes active effect (M2.5 exit criterion)", () => {
+  it("moving the item to the secure slot reverts damage to the unmodified weapon value", () => {
+    let world = newSimulation({
+      enemySpawnPoints: [{ x: 40, y: 0 }],
+      groundLootSpawnPoints: [{ x: 0, y: 0 }],
+    });
+    ({ world } = stepSimulation(world, INTERACT));
+    expect(world.player.inventory[0]?.id).toBe(honingStone.id);
+
+    ({ world } = stepSimulation(world, { ...NO_INPUT, secureSlotIndex: 0 }));
+    expect(world.player.secureSlot?.id).toBe(honingStone.id);
+    expect(world.player.inventory[0]).toBeNull();
+
+    ({ world } = stepSimulation(world, ATTACK));
+    const stepsToActive = Math.ceil(basicSword.windupMs! / SIMULATION_DT_MS);
+    for (let i = 0; i < stepsToActive; i += 1) {
+      ({ world } = stepSimulation(world, NO_INPUT));
+    }
+    // No carried build effect anymore: plain basic_sword damage, not +3.
+    expect(world.enemies[0]!.health).toBe(chaser.health - basicSword.damage);
+  });
+
+  it("refuses a second secure attempt while the secure slot is occupied", () => {
+    let world = newSimulation({
+      groundLootSpawnPoints: [
+        { x: 0, y: 0 },
+        { x: 5, y: 0 },
+      ],
+    });
+    ({ world } = stepSimulation(world, INTERACT));
+    ({ world } = stepSimulation(world, INTERACT));
+    expect(world.player.inventory.filter((slot) => slot !== null)).toHaveLength(2);
+
+    ({ world } = stepSimulation(world, { ...NO_INPUT, secureSlotIndex: 0 }));
+    const securedFirst = world.player.secureSlot;
+    expect(securedFirst).not.toBeNull();
+
+    ({ world } = stepSimulation(world, { ...NO_INPUT, secureSlotIndex: 1 }));
+    expect(world.player.secureSlot).toBe(securedFirst); // unchanged, refused
+    expect(world.player.inventory[1]).not.toBeNull(); // the second item stayed put
+  });
+});
+
+describe("stepSimulation: rotating extraction (M2.7)", () => {
+  const EXTRACTION_HERE = [
+    { x: 0, y: 0 },
+    { x: 500_000, y: 0 },
+  ];
+
+  it("channeling extraction at an active point for the full duration ends the run as extracted", () => {
+    let world = newSimulation({ extractionCandidatePoints: EXTRACTION_HERE });
+    expect(
+      world.extractionPoints.some((point) => point.position.x === 0 && point.position.y === 0),
+    ).toBe(true);
+
+    const stepsToChannel = Math.ceil(5000 / SIMULATION_DT_MS); // EXTRACTION_CHANNEL_MS
+    for (let i = 0; i < stepsToChannel; i += 1) {
+      ({ world } = stepSimulation(world, INTERACT));
+    }
+    expect(world.runResult?.outcome).toBe("extracted");
+  });
+
+  it("releasing interact resets channel progress instead of accumulating it", () => {
+    let world = newSimulation({ extractionCandidatePoints: EXTRACTION_HERE });
+    ({ world } = stepSimulation(world, INTERACT));
+    expect(world.player.extractionProgressMs).toBeGreaterThan(0);
+    ({ world } = stepSimulation(world, NO_INPUT));
+    expect(world.player.extractionProgressMs).toBe(0);
+  });
+
+  it("taking contact damage interrupts an in-progress channel", () => {
+    const touchingDistance = PLAYER_RADIUS + ENEMY_RADIUS - 1;
+    let world = newSimulation({
+      extractionCandidatePoints: EXTRACTION_HERE,
+      enemySpawnPoints: [{ x: touchingDistance, y: 0 }],
+    });
+    ({ world } = stepSimulation(world, INTERACT));
+    // Contact damage applies this same step (the enemy already touches the
+    // player at spawn), so progress should have been reset to zero, not
+    // accumulated.
+    expect(world.player.extractionProgressMs).toBe(0);
+    expect(world.player.health).toBeLessThan(PLAYER_MAX_HEALTH);
+  });
+});
+
+describe("stepSimulation: death and extraction differ correctly (M2.8 exit criterion)", () => {
+  const EXTRACTION_HERE = [
+    { x: 0, y: 0 },
+    { x: 500_000, y: 0 },
+  ];
+
+  it("extraction converts both the inventory and the secure slot into points", () => {
+    let world = newSimulation({
+      extractionCandidatePoints: EXTRACTION_HERE,
+      groundLootSpawnPoints: [{ x: 0, y: 0 }],
+    });
+    ({ world } = stepSimulation(world, INTERACT)); // picks up honing_stone into inventory[0]
+
+    const stepsToChannel = Math.ceil(5000 / SIMULATION_DT_MS);
+    for (let i = 0; i < stepsToChannel; i += 1) {
+      ({ world } = stepSimulation(world, INTERACT));
+    }
+    expect(world.runResult).toEqual({
+      outcome: "extracted",
+      pointsGained: honingStone.points,
+      itemsConverted: 1,
+      itemsLost: 0,
+    });
+    expect(world.player.inventory.every((slot) => slot === null)).toBe(true);
+  });
+
+  // The enemy spawns far away so the pickup step happens with no contact yet,
+  // then closes the distance and (with an inflated contactDamage) kills the
+  // player in one hit once it arrives — avoiding a fragile exact-distance
+  // setup where the pickup and the lethal contact would need to land on the
+  // same step.
+  function stepUntilDead(world: import("./world").World, maxSteps = 300): import("./world").World {
+    let current = world;
+    for (let i = 0; i < maxSteps && current.player.alive; i += 1) {
+      ({ world: current } = stepSimulation(current, NO_INPUT));
+    }
+    if (current.player.alive) {
+      throw new Error("player did not die within maxSteps; test setup is wrong");
+    }
+    return current;
+  }
+
+  it("death drops the ordinary inventory on the ground instead of converting it", () => {
+    const highContactDamageEnemy = { ...chaser, contactDamage: PLAYER_MAX_HEALTH };
+    let world = newSimulation({
+      enemyDefinition: highContactDamageEnemy,
+      enemySpawnPoints: [{ x: 500, y: 0 }],
+      groundLootSpawnPoints: [{ x: 0, y: 0 }],
+    });
+    ({ world } = stepSimulation(world, INTERACT)); // picks up honing_stone; enemy still far away
+    expect(world.player.inventory[0]?.id).toBe(honingStone.id);
+
+    world = stepUntilDead(world);
+    expect(world.runResult).toEqual({
+      outcome: "died",
+      pointsGained: { force: 0, precision: 0, motion: 0, guard: 0, signal: 0 }, // not converted
+      itemsConverted: 0,
+      itemsLost: 1,
+    });
+    expect(world.player.inventory.every((slot) => slot === null)).toBe(true);
+    expect(world.groundLoot.some((loot) => loot.id.startsWith("loot-death-"))).toBe(true);
+  });
+
+  it("death still converts the secure slot even though the inventory only drops", () => {
+    const highContactDamageEnemy = { ...chaser, contactDamage: PLAYER_MAX_HEALTH };
+    let world = newSimulation({
+      enemyDefinition: highContactDamageEnemy,
+      enemySpawnPoints: [{ x: 500, y: 0 }],
+      groundLootSpawnPoints: [{ x: 0, y: 0 }],
+    });
+    ({ world } = stepSimulation(world, INTERACT)); // picks up honing_stone
+    ({ world } = stepSimulation(world, { ...NO_INPUT, secureSlotIndex: 0 })); // secures it
+    expect(world.player.secureSlot?.id).toBe(honingStone.id);
+
+    world = stepUntilDead(world);
+    expect(world.runResult).toEqual({
+      outcome: "died",
+      pointsGained: honingStone.points, // the secure slot survives and converts
+      itemsConverted: 1,
+      itemsLost: 0, // the ordinary inventory was already empty (item was secured)
+    });
+  });
+
+  it("stepSimulation is a full no-op once runResult is set", () => {
+    let world = newSimulation({ extractionCandidatePoints: EXTRACTION_HERE });
+    const stepsToChannel = Math.ceil(5000 / SIMULATION_DT_MS);
+    for (let i = 0; i < stepsToChannel; i += 1) {
+      ({ world } = stepSimulation(world, INTERACT));
+    }
+    expect(world.runResult).not.toBeNull();
+
+    const { world: next, hitEvents } = stepSimulation(world, MOVE_RIGHT);
+    expect(next).toEqual(world);
     expect(hitEvents).toEqual([]);
   });
 });

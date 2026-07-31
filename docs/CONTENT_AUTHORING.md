@@ -1,11 +1,11 @@
 # Content Authoring
 
-Status: **M1 in progress.** §3 (weapons) and §6 (enemies) are shipped — `basic_sword`, `basic_bow`,
-and `chaser` are real data in `@carry-or-fall/game-content`, read by the shared attack pipeline in
-`@carry-or-fall/simulation-core`. §4 (skills) and §5 (loot) remain forward-looking (M3/M2). This
-document explains how to add a weapon, armor type, skill, loot item, or enemy as a **data
-definition** — not as new engine code. This follows the technical plan §7.2 and §43 and the
-`docs/DEVELOPMENT_RULES.md` rule that content is data-driven.
+Status: **M2 in progress.** §3 (weapons), §5 (loot), and §6 (enemies) are shipped — `basic_sword`,
+`basic_bow`, `chaser`, and the six `ALL_LOOT` items are real data in `@carry-or-fall/game-content`,
+read by the shared attack pipeline and `build-effects.ts` in `@carry-or-fall/simulation-core`. §4
+(skills) remains forward-looking (M3). This document explains how to add a weapon, armor type,
+skill, loot item, or enemy as a **data definition** — not as new engine code. This follows the
+technical plan §7.2 and §43 and the `docs/DEVELOPMENT_RULES.md` rule that content is data-driven.
 
 > The core rule: **adding an ordinary weapon, skill, or loot item should require a content
 > definition plus tests, not a rewrite of the combat engine** (`DEVELOPMENT_RULES.md`, "Content and
@@ -139,9 +139,14 @@ export const ricochet: SkillDefinition = {
 A skill's `limits` never override the shared hard caps; they are the skill's own ceiling, clamped
 by the engine's global cap.
 
-## 5. Loot items — five-category points (M2)
+## 5. Loot items — five-category points (M2, shipped)
 
-Ordinary loot has fixed, non-random point values (concept §6.6, §29.3):
+Ordinary loot has fixed, non-random point values (concept §6.6, §29.3). `buildEffects` is a typed
+shape, not a free-form bag: it only recognizes the keys `packages/simulation-core/src/
+build-effects.ts`'s `aggregateBuildEffects` actually sums and caps, so a mistyped key is a compile
+error, not a silently inert field. An item may declare none, one, or several of these keys — a
+loot item with points but no active-build role (e.g. `signal`-leaning loot; homing/detection
+mechanics that would consume a signal effect are M3/later, not implemented yet) is valid.
 
 ```ts
 export interface LootDefinition extends ContentDefinition {
@@ -154,17 +159,29 @@ export interface LootDefinition extends ContentDefinition {
     readonly guard: number;
     readonly signal: number;
   };
-  readonly buildEffects?: Readonly<Record<string, number>>;
+  readonly buildEffects?: {
+    readonly damageAdd?: number;
+    readonly attackSpeedBonus?: number;
+    readonly projectileSpeedAdd?: number;
+    readonly moveSpeedBonus?: number;
+    readonly maxHealthAdd?: number;
+  };
 }
 
-export const targetingCore: LootDefinition = {
-  id: "targeting_core",
+export const honingStone: LootDefinition = {
+  id: "honing_stone",
   kind: "loot",
-  rarity: "uncommon",
-  points: { force: 0, precision: 2, motion: 1, guard: 0, signal: 4 },
-  buildEffects: { projectileHomingAdd: 0.05, detectionRadiusAdd: 25 },
+  rarity: "common",
+  points: { force: 2, precision: 0, motion: 0, guard: 0, signal: 0 },
+  buildEffects: { damageAdd: 3 },
 } as const;
 ```
+
+M2 ships six items (`ALL_LOOT` in `packages/game-content/src/loot.ts`): `honing_stone`,
+`farsight_lens`, `quickstep_charm`, `scrap_plating`, `resonant_core`, and `warlords_seal` (rare,
+mixed-category, meant as secure-slot bait). No `boss`-rarity item exists yet — boss drops and
+weapon/armor blueprints require the account/persistence layer M5 adds (`docs/DECISIONS.md` D27;
+`docs/M2_ISSUES.md` §1), so M2's loot is points-plus-optional-build-effect only.
 
 Avoid item-quality randomness, random stat rolls, procedural affixes, and hidden conversion
 formulas (concept §6.6). Every item has clear, fixed values.
@@ -183,6 +200,8 @@ export interface EnemyDefinition extends ContentDefinition {
   readonly health: number;
   readonly moveSpeed: number;
   readonly contactDamage: number;
+  /** How often a touching enemy re-applies `contactDamage`, in milliseconds. */
+  readonly contactDamageIntervalMs: number;
 }
 
 export const chaser: EnemyDefinition = {
@@ -192,6 +211,7 @@ export const chaser: EnemyDefinition = {
   health: 20,
   moveSpeed: 90,
   contactDamage: 5,
+  contactDamageIntervalMs: 500,
 } as const;
 ```
 

@@ -286,3 +286,17 @@ milestone, not implemented yet).
   "Require approval for all external contributors" stays enabled under
   Settings → Actions → General.
 - **Status:** Approved.
+
+
+## D28. v0.1.0-local-combat predates the D-1/D-2 collision fix
+
+- **Decision:** The public tag `v0.1.0-local-combat` points at a commit where
+  projectiles pass through walls (D-1) and a dash can tunnel through a thin wall
+  (D-2). The tag is not moved, because it is already published. The collision fix
+  travels to `main` with the M2 merge instead.
+- **Reason:** Moving a published tag rewrites history other people may already
+  have. Cherry-picking the fix onto `main` separately was attempted and abandoned
+  as unnecessary complexity, since M2 carries the same commit.
+- **Consequences:** `v0.1.0-local-combat` is not a good playable build. The first
+  tag with correct collision is the M2 tag, `v0.2.0-loot-extraction`.
+- **Status:** Approved.

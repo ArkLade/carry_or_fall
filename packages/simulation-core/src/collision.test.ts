@@ -6,6 +6,7 @@ import {
   closestPointOnWall,
   resolveAxisMovement,
   SpatialGrid,
+  sweptCircleIntersectsWall,
 } from "./collision";
 import type { Wall } from "./world";
 
@@ -103,5 +104,53 @@ describe("resolveAxisMovement (map collision, M1.5)", () => {
     const position = { x: 42, y: 7 };
     expect(resolveAxisMovement(position, "x", 0, radius, grid)).toBe(42);
     expect(resolveAxisMovement(position, "y", 0, radius, grid)).toBe(7);
+  });
+});
+
+describe("sweptCircleIntersectsWall (D-1/D-2 root-cause fix)", () => {
+  it("degenerates to the discrete circleIntersectsWall test when start equals end", () => {
+    const touching = { x: 90, y: 125 };
+    const clear = { x: 0, y: 0 };
+    expect(sweptCircleIntersectsWall(touching, touching, 11, WALL)).toBe(
+      circleIntersectsWall({ position: touching, radius: 11 }, WALL),
+    );
+    expect(sweptCircleIntersectsWall(clear, clear, 5, WALL)).toBe(
+      circleIntersectsWall({ position: clear, radius: 5 }, WALL),
+    );
+  });
+
+  it("detects a fast sweep that crosses straight through the wall's horizontal extent", () => {
+    // Neither endpoint overlaps the wall individually; only the swept path does.
+    const start = { x: 50, y: 125 };
+    const end = { x: 200, y: 125 };
+    expect(circleIntersectsWall({ position: start, radius: 5 }, WALL)).toBe(false);
+    expect(circleIntersectsWall({ position: end, radius: 5 }, WALL)).toBe(false);
+    expect(sweptCircleIntersectsWall(start, end, 5, WALL)).toBe(true);
+  });
+
+  it("detects a fast sweep that crosses straight through the wall's vertical extent", () => {
+    const start = { x: 125, y: 50 };
+    const end = { x: 125, y: 200 };
+    expect(circleIntersectsWall({ position: start, radius: 5 }, WALL)).toBe(false);
+    expect(circleIntersectsWall({ position: end, radius: 5 }, WALL)).toBe(false);
+    expect(sweptCircleIntersectsWall(start, end, 5, WALL)).toBe(true);
+  });
+
+  it("detects a sweep that passes near a corner, closest at an interior point of the segment", () => {
+    // Both endpoints sit in the diagonal quadrant outside the top-left corner
+    // (100,100); the segment's closest approach to that corner (90,90) is an
+    // interior point (t=0.5), not either endpoint, and is only reachable via
+    // the corner check — not the horizontal- or vertical-expansion checks.
+    const start = { x: 85, y: 95 };
+    const end = { x: 95, y: 85 };
+    expect(circleIntersectsWall({ position: start, radius: 15 }, WALL)).toBe(false);
+    expect(circleIntersectsWall({ position: end, radius: 15 }, WALL)).toBe(false);
+    expect(sweptCircleIntersectsWall(start, end, 15, WALL)).toBe(true);
+    // A radius just short of the true distance (sqrt(200) ≈ 14.14) must miss.
+    expect(sweptCircleIntersectsWall(start, end, 14, WALL)).toBe(false);
+  });
+
+  it("does not detect a collision for a sweep that stays clear of the wall entirely", () => {
+    expect(sweptCircleIntersectsWall({ x: 0, y: 0 }, { x: 10, y: 10 }, 5, WALL)).toBe(false);
   });
 });
