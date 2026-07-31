@@ -37,3 +37,28 @@ export function createRng(seed: number): Rng {
     },
   };
 }
+
+/**
+ * Pick `count` items from `candidates` without replacement, via the seeded
+ * RNG (technical plan §9.4) — so the same seed always yields the same
+ * selection, and no item is picked twice.
+ *
+ * Shared by `extraction.ts` (which active extraction points open) and
+ * `enemy.ts` (where each enemy of a group spawns), both of which need
+ * *distinct* placements rather than independent draws that could collide.
+ * Throws if asked for more items than exist, which is a caller/content
+ * error rather than a runtime condition.
+ */
+export function pickDistinct<T>(candidates: readonly T[], count: number, rng: Rng): T[] {
+  if (count > candidates.length) {
+    throw new RangeError("pickDistinct requires at least `count` candidates");
+  }
+  const pool = candidates.slice();
+  const picked: T[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const index = rng.nextInt(pool.length);
+    picked.push(pool[index]!);
+    pool.splice(index, 1);
+  }
+  return picked;
+}

@@ -17,7 +17,9 @@ import {
   getWorld,
   gotoGame,
   interactFor,
+  dieToChasers,
   meleeAttackFor,
+  nearestEnemy,
   rangedAttackFor,
   startRunWithLoadout,
   walkToward,
@@ -126,12 +128,12 @@ test.describe("each skill applies alone (M3.3, §38 M3 exit criterion 1)", () =>
     await startRunWithLoadout(page, ["bulwark_strike"]);
     let world = await getWorld(page);
     expect(world.player.shieldHp).toBe(0);
-    const enemyStart = world.enemies[0]!.position;
+    const enemyStart = nearestEnemy(world)!.position;
 
-    // The chaser always moves toward the player; walk to meet it partway
-    // rather than assuming a fixed distance (`docs/M1_EXECUTION_PLAN.md`
-    // M1.9's chase behavior applies regardless of which candidate spawn
-    // point the seeded RNG picked this run).
+    // The chasers always move toward the player; walk to meet the closest
+    // one partway rather than assuming a fixed distance
+    // (`docs/M1_EXECUTION_PLAN.md` M1.9's chase behavior applies regardless
+    // of which candidate spawn points the seeded RNG picked this run).
     await walkToward(page, enemyStart.x, enemyStart.y, 20_000);
 
     world = await attackChaserUntil(page, (w) => w.player.shieldHp > 0, 15_000);
@@ -305,17 +307,9 @@ test.describe("wildcard skill chip (M3.7)", () => {
     world = await getWorld(page);
     expect(world.player.wildcardSkill).not.toBeNull();
 
-    // Walk into the chaser and stay put, letting repeated contact damage
-    // kill the player — the real death path, not a fabricated one.
-    const enemyStart = world.enemies[0]!.position;
-    await walkToward(page, enemyStart.x, enemyStart.y, 20_000);
-    world = await getWorld(page);
-    let guard = 0;
-    while (world.player.alive && guard < 200) {
-      await page.waitForTimeout(200);
-      world = await getWorld(page);
-      guard += 1;
-    }
+    // Let the chasers close in and kill the player through repeated contact
+    // damage — the real death path, not a fabricated one.
+    world = await dieToChasers(page);
 
     expect(world.player.alive).toBe(false);
     expect(world.player.wildcardSkill).toBeNull();

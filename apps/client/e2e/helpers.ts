@@ -21,9 +21,9 @@ import type { Page } from "@playwright/test";
 import { ALL_SKILLS } from "@carry-or-fall/game-content";
 import type { World } from "@carry-or-fall/simulation-core";
 
-/** Matches `main.ts`'s Phaser game config. */
-export const GAME_WIDTH = 960;
-export const GAME_HEIGHT = 540;
+/** Matches `main.ts`'s Phaser game config (and so `PlayScene`'s map dimensions). */
+export const GAME_WIDTH = 1920;
+export const GAME_HEIGHT = 1080;
 
 /** Matches `LoadoutScene.ts`'s `DEFAULT_SKILL_LOADOUT_IDS`. */
 export const DEFAULT_SKILL_LOADOUT_IDS = ["ricochet", "extended_reach", "bulwark_strike"];
@@ -148,26 +148,44 @@ export async function interactFor(page: Page, durationMs: number): Promise<void>
   await page.keyboard.up("KeyE");
 }
 
+type MoveKey = "KeyA" | "KeyD" | "KeyW" | "KeyS";
+
 /**
- * Walk the player toward `targetX`/`targetY`, routing around `PlayScene`'s
- * one interior wall (x 470-490, y 150-390) by detouring through y≈100
- * whenever the direct path would cross the wall's x-band while still inside
- * its y-band. Polls actual position via the debug hook rather than assuming
- * travel time, since the chaser can also be closing distance simultaneously.
+ * Walk the player toward `targetX`/`targetY`, polling actual position via the
+ * debug hook rather than assuming travel time (the chasers are closing
+ * distance at the same time, and walls can block a leg of the route).
+ *
+ * Wall routing is **derived from behavior, not from hardcoded coordinates**:
+ * the walker moves greedily toward the target, and if it stops making
+ * progress it assumes a wall is in the way and sidesteps vertically for a
+ * moment before resuming. That kept working unchanged when the map doubled
+ * and gained two more interior walls, whereas the previous version encoded
+ * the single original wall's x/y bands and silently mis-routed the moment the
+ * map changed.
  */
 export async function walkToward(
   page: Page,
   targetX: number,
   targetY: number,
-  maxMs = 10_000,
+  maxMs = 20_000,
 ): Promise<void> {
   const deadline = Date.now() + maxMs;
+  let previousDistance = Number.POSITIVE_INFINITY;
+  let stalledPolls = 0;
+  let sidestep: MoveKey | null = null;
+  let sidestepPollsLeft = 0;
+  // Flipped on each new stall, so if the first way around an obstacle is
+  // itself blocked the walker tries the other way instead of retrying the
+  // same failing detour forever.
+  let sidestepSign = 1;
+
   for (;;) {
     const world = await getWorld(page);
     const { x, y } = world.player.position;
     const dx = targetX - x;
     const dy = targetY - y;
-    if (Math.hypot(dx, dy) < 20) {
+    const distance = Math.hypot(dx, dy);
+    if (distance < 24) {
       return;
     }
     if (Date.now() > deadline) {
@@ -176,16 +194,47 @@ export async function walkToward(
       );
     }
 
-    const crossesWallX = (x < 470 && targetX > 490) || (x > 490 && targetX < 470);
-    const inWallYBand = y > 130 && y < 410;
+    // "Barely closed the gap since the last poll" means something is in the
+    // way — the walker is pressed against a wall it needs to go around.
+    if (distance > previousDistance - 4) {
+      stalledPolls += 1;
+    } else {
+      stalledPolls = 0;
+    }
+    previousDistance = distance;
 
-    const keys: ("KeyA" | "KeyD" | "KeyW" | "KeyS")[] = [];
-    if (crossesWallX && inWallYBand) {
-      keys.push("KeyW");
+    if (stalledPolls >= 2 && sidestepPollsLeft <= 0) {
+      // Detour *perpendicular* to the direction of travel: pushing further
+      // along the blocked axis just presses harder into the wall. A vertical
+      // wall (blocking horizontal travel) is cleared by moving vertically,
+      // and a horizontal wall by moving horizontally.
+      const blockedAxisIsHorizontal = Math.abs(dx) > Math.abs(dy);
+      if (blockedAxisIsHorizontal) {
+        sidestep = sidestepSign > 0 ? "KeyW" : "KeyS";
+      } else {
+        sidestep = sidestepSign > 0 ? "KeyA" : "KeyD";
+      }
+      sidestepSign *= -1;
+      sidestepPollsLeft = 8;
+      stalledPolls = 0;
+    }
+
+    const keys: MoveKey[] = [];
+    if (sidestepPollsLeft > 0 && sidestep !== null) {
+      keys.push(sidestep);
+      // Keep pushing along the blocked axis too, so the moment the detour
+      // clears the obstacle the walker immediately resumes progress.
+      if (sidestep === "KeyW" || sidestep === "KeyS") {
+        if (Math.abs(dx) > 10) keys.push(dx > 0 ? "KeyD" : "KeyA");
+      } else if (Math.abs(dy) > 10) {
+        keys.push(dy > 0 ? "KeyS" : "KeyW");
+      }
+      sidestepPollsLeft -= 1;
     } else {
       if (Math.abs(dx) > 10) keys.push(dx > 0 ? "KeyD" : "KeyA");
       if (Math.abs(dy) > 10) keys.push(dy > 0 ? "KeyS" : "KeyW");
     }
+
     for (const key of keys) {
       await page.keyboard.down(key);
     }
@@ -202,13 +251,78 @@ const MELEE_REACH_PX = 74;
 const TOUCH_DISTANCE_PX = 34;
 
 /**
- * Repeatedly aim at the live enemy position and throw a melee swing until
+ * Where the death helper goes to meet the chasers: on **their** side of the
+ * central divider, in the lower clear lane.
+ *
+ * This must not be on the player's own side of the divider. `enemy.ts` chases
+ * greedily per axis with no pathfinding, so a chaser that slides along the
+ * divider until it is dead-level with the player has no vertical component
+ * left and simply presses into the wall forever — the player standing in the
+ * wall's shadow is untouchable. Walking around to meet them sidesteps that
+ * entirely, and is also how a player actually dies.
+ */
+const MEET_CHASERS_SPOT = { x: 1200, y: 900 };
+
+/**
+ * Walk to {@link MEET_CHASERS_SPOT} via the lower clear lane, in two straight
+ * legs — down from the spawn column, then east along the lane. Both legs are
+ * free of walls by construction, so this never depends on the
+ * stall-and-sidestep detour logic and stays deterministic.
+ */
+export async function meetChasers(page: Page): Promise<void> {
+  const start = await getWorld(page);
+  await walkToward(page, start.player.position.x, MEET_CHASERS_SPOT.y, 20_000);
+  await walkToward(page, MEET_CHASERS_SPOT.x, MEET_CHASERS_SPOT.y, 20_000);
+}
+
+/** Let the chasers kill the player, and return the finished world. */
+export async function dieToChasers(page: Page, maxMs = 40_000): Promise<World> {
+  await meetChasers(page);
+
+  const deadline = Date.now() + maxMs;
+  for (;;) {
+    const world = await getWorld(page);
+    if (!world.player.alive) {
+      return world;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        `dieToChasers: player still alive after ${String(maxMs)}ms (hp ${String(world.player.health)})`,
+      );
+    }
+    await page.waitForTimeout(200);
+  }
+}
+
+/** The enemy closest to the player right now, or `null` if none are left alive. */
+export function nearestEnemy(world: World): World["enemies"][number] | null {
+  let nearest: World["enemies"][number] | null = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const enemy of world.enemies) {
+    const distance = Math.hypot(
+      enemy.position.x - world.player.position.x,
+      enemy.position.y - world.player.position.y,
+    );
+    if (distance < nearestDistance) {
+      nearest = enemy;
+      nearestDistance = distance;
+    }
+  }
+  return nearest;
+}
+
+/**
+ * Repeatedly aim at the **nearest** live enemy and throw a melee swing until
  * `predicate(world)` is true, without ever voluntarily walking the player
- * into the chaser's contact-damage radius: the state machine only swings
- * while the live distance is inside melee reach but outside touch distance,
- * retreats a step if the chaser closes past touch distance, and otherwise
- * waits for the chaser's own chase behavior (`docs/M1_EXECUTION_PLAN.md`
- * M1.9) to bring it into range — real behavior, not a scripted approach.
+ * into contact-damage range: the state machine only swings while the live
+ * distance is inside melee reach but outside touch distance, retreats a step
+ * if that enemy closes past touch distance, and otherwise waits for the
+ * chasers' own behavior (`docs/M1_EXECUTION_PLAN.md` M1.9) to bring one into
+ * range — real behavior, not a scripted approach.
+ *
+ * Targets the nearest rather than `enemies[0]` because a run now spawns
+ * three: fixing on the first in the array would leave the player swinging at
+ * a distant enemy while a closer one is already dealing contact damage.
  */
 export async function attackChaserUntil(
   page: Page,
@@ -227,8 +341,8 @@ export async function attackChaserUntil(
     if (!world.player.alive) {
       throw new Error("attackChaserUntil: player died before predicate became true");
     }
-    const enemy = world.enemies[0];
-    if (enemy === undefined) {
+    const enemy = nearestEnemy(world);
+    if (enemy === null) {
       await page.waitForTimeout(100);
       continue;
     }

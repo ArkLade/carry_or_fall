@@ -10,28 +10,24 @@
  * ranges (two points; 45-90s active; 4-6s channel).
  */
 import { circleIntersectsCircle } from "./collision";
-import type { Rng } from "./prng";
+import { pickDistinct, type Rng } from "./prng";
 import type { ExtractionPoint, Vec2 } from "./world";
 
 /** Concept §17.1: "two active extraction points". */
 export const ACTIVE_EXTRACTION_POINT_COUNT = 2;
 /** Proposed pickup/channel radius, in pixels. */
 export const EXTRACTION_POINT_RADIUS_PX = 40;
-/** Within concept §17.1's suggested 45-90s active duration. */
-export const EXTRACTION_POINT_ACTIVE_MS = 60_000;
+/**
+ * Within concept §17.1's suggested 45-90s active duration. Raised 60s -> 75s
+ * for M4 prep, when the local map doubled in both dimensions (4x area) and
+ * enemy health went up 5x: a point now has to stay open long enough to still
+ * be reachable after a real fight, since worst-case corner-to-corner
+ * traversal grew from roughly 5s to roughly 15s and a three-enemy fight can
+ * run 25-40s. Still balance-deferred, and still inside the concept's band.
+ */
+export const EXTRACTION_POINT_ACTIVE_MS = 75_000;
 /** Within concept §17.1's suggested 4-6s channel. */
 export const EXTRACTION_CHANNEL_MS = 5_000;
-
-function pickDistinct(candidates: readonly Vec2[], count: number, rng: Rng): Vec2[] {
-  const pool = candidates.slice();
-  const picked: Vec2[] = [];
-  for (let i = 0; i < count; i += 1) {
-    const index = rng.nextInt(pool.length);
-    picked.push(pool[index]!);
-    pool.splice(index, 1);
-  }
-  return picked;
-}
 
 /**
  * Choose the initial set of active extraction points from `candidates`, via

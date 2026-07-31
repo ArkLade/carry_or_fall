@@ -19,7 +19,7 @@ import {
   stepSimulation,
   type SimulationConfig,
 } from "./simulation";
-import type { InputState, Wall } from "./world";
+import type { InputState, Wall, World } from "./world";
 
 const NO_INPUT: InputState = {
   moveX: 0,
@@ -87,7 +87,7 @@ describe("createSimulation", () => {
     expect(world.projectiles).toEqual([]);
   });
 
-  it("spawns exactly one enemy, deriving its runtime stats from the content definition (stat derivation)", () => {
+  it("spawns exactly one enemy by default, deriving its runtime stats from the content definition (stat derivation)", () => {
     const world = newSimulation();
     expect(world.enemies).toHaveLength(1);
     const [enemy] = world.enemies;
@@ -98,6 +98,37 @@ describe("createSimulation", () => {
     expect(enemy!.moveSpeed).toBe(chaser.moveSpeed);
     expect(enemy!.contactDamage).toBe(chaser.contactDamage);
     expect(enemy!.radius).toBe(ENEMY_RADIUS);
+  });
+
+  it("spawns enemyCount enemies, each at a distinct spawn point with a distinct id", () => {
+    const candidates = [
+      { x: 10, y: 10 },
+      { x: 500, y: 500 },
+      { x: -300, y: 200 },
+      { x: 900, y: -400 },
+    ];
+    const world = newSimulation({ enemySpawnPoints: candidates, enemyCount: 3, seed: 7 });
+
+    expect(world.enemies).toHaveLength(3);
+    const positions = world.enemies.map((enemy) => JSON.stringify(enemy.position));
+    expect(new Set(positions).size).toBe(3);
+    expect(new Set(world.enemies.map((enemy) => enemy.id)).size).toBe(3);
+    for (const enemy of world.enemies) {
+      expect(candidates).toContainEqual(enemy.position);
+      expect(enemy.health).toBe(chaser.health);
+    }
+  });
+
+  it("refuses to spawn more enemies than there are distinct spawn points", () => {
+    expect(() =>
+      newSimulation({
+        enemySpawnPoints: [
+          { x: 0, y: 0 },
+          { x: 100, y: 0 },
+        ],
+        enemyCount: 3,
+      }),
+    ).toThrow(RangeError);
   });
 
   it("chooses the enemy spawn point deterministically from the seed (M1.9 requirement 4)", () => {
@@ -245,6 +276,25 @@ describe("stepSimulation: swept wall collision fixes D-1 and D-2 (docs/M1_ISSUES
   });
 });
 
+/**
+ * Drive exactly one full `basic_sword` swing cycle: start the swing, advance
+ * to its active window (where hits resolve), then idle out the rest of the
+ * attack interval so the next call can start a fresh swing.
+ */
+function swingBasicSwordOnce(world: World): World {
+  const stepsToActive = Math.ceil(basicSword.windupMs! / SIMULATION_DT_MS);
+  const attackIntervalSteps = Math.ceil(basicSword.attackIntervalMs / SIMULATION_DT_MS);
+  let current = world;
+  ({ world: current } = stepSimulation(current, ATTACK));
+  for (let i = 0; i < stepsToActive; i += 1) {
+    ({ world: current } = stepSimulation(current, NO_INPUT));
+  }
+  for (let i = 0; i < attackIntervalSteps - (1 + stepsToActive); i += 1) {
+    ({ world: current } = stepSimulation(current, NO_INPUT));
+  }
+  return current;
+}
+
 describe("stepSimulation: melee/ranged attacks now target the real enemy (M1.6-M1.9 integration)", () => {
   it("damages the enemy once a melee swing reaches its active window", () => {
     let world = newSimulation({ enemySpawnPoints: [{ x: 40, y: 0 }] });
@@ -256,27 +306,20 @@ describe("stepSimulation: melee/ranged attacks now target the real enemy (M1.6-M
     expect(world.enemies[0]!.health).toBe(chaser.health - basicSword.damage);
   });
 
-  it("removes the enemy once its health reaches zero", () => {
-    // chaser.health (20) needs two basic_sword swings (12 damage each) to kill.
+  it("keeps the enemy alive while it still has health, and removes it exactly when health reaches zero", () => {
+    // Derived from the live content values rather than hardcoded, so a
+    // balance change to either chaser.health or basic_sword.damage moves the
+    // boundary this asserts instead of breaking the test.
+    const swingsToKill = Math.ceil(chaser.health / basicSword.damage);
     let world = newSimulation({ enemySpawnPoints: [{ x: 40, y: 0 }] });
-    const stepsToActive = Math.ceil(basicSword.windupMs! / SIMULATION_DT_MS);
-    const attackIntervalSteps = Math.ceil(basicSword.attackIntervalMs / SIMULATION_DT_MS);
 
-    ({ world } = stepSimulation(world, ATTACK));
-    for (let i = 0; i < stepsToActive; i += 1) {
-      ({ world } = stepSimulation(world, NO_INPUT));
+    for (let i = 0; i < swingsToKill - 1; i += 1) {
+      world = swingBasicSwordOnce(world);
     }
-    expect(world.enemies[0]!.health).toBe(chaser.health - basicSword.damage);
+    expect(world.enemies).toHaveLength(1);
+    expect(world.enemies[0]!.health).toBeGreaterThan(0);
 
-    const remainingCooldownSteps = attackIntervalSteps - (1 + stepsToActive);
-    for (let i = 0; i < remainingCooldownSteps; i += 1) {
-      ({ world } = stepSimulation(world, NO_INPUT));
-    }
-
-    ({ world } = stepSimulation(world, ATTACK));
-    for (let i = 0; i < stepsToActive; i += 1) {
-      ({ world } = stepSimulation(world, NO_INPUT));
-    }
+    world = swingBasicSwordOnce(world);
     expect(world.enemies).toHaveLength(0);
   });
 

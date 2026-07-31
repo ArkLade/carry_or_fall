@@ -2,7 +2,13 @@ import { chaser, type EnemyDefinition } from "@carry-or-fall/game-content";
 import { describe, expect, it } from "vitest";
 
 import { buildWallGrid } from "./collision";
-import { canDealContactDamage, isTouchingPlayer, spawnEnemy, stepEnemyMovement } from "./enemy";
+import {
+  canDealContactDamage,
+  isTouchingPlayer,
+  spawnEnemies,
+  spawnEnemy,
+  stepEnemyMovement,
+} from "./enemy";
 import { createRng } from "./prng";
 import type { Enemy, Wall } from "./world";
 
@@ -43,6 +49,65 @@ describe("spawnEnemy", () => {
 
   it("throws when given no candidate spawn points", () => {
     expect(() => spawnEnemy(chaser, [], createRng(1), 18, 0)).toThrow(RangeError);
+  });
+});
+
+describe("spawnEnemies", () => {
+  const candidates = [
+    { x: 0, y: 0 },
+    { x: 100, y: 0 },
+    { x: 200, y: 0 },
+    { x: 300, y: 0 },
+  ];
+
+  it("never stacks two enemies on the same spawn point", () => {
+    const enemies = spawnEnemies(chaser, candidates, createRng(5), 18, 3);
+    expect(enemies).toHaveLength(3);
+    expect(new Set(enemies.map((enemy) => JSON.stringify(enemy.position))).size).toBe(3);
+  });
+
+  it("gives each enemy a distinct id so combat resolution can tell them apart", () => {
+    const enemies = spawnEnemies(chaser, candidates, createRng(5), 18, 3);
+    expect(new Set(enemies.map((enemy) => enemy.id)).size).toBe(3);
+  });
+
+  it("derives every enemy's runtime stats from the content definition", () => {
+    for (const enemy of spawnEnemies(chaser, candidates, createRng(5), 18, 3)) {
+      expect(enemy.definitionId).toBe(chaser.id);
+      expect(enemy.health).toBe(chaser.health);
+      expect(enemy.maxHealth).toBe(chaser.health);
+      expect(enemy.moveSpeed).toBe(chaser.moveSpeed);
+      expect(enemy.contactDamage).toBe(chaser.contactDamage);
+      expect(enemy.stunnedMs).toBe(0);
+      expect(enemy.radius).toBe(18);
+    }
+  });
+
+  it("defaults to one enemy, consuming the same single RNG draw spawnEnemy does", () => {
+    // Guards the seeded sequence for everything spawned after the enemies:
+    // if the default consumed a different number of draws, existing
+    // single-enemy worlds would silently get different loot and extraction
+    // points for the same seed.
+    const viaSpawnEnemies = spawnEnemies(chaser, candidates, createRng(11), 18);
+    expect(viaSpawnEnemies).toHaveLength(1);
+
+    const afterEnemies = createRng(11);
+    spawnEnemies(chaser, candidates, afterEnemies, 18);
+    const afterEnemy = createRng(11);
+    spawnEnemy(chaser, candidates, afterEnemy, 18, 0);
+    expect(afterEnemies.nextInt(1000)).toBe(afterEnemy.nextInt(1000));
+  });
+
+  it("is reproducible for a seed", () => {
+    expect(spawnEnemies(chaser, candidates, createRng(21), 18, 3)).toEqual(
+      spawnEnemies(chaser, candidates, createRng(21), 18, 3),
+    );
+  });
+
+  it("throws when asked for more enemies than there are distinct spawn points", () => {
+    expect(() => spawnEnemies(chaser, candidates, createRng(1), 18, candidates.length + 1)).toThrow(
+      RangeError,
+    );
   });
 });
 

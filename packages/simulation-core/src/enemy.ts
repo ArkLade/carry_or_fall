@@ -17,7 +17,7 @@ import type { EnemyDefinition } from "@carry-or-fall/game-content";
 import { circleIntersectsCircle } from "./collision";
 import type { SpatialGrid } from "./collision";
 import { resolveAxisMovement } from "./collision";
-import type { Rng } from "./prng";
+import { pickDistinct, type Rng } from "./prng";
 import type { Enemy, Vec2, Wall } from "./world";
 
 /**
@@ -55,6 +55,45 @@ export function spawnEnemy(
     contactCooldownMs: 0,
     stunnedMs: 0,
   };
+}
+
+/**
+ * Build `count` live enemies, each at a **distinct** candidate spawn point
+ * chosen via the seeded PRNG (`pickDistinct`) — two enemies never start
+ * stacked on the same position, which would otherwise read as one enemy and
+ * deal doubled contact damage from a single apparent body.
+ *
+ * `count` defaults to 1, so a caller that wants M1's original single-chaser
+ * behavior gets exactly that, consuming exactly one `rng.nextInt` call just
+ * as {@link spawnEnemy} does — the seeded sequence for everything spawned
+ * afterwards is therefore unchanged for existing single-enemy callers.
+ * Throws if there are fewer candidates than enemies to place, a
+ * caller/content error rather than a runtime condition.
+ */
+export function spawnEnemies(
+  definition: EnemyDefinition,
+  candidateSpawnPoints: readonly Vec2[],
+  rng: Rng,
+  radius: number,
+  count = 1,
+): Enemy[] {
+  if (candidateSpawnPoints.length < count) {
+    throw new RangeError("spawnEnemies requires at least `count` candidate spawn points");
+  }
+  return pickDistinct(candidateSpawnPoints, count, rng).map((position, index) => ({
+    id: `enemy-${String(index)}`,
+    definitionId: definition.id,
+    behavior: definition.behavior,
+    position,
+    radius,
+    health: definition.health,
+    maxHealth: definition.health,
+    moveSpeed: definition.moveSpeed,
+    contactDamage: definition.contactDamage,
+    contactDamageIntervalMs: definition.contactDamageIntervalMs,
+    contactCooldownMs: 0,
+    stunnedMs: 0,
+  }));
 }
 
 /**

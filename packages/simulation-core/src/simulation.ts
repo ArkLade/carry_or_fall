@@ -35,7 +35,7 @@ import type { HitEvent } from "./combat/events";
 import type { AttackActor, AttackTarget } from "./combat/pipeline";
 import { startRangedAttack, stepProjectiles } from "./combat/ranged";
 import { computeDashDelta, DASH_COOLDOWN_MS } from "./dash";
-import { canDealContactDamage, spawnEnemy, stepEnemyMovement } from "./enemy";
+import { canDealContactDamage, spawnEnemies, stepEnemyMovement } from "./enemy";
 import {
   EXTRACTION_CHANNEL_MS,
   findActiveExtractionPoint,
@@ -92,10 +92,22 @@ export interface SimulationConfig {
   readonly meleeWeapon: WeaponDefinition;
   /** The player's equipped ranged weapon (right mouse button; see `PlayScene`). */
   readonly rangedWeapon: WeaponDefinition;
-  /** The one M1 enemy's content definition (the chaser). */
+  /** The enemy content definition every spawned enemy is built from (the chaser). */
   readonly enemyDefinition: EnemyDefinition;
-  /** Candidate spawn points; one is chosen via the seeded PRNG (M1.9 requirement 4). */
+  /**
+   * Candidate spawn points; {@link SimulationConfig.enemyCount} of them are
+   * chosen — distinctly — via the seeded PRNG (M1.9 requirement 4). Must hold
+   * at least `enemyCount` entries.
+   */
   readonly enemySpawnPoints: readonly Vec2[];
+  /**
+   * How many enemies to spawn, each at a distinct `enemySpawnPoints` entry.
+   * Defaults to 1, preserving M1's single-chaser world for every existing
+   * caller. Raised to 3 by the local test map (`PlayScene`) for M4 prep,
+   * because one enemy left combat too thin to exercise skills, stun, or
+   * shield in a playtest.
+   */
+  readonly enemyCount?: number;
   /**
    * Ground loot scattered on the map at run start (M2.6), one per point, so a
    * single short local run has enough loot to exercise the six-slot
@@ -125,13 +137,19 @@ export interface SimulationConfig {
 
 /**
  * Build the initial `World` for a local run: the player at `playerStart`,
- * the static map walls, one chaser enemy, scattered ground loot and skill
- * chips, and the initial active extraction points — all spawned
- * deterministically from `config.seed`.
+ * the static map walls, `config.enemyCount` chaser enemies at distinct spawn
+ * points, scattered ground loot and skill chips, and the initial active
+ * extraction points — all spawned deterministically from `config.seed`.
  */
 export function createSimulation(config: SimulationConfig): World {
   const rng = createRng(config.seed);
-  const enemy = spawnEnemy(config.enemyDefinition, config.enemySpawnPoints, rng, ENEMY_RADIUS, 0);
+  const enemies = spawnEnemies(
+    config.enemyDefinition,
+    config.enemySpawnPoints,
+    rng,
+    ENEMY_RADIUS,
+    config.enemyCount ?? 1,
+  );
   const groundLootSpawnPoints = config.groundLootSpawnPoints ?? [];
   const groundLoot: GroundLoot[] = groundLootSpawnPoints.map((position, index) =>
     spawnGroundLoot(chooseLootDrop(rng), position, `loot-start-${String(index)}`),
@@ -165,7 +183,7 @@ export function createSimulation(config: SimulationConfig): World {
     },
     walls: config.walls,
     projectiles: [],
-    enemies: [enemy],
+    enemies,
     groundLoot,
     skillChips,
     extractionPoints,
