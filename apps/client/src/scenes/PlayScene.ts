@@ -12,8 +12,11 @@ import { basicBow, basicSword, chaser } from "@carry-or-fall/game-content";
 import Phaser from "phaser";
 import {
   createSimulation,
+  createSkillLoadout,
+  EMPTY_SKILL_LOADOUT,
   SIMULATION_DT_MS,
   stepSimulation,
+  type SkillLoadout,
   type Vec2,
   type Wall,
   type World,
@@ -24,6 +27,7 @@ import { InventoryHud } from "../hud/inventory-hud";
 import { KeyboardInput } from "../input/keyboard";
 import { PointerInput } from "../input/pointer";
 import { WorldView } from "../render/world-view";
+import { DEFAULT_SKILL_LOADOUT_IDS } from "./LoadoutScene";
 
 const MAP_WIDTH = 960;
 const MAP_HEIGHT = 540;
@@ -72,22 +76,31 @@ const EXTRACTION_CANDIDATE_POINTS: readonly Vec2[] = [
   { x: 880, y: 440 },
 ];
 
-function buildSimulationConfig(): Parameters<typeof createSimulation>[0] {
-  return {
-    walls: TEST_MAP_WALLS,
-    playerStart: PLAYER_START,
-    meleeWeapon: basicSword,
-    rangedWeapon: basicBow,
-    enemyDefinition: chaser,
-    enemySpawnPoints: ENEMY_SPAWN_POINTS,
-    groundLootSpawnPoints: GROUND_LOOT_SPAWN_POINTS,
-    extractionCandidatePoints: EXTRACTION_CANDIDATE_POINTS,
-    // A fresh random seed per run (technical plan §9.4: "give each match a
-    // random seed"); the seeded PRNG itself stays fully deterministic and
-    // reproducible given a seed, which is what the simulation-core tests
-    // exercise.
-    seed: Date.now(),
-  };
+/**
+ * Wildcard skill chips scattered at run start (M3.7, `docs/M3_ISSUES.md`
+ * §1): M3 owns no boss content (M7) and no new enemy type, so — exactly like
+ * M2.6's ground loot — a handful of chips are placed directly on the map,
+ * geometry-only, like `ENEMY_SPAWN_POINTS`/`GROUND_LOOT_SPAWN_POINTS` above.
+ */
+const SKILL_CHIP_SPAWN_POINTS: readonly Vec2[] = [
+  { x: 600, y: 270 },
+  { x: 860, y: 130 },
+];
+
+/**
+ * A fresh browser session with no incoming `LoadoutScene` data (e.g. a
+ * future direct-launch path) falls back to the same documented default
+ * loadout the loadout screen pre-selects, resolved once via the same
+ * validated `createSkillLoadout` boundary every other loadout goes through.
+ */
+function resolveDefaultLoadout(): SkillLoadout {
+  const result = createSkillLoadout(DEFAULT_SKILL_LOADOUT_IDS);
+  return result.ok ? result.loadout : EMPTY_SKILL_LOADOUT;
+}
+
+/** Scene data passed from `LoadoutScene` (`docs/M3_ISSUES.md` M3.8). */
+export interface PlaySceneData {
+  readonly skillLoadout?: SkillLoadout;
 }
 
 export class PlayScene extends Phaser.Scene {
@@ -98,13 +111,41 @@ export class PlayScene extends Phaser.Scene {
   private inventoryHud!: InventoryHud;
   private world!: World;
   private accumulatorMs = 0;
+  /**
+   * The current run's permanent skill loadout (M3.2), carried across the
+   * `Enter`-to-restart playtest convenience so a restarted run keeps the
+   * same loadout without returning to `LoadoutScene` — a local, in-memory
+   * convenience only, not persistence (`docs/M3_ISSUES.md` §1).
+   */
+  private skillLoadout: SkillLoadout = EMPTY_SKILL_LOADOUT;
 
   constructor() {
     super("play");
   }
 
-  create(): void {
-    this.world = createSimulation(buildSimulationConfig());
+  private buildSimulationConfig(): Parameters<typeof createSimulation>[0] {
+    return {
+      walls: TEST_MAP_WALLS,
+      playerStart: PLAYER_START,
+      meleeWeapon: basicSword,
+      rangedWeapon: basicBow,
+      enemyDefinition: chaser,
+      enemySpawnPoints: ENEMY_SPAWN_POINTS,
+      groundLootSpawnPoints: GROUND_LOOT_SPAWN_POINTS,
+      skillChipSpawnPoints: SKILL_CHIP_SPAWN_POINTS,
+      extractionCandidatePoints: EXTRACTION_CANDIDATE_POINTS,
+      skillLoadout: this.skillLoadout,
+      // A fresh random seed per run (technical plan §9.4: "give each match a
+      // random seed"); the seeded PRNG itself stays fully deterministic and
+      // reproducible given a seed, which is what the simulation-core tests
+      // exercise.
+      seed: Date.now(),
+    };
+  }
+
+  create(data: PlaySceneData = {}): void {
+    this.skillLoadout = data.skillLoadout ?? resolveDefaultLoadout();
+    this.world = createSimulation(this.buildSimulationConfig());
     this.keyboardInput = new KeyboardInput(this);
     this.pointerInput = new PointerInput(this);
     this.worldView = new WorldView(this);
@@ -128,7 +169,7 @@ export class PlayScene extends Phaser.Scene {
       // system — lets a human start a fresh local run without reloading.
       this.accumulatorMs = 0;
       if (restartJustPressed) {
-        this.world = createSimulation(buildSimulationConfig());
+        this.world = createSimulation(this.buildSimulationConfig());
       }
     } else {
       const movement = this.keyboardInput.getInputState();

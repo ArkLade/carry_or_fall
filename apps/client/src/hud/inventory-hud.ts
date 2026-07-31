@@ -1,10 +1,12 @@
 /**
  * The M2 inventory HUD panel (M2.9, `docs/M2_ISSUES.md`): the six inventory
  * slots, the secure slot, the current build-effect summary, and a live
- * "if extracted now" point preview. Toggled by `I` (concept §13.1). Reads
- * `World` only and computes purely derived display values from it (the same
- * treatment `combat-hud.ts` gives cooldown-ratio formatting) — it decides no
- * game rule and holds no authority (technical plan §5.1).
+ * "if extracted now" point preview. M3.8 (`docs/M3_ISSUES.md`) adds the
+ * three permanent skill slots, the wildcard slot, and the player's current
+ * shield value. Toggled by `I` (concept §13.1). Reads `World` only and
+ * computes purely derived display values from it (the same treatment
+ * `combat-hud.ts` gives cooldown-ratio formatting) — it decides no game rule
+ * and holds no authority (technical plan §5.1).
  */
 import Phaser from "phaser";
 import {
@@ -18,6 +20,7 @@ import {
 const TEXT_COLOR = "#e6edf3";
 const MUTED_COLOR = "#8b949e";
 const SECURED_COLOR = "#d29922";
+const SHIELD_COLOR = "#58a6ff";
 const PANEL_BACKGROUND = 0x0d1117;
 const PANEL_ALPHA = 0.85;
 
@@ -25,7 +28,7 @@ const BASE_FONT = "system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
 const PANEL_X = 12;
 const PANEL_Y = 84;
 const PANEL_WIDTH = 320;
-const PANEL_HEIGHT = 190;
+const PANEL_HEIGHT = 234;
 
 function formatBuildEffects(effects: ReturnType<typeof aggregateBuildEffects>): string {
   const parts: string[] = [];
@@ -45,6 +48,7 @@ export class InventoryHud {
   private readonly slotsText: Phaser.GameObjects.Text;
   private readonly secureText: Phaser.GameObjects.Text;
   private readonly buildText: Phaser.GameObjects.Text;
+  private readonly skillsText: Phaser.GameObjects.Text;
   private readonly pointsText: Phaser.GameObjects.Text;
   private readonly helpText: Phaser.GameObjects.Text;
   private visible = false;
@@ -66,9 +70,12 @@ export class InventoryHud {
       .text(PANEL_X + 10, PANEL_Y + 96, "", { ...textStyle, color: SECURED_COLOR })
       .setScrollFactor(0);
     this.buildText = scene.add.text(PANEL_X + 10, PANEL_Y + 118, "", textStyle).setScrollFactor(0);
-    this.pointsText = scene.add.text(PANEL_X + 10, PANEL_Y + 140, "", textStyle).setScrollFactor(0);
+    this.skillsText = scene.add
+      .text(PANEL_X + 10, PANEL_Y + 140, "", { ...textStyle, color: SHIELD_COLOR })
+      .setScrollFactor(0);
+    this.pointsText = scene.add.text(PANEL_X + 10, PANEL_Y + 184, "", textStyle).setScrollFactor(0);
     this.helpText = scene.add
-      .text(PANEL_X + 10, PANEL_Y + 164, "1-6 discard · Shift+1-6 secure · I toggle", {
+      .text(PANEL_X + 10, PANEL_Y + 208, "1-6 discard · Shift+1-6 secure · I toggle", {
         ...textStyle,
         fontSize: "12px",
         color: MUTED_COLOR,
@@ -89,6 +96,7 @@ export class InventoryHud {
       this.slotsText,
       this.secureText,
       this.buildText,
+      this.skillsText,
       this.pointsText,
       this.helpText,
     ]) {
@@ -114,6 +122,15 @@ export class InventoryHud {
 
     const effects = aggregateBuildEffects(player.inventory);
     this.buildText.setText(`Build: ${formatBuildEffects(effects)}`);
+
+    const loadoutLabel =
+      player.skillLoadout.length === 0
+        ? "none"
+        : player.skillLoadout.map((skill) => skill.id).join(", ");
+    const wildcardLabel = player.wildcardSkill === null ? "empty" : player.wildcardSkill.id;
+    this.skillsText.setText(
+      `Skills: ${loadoutLabel}\nWildcard: ${wildcardLabel} · Shield: ${String(Math.ceil(player.shieldHp))}`,
+    );
 
     const securePoints =
       player.secureSlot === null

@@ -1,13 +1,16 @@
 /**
- * Client entry point. Boots Phaser directly into the local `PlayScene`
- * (`docs/M1_EXECUTION_PLAN.md` §9 M1.1 boot-flow clarification): M1 is local,
- * single-player combat with no network required. `BootScene` (the M0
- * connection/health view) is registered but not started by default; it is
- * retained unchanged as the networked entry point M4 reuses.
+ * Client entry point. Boots Phaser directly into the local `LoadoutScene`
+ * (M3, `docs/M3_ISSUES.md` M3.8), which starts `PlayScene` once a legal
+ * skill loadout is confirmed (`docs/M1_EXECUTION_PLAN.md` §9 M1.1's boot-flow
+ * clarification still applies: this is local, single-player, no network
+ * required). `BootScene` (the M0 connection/health view) is registered but
+ * not started by default; it is retained unchanged as the networked entry
+ * point M4 reuses.
  */
 import Phaser from "phaser";
 
 import { BootScene } from "./scenes/BootScene";
+import { LoadoutScene } from "./scenes/LoadoutScene";
 import { PlayScene } from "./scenes/PlayScene";
 
 const GAME_WIDTH = 960;
@@ -24,5 +27,5 @@ export const game = new Phaser.Game({
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  scene: [PlayScene, BootScene],
+  scene: [LoadoutScene, PlayScene, BootScene],
 });
