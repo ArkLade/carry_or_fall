@@ -19,10 +19,11 @@
  * explicit pass-throughs, matching `docs/M1_EXECUTION_PLAN.md` §2.4: keeping
  * them as real stages now avoids reworking the pipeline later.
  *
- * `AttackTarget` is a minimal, reusable "damageable circle" shape — not an
- * `Enemy` entity. M1 has no enemy in the running game (that is a later
- * chunk), so hit resolution is exercised only through test fixtures here; the
- * live client always calls it with an empty target list.
+ * `AttackTarget` is a minimal, reusable "damageable circle" shape. `Enemy`
+ * (`world.ts`) satisfies it structurally (same id/position/radius/health
+ * fields, plus its own stats), so `simulation.ts` passes `world.enemies`
+ * directly wherever an `AttackTarget[]` is expected — no separate enemy
+ * combat path was written.
  */
 import type { WeaponDefinition } from "@carry-or-fall/game-content";
 
@@ -59,7 +60,12 @@ export type AttackPreparation =
   | { readonly ready: true; readonly definition: AttackDefinition }
   | { readonly ready: false; readonly reason: AttackDenialReason };
 
-/** Stage 1: validate actor. A real check, not a stub — grows at M1.10 to also reject a dead actor. */
+/**
+ * Stage 1: validate actor. A real check, not a stub. Whether the actor is
+ * *alive* is checked by the caller before this pipeline ever runs (M1.10 —
+ * `simulation.ts` skips all attack processing for a dead player), since
+ * `AttackActor` is a minimal shape with no health/alive concept of its own.
+ */
 export function isValidActor(actor: AttackActor): boolean {
   return (
     Number.isFinite(actor.position.x) &&
@@ -115,7 +121,17 @@ export function prepareAttack(
   return { ready: true, definition };
 }
 
+/**
+ * Apply damage stage: clamp a health value after taking `damage`, never below
+ * zero. Shared by {@link applyDamage} (melee/ranged hit resolution) and the
+ * enemy's contact damage against the player (`enemy.ts`, M1.9/M1.10), which
+ * has no `AttackTarget` to apply {@link applyDamage} to directly.
+ */
+export function applyDamageAmount(health: number, damage: number): number {
+  return Math.max(0, health - damage);
+}
+
 /** Apply damage stage, shared by melee and ranged hit resolution. Health never drops below zero. */
 export function applyDamage(target: AttackTarget, damage: number): AttackTarget {
-  return { ...target, health: Math.max(0, target.health - damage) };
+  return { ...target, health: applyDamageAmount(target.health, damage) };
 }

@@ -7,7 +7,14 @@ const DT_SECONDS = 0.05;
 
 /** `moveX`/`moveY` plus the rest of `InputState` at inert defaults — movement never reads the rest. */
 function input(moveX: -1 | 0 | 1, moveY: -1 | 0 | 1): InputState {
-  return { moveX, moveY, aimAngle: 0, attackPressed: false, secondaryAttackPressed: false };
+  return {
+    moveX,
+    moveY,
+    aimAngle: 0,
+    attackPressed: false,
+    secondaryAttackPressed: false,
+    dashPressed: false,
+  };
 }
 
 function speedOf(moveX: -1 | 0 | 1, moveY: -1 | 0 | 1): number {

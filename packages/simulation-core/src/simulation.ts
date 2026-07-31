@@ -5,13 +5,12 @@
  * (technical plan §5.1, §9.3). The simulation only ever advances by the fixed
  * `SIMULATION_DT_MS` step, never by an arbitrary render-frame delta.
  *
- * This chunk adds aim, and the shared attack pipeline driving the sword
- * (melee) and bow (ranged) — see `combat/pipeline.ts`, `combat/melee.ts`,
- * `combat/ranged.ts`. There is still no enemy, health, death, HUD, or dash;
- * `targets` is supplied by the caller (empty in the live client, non-empty
- * fixtures in tests) since `World` has no enemy collection yet.
+ * This chunk completes M1: the chaser enemy, player health/death, and dash.
+ * `World.enemies` is now the single source of truth for attack targets — the
+ * shared melee/ranged pipeline (`combat/pipeline.ts`) reads it directly since
+ * `Enemy` satisfies `AttackTarget` structurally.
  */
-import type { WeaponDefinition } from "@carry-or-fall/game-content";
+import type { EnemyDefinition, WeaponDefinition } from "@carry-or-fall/game-content";
 
 import { normalizeAngle } from "./angles";
 import { buildWallGrid, resolveAxisMovement } from "./collision";
@@ -24,9 +23,18 @@ import {
 } from "./combat/melee";
 import type { HitEvent } from "./combat/events";
 import type { AttackActor, AttackTarget } from "./combat/pipeline";
+import { applyDamageAmount } from "./combat/pipeline";
 import { startRangedAttack, stepProjectiles } from "./combat/ranged";
+import { computeDashDelta, DASH_COOLDOWN_MS } from "./dash";
+import {
+  canDealContactDamage,
+  CONTACT_DAMAGE_COOLDOWN_MS,
+  spawnEnemy,
+  stepEnemyMovement,
+} from "./enemy";
 import { computeMovementDelta } from "./movement";
-import type { InputState, Vec2, Wall, World } from "./world";
+import { createRng } from "./prng";
+import type { Enemy, InputState, Vec2, Wall, World } from "./world";
 
 /** The fixed simulation step, in milliseconds (technical plan §9.3). */
 export const SIMULATION_DT_MS = 50;
@@ -40,6 +48,12 @@ const SIMULATION_DT_SECONDS = SIMULATION_DT_MS / 1000;
  */
 export const PLAYER_RADIUS = 16;
 
+/** Player starting/maximum health. Proposed and balance-deferred (M1.10). */
+export const PLAYER_MAX_HEALTH = 100;
+
+/** Enemy collision radius, in pixels. Proposed and balance-deferred (M1.9), like {@link PLAYER_RADIUS}. */
+export const ENEMY_RADIUS = 18;
+
 /** Initial conditions for a fresh local simulation world. */
 export interface SimulationConfig {
   readonly walls: readonly Wall[];
@@ -48,54 +62,88 @@ export interface SimulationConfig {
   readonly meleeWeapon: WeaponDefinition;
   /** The player's equipped ranged weapon (right mouse button; see `PlayScene`). */
   readonly rangedWeapon: WeaponDefinition;
+  /** The one M1 enemy's content definition (the chaser). */
+  readonly enemyDefinition: EnemyDefinition;
+  /** Candidate spawn points; one is chosen via the seeded PRNG (M1.9 requirement 4). */
+  readonly enemySpawnPoints: readonly Vec2[];
+  /** Seeds the PRNG used for enemy spawn selection, for reproducibility (technical plan §9.4). */
+  readonly seed: number;
 }
 
-/** Build the initial `World` for a local run: the player at `playerStart`, plus the static map walls. */
+/**
+ * Build the initial `World` for a local run: the player at `playerStart`,
+ * the static map walls, and one chaser enemy spawned deterministically from
+ * `config.seed`.
+ */
 export function createSimulation(config: SimulationConfig): World {
+  const rng = createRng(config.seed);
+  const enemy = spawnEnemy(config.enemyDefinition, config.enemySpawnPoints, rng, ENEMY_RADIUS, 0);
+
   return {
     player: {
       position: config.playerStart,
       radius: PLAYER_RADIUS,
       facing: 0,
+      health: PLAYER_MAX_HEALTH,
+      maxHealth: PLAYER_MAX_HEALTH,
+      alive: true,
       meleeWeapon: config.meleeWeapon,
       rangedWeapon: config.rangedWeapon,
       meleeCooldownMs: 0,
       rangedCooldownMs: 0,
       meleeAttack: null,
+      dashCooldownMs: 0,
     },
     walls: config.walls,
     projectiles: [],
+    enemies: [enemy],
     tick: 0,
   };
 }
 
-/** The result of advancing one fixed step: the new world, the (possibly damaged) targets, and any hit events to render. */
+/** The result of advancing one fixed step: the new world and any hit events to render. */
 export interface StepResult {
   readonly world: World;
-  readonly targets: readonly AttackTarget[];
   readonly hitEvents: readonly HitEvent[];
 }
 
 /**
- * Advance the world by exactly one fixed step: movement + collision, aim,
- * cooldowns, and the melee/ranged attack pipeline. `targets` defaults to
- * empty — M1 has no enemy in the running game, so hit resolution only ever
- * does something when a caller (a test) supplies fixture targets.
+ * Advance the world by exactly one fixed step: movement + collision, dash,
+ * aim, cooldowns, the melee/ranged attack pipeline against `world.enemies`,
+ * and the chaser's own movement + contact damage. Once the player's health
+ * reaches zero, every subsequent call is a full no-op (M1.10: "stop
+ * movement/attack processing, and end the run") — the caller (`PlayScene`)
+ * is expected to stop calling this once `!world.player.alive`, but the
+ * engine enforces it either way.
  */
-export function stepSimulation(
-  world: World,
-  input: InputState,
-  targets: readonly AttackTarget[] = [],
-): StepResult {
+export function stepSimulation(world: World, input: InputState): StepResult {
+  if (!world.player.alive) {
+    return { world, hitEvents: [] };
+  }
+
   const grid = buildWallGrid(world.walls);
   let player = world.player;
 
   // Movement + collision (M1.3/M1.5, unchanged from the prior chunk).
   const moveDelta = computeMovementDelta(input, SIMULATION_DT_SECONDS);
-  const x = resolveAxisMovement(player.position, "x", moveDelta.x, player.radius, grid);
-  const afterX: Vec2 = { x, y: player.position.y };
-  const y = resolveAxisMovement(afterX, "y", moveDelta.y, player.radius, grid);
-  player = { ...player, position: { x, y } };
+  const movedX = resolveAxisMovement(player.position, "x", moveDelta.x, player.radius, grid);
+  const afterMoveX: Vec2 = { x: movedX, y: player.position.y };
+  const movedY = resolveAxisMovement(afterMoveX, "y", moveDelta.y, player.radius, grid);
+  player = { ...player, position: { x: movedX, y: movedY } };
+
+  // Dash (M1.S1): an instant displacement resolved through the same
+  // wall-aware movement, on top of the ordinary move this same step.
+  if (input.dashPressed && player.dashCooldownMs <= 0) {
+    const dashDelta = computeDashDelta(input, player.facing);
+    const dashedX = resolveAxisMovement(player.position, "x", dashDelta.x, player.radius, grid);
+    const afterDashX: Vec2 = { x: dashedX, y: player.position.y };
+    const dashedY = resolveAxisMovement(afterDashX, "y", dashDelta.y, player.radius, grid);
+    player = {
+      ...player,
+      position: { x: dashedX, y: dashedY },
+      dashCooldownMs: DASH_COOLDOWN_MS,
+    };
+  }
 
   // Aim/facing (M1.4): normalize to a bounded range; ignore a non-finite input
   // rather than corrupting facing with it.
@@ -108,6 +156,7 @@ export function stepSimulation(
     ...player,
     meleeCooldownMs: Math.max(0, player.meleeCooldownMs - SIMULATION_DT_MS),
     rangedCooldownMs: Math.max(0, player.rangedCooldownMs - SIMULATION_DT_MS),
+    dashCooldownMs: Math.max(0, player.dashCooldownMs - SIMULATION_DT_MS),
   };
 
   const actor: AttackActor = {
@@ -115,7 +164,9 @@ export function stepSimulation(
     facing: player.facing,
     radius: player.radius,
   };
-  let workingTargets = targets;
+  // `Enemy` satisfies `AttackTarget` structurally (id/position/radius/health
+  // plus its own stats), so the live enemy collection is the target list.
+  let workingTargets: readonly AttackTarget[] = world.enemies;
   let hitEvents: readonly HitEvent[] = [];
   let projectiles = world.projectiles;
 
@@ -159,7 +210,9 @@ export function stepSimulation(
     }
   }
 
-  // Advance every live projectile: move, resolve a hit or expire.
+  // Advance every live projectile: move, resolve a hit or expire. Projectiles
+  // do not collide with walls — a known, deliberately deferred defect
+  // (`docs/M1_ISSUES.md` D-1); not fixed or worked around here.
   const projectileStep = stepProjectiles(
     projectiles,
     SIMULATION_DT_MS,
@@ -170,9 +223,40 @@ export function stepSimulation(
   workingTargets = projectileStep.updatedTargets;
   hitEvents = [...hitEvents, ...projectileStep.hitEvents];
 
+  // Merge combat-resolved health back into the enemy collection and remove
+  // anything at zero health (M1.9 requirement 3: "dies ... and is removed").
+  let enemies: Enemy[] = world.enemies
+    .map((enemy) => {
+      const updated = workingTargets.find((target) => target.id === enemy.id);
+      return updated ? { ...enemy, health: updated.health } : enemy;
+    })
+    .filter((enemy) => enemy.health > 0);
+
+  // Chaser movement + contact damage (M1.9/M1.10). Enemies killed above are
+  // already removed, so a dead enemy cannot also deal contact damage this step.
+  let playerHealth = player.health;
+  let playerAlive = player.alive;
+  enemies = enemies.map((enemy) => {
+    const moved = stepEnemyMovement(
+      enemy,
+      player.position,
+      SIMULATION_DT_MS,
+      SIMULATION_DT_SECONDS,
+      grid,
+    );
+    if (playerAlive && canDealContactDamage(moved, player)) {
+      playerHealth = applyDamageAmount(playerHealth, moved.contactDamage);
+      if (playerHealth <= 0) {
+        playerAlive = false;
+      }
+      return { ...moved, contactCooldownMs: CONTACT_DAMAGE_COOLDOWN_MS };
+    }
+    return moved;
+  });
+  player = { ...player, health: playerHealth, alive: playerAlive };
+
   return {
-    world: { ...world, player, projectiles, tick: world.tick + 1 },
-    targets: workingTargets,
+    world: { ...world, player, projectiles, enemies, tick: world.tick + 1 },
     hitEvents,
   };
 }
