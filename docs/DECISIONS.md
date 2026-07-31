@@ -310,3 +310,29 @@ milestone, not implemented yet).
   unreachable from running gameplay, because no mechanic produces a bounce
   yet (M3's `ricochet` skill) — this fix deliberately did not add one.
 - **Status:** Superseded (see above); no longer in force.
+
+## D27. M2 secure slot protects within the local run only; no cross-run persistence
+
+- **Date:** 2026-07-31.
+- **Decision:** In M2, the secure slot's guarantee is scoped to the current local run only. An
+  item placed in the secure slot never drops on death (unlike normal inventory) and converts into
+  the run's point totals identically whether the run ends by death or by successful extraction
+  (`docs/M2_ISSUES.md`, `packages/simulation-core/src/run-result.ts`). It does **not** survive a
+  browser refresh, a process restart, or accumulate across separate runs — M2 writes the run
+  result nowhere durable; the run-result screen is the only place it is ever shown.
+- **Reason:** `docs/DEVELOPMENT_RULES.md` requires that, once the secure slot is truly
+  implemented, "insertion must be persisted before it is reported successful, so a server crash
+  cannot invalidate the protection promise." That requirement describes the real M5
+  implementation, where an authoritative server and a database both exist. M2 has neither (D9,
+  D16, D22): there is no server to crash mid-match and no account or database row for "permanent
+  progress" to be written into yet. Concept §7.2/§4.3–4.4 describe the secure slot surviving death
+  and converting to "permanent progress," but that promise is only meaningful once M5 gives
+  "permanent" somewhere durable to mean. Implementing a fake persistence layer now, or silently
+  claiming the M5 guarantee already holds, would both be worse than stating the gap plainly.
+- **Consequences:** M2's secure slot is real and testable within a single local run (it changes
+  behavior — no drop on death, uniform conversion — and is covered by tests), but the "permanent"
+  half of its promise is deferred, not delivered. M5 must implement the real persisted settlement
+  path (technical plan §18's atomic settlement function, per D22) before the secure slot's
+  protection promise is honest at the account level; M2 must not be cited as evidence that promise
+  is already met.
+- **Status:** Approved (scopes M2); superseded when M5 ships real persistence.
