@@ -213,3 +213,55 @@ independent once the loop (M1.1) and weapon data (M1.2) exist.
 - Documentation updated where behavior or structure changed (`DEVELOPMENT_RULES.md`), including
   `docs/PROTOCOL.md` if the input message is formalized and `docs/CONTENT_AUTHORING.md` if content
   fields change.
+
+
+## Known deferred defects
+
+### D-1. Projectiles do not collide with walls
+
+Found by manual play testing after the attack pipeline was implemented. A bow
+projectile passes through interior walls, and at the outer boundary it is
+despawned rather than colliding. The player character collides with walls
+correctly, so the defect is specific to projectiles.
+
+Technical plan §12.1 places projectiles in the same collision system as actors
+(circles for actors and projectiles, AABB for walls). Projectiles are currently
+outside that path.
+
+Deferred deliberately so M1 can complete its remaining scope first. Two
+consequences to keep in mind until it is fixed:
+
+- Ranged combat is trivially safe, because there is no line of sight to break.
+  Do not judge combat balance or enemy threat until this is fixed.
+- The §13.4 bounce cap may not be reachable from running gameplay today, so its
+  test may be exercising an unreachable path. Verify when fixing.
+
+Fix before M1 is declared done, or move to M2 with an explicit decision.
+
+### D-2. A large enough dash can tunnel through a thin wall
+
+Found while adding the dash (M1.S1). Wall collision (`collision.ts`,
+`resolveAxisMovement`) is a **discrete** check: it tests only the candidate
+landing position against the spatial grid's walls, with no swept/continuous
+check along the path between the old and new position. Ordinary per-step
+movement is small enough (`PLAYER_SPEED * SIMULATION_DT_SECONDS` ≈ 11px at
+220px/s and 50ms) that this has never mattered, but the dash moves the player
+`DASH_DISTANCE_PX` (140px) in a single step — larger than the compact test
+map's wall thickness (20px) — so a dash aimed squarely at a thin wall can land
+past it without ever being detected as colliding.
+
+Deferred deliberately: fixing it means adding a swept-segment (or
+sub-stepped) check to the shared movement-resolution path, which is a real
+change to `collision.ts` beyond this task's scope (implement the dash; do not
+redesign collision). Two consequences to keep in mind until it is fixed:
+
+- A player can dash through the test map's interior wall under the right
+  aim/position, effectively teleporting past an obstacle other movement
+  respects.
+- The same risk applies to any future fast, large single-step displacement
+  (not just the dash), so any such addition should account for this rather
+  than assume the existing discrete check is sufficient.
+
+Fix before the movement/collision system is revisited, or accept and document
+a maximum safe single-step displacement (e.g. clamp `DASH_DISTANCE_PX` below
+the thinnest wall on any shipped map) with an explicit decision.

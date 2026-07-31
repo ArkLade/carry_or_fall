@@ -3,12 +3,15 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Deterministic simulation utilities shared by future authoritative gameplay. M0 ships a seeded PRNG and a version placeholder only; no gameplay logic yet.",
+  "description": "Deterministic, fixed-step simulation shared by the local client (M1) and, later, the authoritative server (M4). Ships a seeded PRNG, movement, map collision, aim, and the shared attack pipeline (sword + bow, with hard caps); the enemy, health/death, and dash are added by later M1 chunks.",
   "types": "./src/index.ts",
   "exports": {
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
     }
+  },
+  "dependencies": {
+    "@carry-or-fall/game-content": "workspace:*"
   }
 }

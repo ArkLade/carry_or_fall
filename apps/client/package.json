@@ -3,14 +3,16 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Phaser 4 browser client (Vite). M0 renders a boot scene showing build info and live server connection status; no gameplay.",
+  "description": "Phaser 4 browser client (Vite). Boots into the local PlayScene: fixed-step movement, map collision, aim, and the sword/bow attack pipeline, no server required. BootScene (build info + live server connection status) is retained for the M4 networked entry point.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@carry-or-fall/game-content": "workspace:*",
     "@carry-or-fall/protocol": "workspace:*",
+    "@carry-or-fall/simulation-core": "workspace:*",
     "@colyseus/sdk": "0.17.43",
     "phaser": "4.2.1"
   },

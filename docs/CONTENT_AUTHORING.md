@@ -1,9 +1,11 @@
 # Content Authoring
 
-Status: **M0 baseline** (forward-looking). How to add a weapon, armor type, skill, loot item, or
-enemy as a **data definition** in `@carry-or-fall/game-content` — not as new engine code. This
-follows the technical plan §7.2 and §43 and the `docs/DEVELOPMENT_RULES.md` rule that content is
-data-driven.
+Status: **M1 in progress.** §3 (weapons) and §6 (enemies) are shipped — `basic_sword`, `basic_bow`,
+and `chaser` are real data in `@carry-or-fall/game-content`, read by the shared attack pipeline in
+`@carry-or-fall/simulation-core`. §4 (skills) and §5 (loot) remain forward-looking (M3/M2). This
+document explains how to add a weapon, armor type, skill, loot item, or enemy as a **data
+definition** — not as new engine code. This follows the technical plan §7.2 and §43 and the
+`docs/DEVELOPMENT_RULES.md` rule that content is data-driven.
 
 > The core rule: **adding an ordinary weapon, skill, or loot item should require a content
 > definition plus tests, not a rewrite of the combat engine** (`DEVELOPMENT_RULES.md`, "Content and
@@ -22,13 +24,12 @@ Only display-safe definitions are shared between client and server (technical pl
 server data — loot spawn tables, drop rates, anti-cheat thresholds — is **not** content and does
 not belong in this package.
 
-## 2. What exists in M0
+## 2. The base shape
 
-Type placeholders only; there are intentionally no content values yet (adding them is a later
-milestone's job):
+Every content package shares this base:
 
 ```ts
-// @carry-or-fall/game-content (today)
+// @carry-or-fall/game-content
 export type ContentKind = "weapon" | "armor" | "skill" | "loot" | "enemy" | "boss";
 
 export interface ContentDefinition {
@@ -38,14 +39,15 @@ export interface ContentDefinition {
 ```
 
 Every concrete definition below **extends `ContentDefinition`** with `id` (unique, snake_case) and
-`kind`, plus per-kind fields owned by the milestone that implements the mechanic. The shapes in
-§3–§6 are the ones M1+ will introduce; they are the design target, not yet shipped.
+`kind`, plus per-kind fields owned by the milestone that implements the mechanic. §3 (weapons) and
+§6 (enemies) are shipped, per M1; §4 (skills) and §5 (loot) are still the design target for a later
+milestone, not yet shipped.
 
-## 3. Weapons — the shape Basic Sword and Basic Bow will use (M1)
+## 3. Weapons — Basic Sword and Basic Bow (M1, shipped)
 
-M1 introduces exactly two weapons. Both are data; the shared attack pipeline (technical plan §13.1)
-reads them. Values below follow the concept document (§8.1, §29.1); exact balance is deferred to
-playtesting (concept §12.3).
+M1 ships exactly two weapons. Both are data; the shared attack pipeline (`packages/simulation-core/
+src/combat/pipeline.ts`, technical plan §13.1) reads them. Values below follow the concept document
+(§8.1, §29.1); exact balance is deferred to playtesting (concept §12.3).
 
 ```ts
 export interface WeaponLimits {
@@ -167,10 +169,12 @@ export const targetingCore: LootDefinition = {
 Avoid item-quality randomness, random stat rolls, procedural affixes, and hidden conversion
 formulas (concept §6.6). Every item has clear, fixed values.
 
-## 6. Enemies (M1 gets one)
+## 6. Enemies (M1 gets one, shipped)
 
-M1 ships a single enemy — the Chaser (concept §14.2). Enemy behavior is selected from a small set
-of shared behaviors, not written per enemy:
+M1 ships a single enemy definition — the Chaser (concept §14.2) — as data in `game-content`. Its
+chasing behavior, health/death transitions, and contact-damage application are engine logic for a
+later M1 chunk (M1.9/M1.10) and are not implemented yet; only the stats below exist so far. Enemy
+behavior is selected from a small set of shared behaviors, not written per enemy:
 
 ```ts
 export interface EnemyDefinition extends ContentDefinition {

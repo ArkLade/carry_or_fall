@@ -115,14 +115,16 @@ export interface HealthResponse {
 
 ## 6. Client → server messages
 
-**M0:** none post-join. The handshake is join options (§4); there are no gameplay messages yet.
+**M0:** none post-join. The handshake is join options (§4).
 
-**M1 (local combat) will need the input message.** The technical plan §10.2 defines it; the local
-M1 client may consume it directly, and it becomes the authoritative wire message at M4. Design it
-now so both milestones share one shape:
+**M1 (local combat) adds `InputMessage` as a type only.** It is implemented in
+`@carry-or-fall/protocol` (`packages/protocol/src/messages.ts`) exactly per the technical plan
+§10.2 shape, plus the `INPUT_MESSAGE_TYPE = "input"` message-type constant:
 
 ```ts
-// Forward-looking (M1+); not yet in @carry-or-fall/protocol.
+// @carry-or-fall/protocol (implemented)
+export const INPUT_MESSAGE_TYPE = "input";
+
 export interface InputMessage {
   readonly sequence: number; // monotonic per client, for later reconciliation
   readonly moveX: -1 | 0 | 1;
@@ -134,9 +136,15 @@ export interface InputMessage {
 }
 ```
 
-The server validates every input for numeric ranges, message frequency, sequence order, allowed
-action state, cooldowns, and player status (§10.2) — it stores the latest valid input and advances
-a fixed simulation step (§9.3). Prefer compact messages; do not resend large JSON blobs (§10.1).
+M1 has no network, so this type is not transmitted over a socket; the local client's own input
+capture only needs the subset a given M1 chunk actually consumes (movement's `moveX`/`moveY` first;
+`aimAngle`/`attackPressed`/`dashPressed`/`interactPressed` are exercised by later M1 chunks). It
+becomes the authoritative wire message at M4, where the server validates every input for numeric
+ranges, message frequency, sequence order, allowed action state, cooldowns, and player status
+(§10.2) — it stores the latest valid input and advances a fixed simulation step (§9.3). The runtime
+validator (`validateInputMessage`) is deferred to M4, the first milestone with an untrusted network
+boundary for it to guard (`docs/DECISIONS.md` D23). Prefer compact messages; do not resend large
+JSON blobs (§10.1).
 
 The fuller message set arrives with the systems that need it (technical plan §10.1), each added
 only when its milestone lands:

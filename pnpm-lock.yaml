@@ -32,9 +32,15 @@ importers:
 
   apps/client:
     dependencies:
+      '@carry-or-fall/game-content':
+        specifier: workspace:*
+        version: link:../../packages/game-content
       '@carry-or-fall/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@carry-or-fall/simulation-core':
+        specifier: workspace:*
+        version: link:../../packages/simulation-core
       '@colyseus/sdk':
         specifier: 0.17.43
         version: 0.17.43(@colyseus/core@0.17.45)(typescript@6.0.3)
@@ -89,7 +95,11 @@ importers:
 
   packages/protocol: {}
 
-  packages/simulation-core: {}
+  packages/simulation-core:
+    dependencies:
+      '@carry-or-fall/game-content':
+        specifier: workspace:*
+        version: link:../game-content
 
 packages:
 
