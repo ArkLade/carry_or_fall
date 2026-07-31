@@ -405,3 +405,19 @@ milestone, not implemented yet).
   before this fix, undetected, until this verification capability was built specifically to catch
   it.
 - **Status:** Approved.
+
+## D33. Knockback deferred; M3 ships ten skills
+
+- **Decision:** M3 ships ten skills. A knockback skill is not added, so concept
+  §9.4's Defensive Melee Combination (Shield on Attack, Knockback, Wide Arc) is
+  covered only in part. Knockback is added in a later content milestone.
+- **Reason:** The concept document is authoritative for gameplay and names four
+  example combinations; covering all four needs eleven skills, one past technical
+  plan §38 M3's "8 to 10". The plan's range scopes M3, not the game's total skill
+  count. Knockback is also a §9.2 core primitive that simulation-core does not
+  implement — a displacement effect on hit — so it is a primitive addition, not a
+  content addition, and does not belong in a milestone that is otherwise closing.
+- **Consequences:** Three of four §9.4 combinations are fully playable. Adding
+  knockback later requires a new primitive in simulation-core plus a content
+  definition, and serves as a live check that the data-driven claim holds.
+- **Status:** Approved.
