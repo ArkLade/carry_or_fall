@@ -83,7 +83,7 @@ const EXTRACTION_CANDIDATE_POINTS: readonly Vec2[] = [
  * geometry-only, like `ENEMY_SPAWN_POINTS`/`GROUND_LOOT_SPAWN_POINTS` above.
  */
 const SKILL_CHIP_SPAWN_POINTS: readonly Vec2[] = [
-  { x: 600, y: 270 },
+  { x: 350, y: 270 }, // directly reachable from PLAYER_START without detouring around the interior wall
   { x: 860, y: 130 },
 ];
 
@@ -121,6 +121,16 @@ export class PlayScene extends Phaser.Scene {
 
   constructor() {
     super("play");
+  }
+
+  /**
+   * The current world, or `null` before `create()` has run. Read-only;
+   * exists so `main.ts` can wire it into the dev-only debug hook
+   * (`docs/TEST_PLAN.md` §2.3) without the hook reaching into a private
+   * field.
+   */
+  getWorld(): World | null {
+    return this.world ?? null;
   }
 
   private buildSimulationConfig(): Parameters<typeof createSimulation>[0] {

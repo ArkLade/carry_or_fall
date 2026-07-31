@@ -64,15 +64,61 @@ room disposal, extraction, and death/dropped loot.
 These use the `@colyseus/sdk` client against a server on an ephemeral port; there is no dependency
 on `@colyseus/testing` (see `docs/DECISIONS.md` D5).
 
-### 2.3 Browser tests (Playwright) — deferred
+### 2.3 Browser tests (Playwright) — active (pulled forward to M3)
 
 Per technical plan §30.3: landing page, anonymous sign-in, loadout selection, joining a room, the
 reconnect screen, extraction result, the account-link warning, and supported-browser smoke tests.
 Do not use Playwright to verify every combat frame.
 
-**M0 status:** Playwright is not installed. M0 substitutes a **manual browser check** — load the
-client, confirm it connects, shows the live player count, and reaches the health endpoint. Add
-Playwright when the first real page flows exist (around M5 auth, per §46).
+**Status: installed and active as of M3** (`docs/DECISIONS.md`, the entry recorded alongside this
+change) — pulled forward from its original M5 deferral. The M3 follow-up task that added this layer
+could not otherwise verify, in a real browser, that equipped skills actually apply during a running
+game; four prior sessions had reported the same "cannot visually verify the client" gap. Technical
+plan §30.3 requires this layer eventually, and §38 M4 requires "two real browsers can play" — both
+already presuppose the capability, so building it now rather than at M5 is bringing forward
+required infrastructure, not scope creep.
+
+**What exists today:** `apps/client/playwright.config.ts` and `apps/client/e2e/*.spec.ts`
+(`loadout.spec.ts`, `skills.spec.ts`), run via `pnpm run test:e2e` (or, at the client package,
+`pnpm run test:e2e`). Tests drive a real Chromium instance against the real Vite **dev** server
+(never the production build) with real keyboard/mouse events into the `<canvas>` — Phaser renders to
+canvas, not DOM nodes, so no test asserts on DOM text. State is read back through a dev-only debug
+hook (`apps/client/src/debug/debug-hook.ts`), installed on `window.__CARRY_OR_FALL_DEBUG__` only
+when `import.meta.env.DEV` is true:
+
+```ts
+export interface CarryOrFallDebugHook {
+  readonly getWorld: () => World | null; // the current simulation World, or null before a run starts
+  readonly getActiveSceneKey: () => string | null; // "loadout" | "play" | "boot" | null
+}
+```
+
+The hook is **observation only** — every method returns state the client already computed; nothing
+on it can change game state, issue input, or run a game rule (technical plan §5.1's "client sends
+intent, renders state" is unaffected by a read-only observer). It is verified absent from the
+production bundle by `apps/client/test/build.test.ts` (an assertion the built JS output does not
+contain the hook's `window` key), which runs under the existing `pnpm test:integration` gate — not
+part of the Playwright suite itself.
+
+**CI wiring:** the Playwright suite runs as a **separate CI job** (`.github/workflows/ci.yml`'s
+`browser` job), not a seventh step in the existing `verify` job. Reason: browser tests are
+categorically slower (a real Chromium instance, real animation-frame timing, `walkToward`-style
+navigation against a live, moving enemy) and have different failure modes (timing sensitivity,
+headless-rendering quirks) than the six fast, deterministic gates; keeping them separate means a
+slow or flaky browser run never blocks or slows the fast feedback loop those six gates provide,
+matching this task's explicit "do not slow or destabilize the existing six gates."
+
+**Known test-harness lesson (recorded so it is not rediscovered):** `LoadoutScene`'s digit/Enter
+keys are read via Phaser's edge-triggered `JustDown`, polled once per animation frame. Playwright's
+default `page.keyboard.press()` sends a near-zero-duration keydown+keyup that can land and clear
+within a single frame Phaser's `update()` never observes — confirmed empirically (bare `press()`
+calls failed roughly 60% of the time in a repeated trial). Every keypress in this suite instead
+holds the key down for a short, real duration (`apps/client/e2e/helpers.ts`'s `pressKey`), which is
+also a more faithful simulation of an actual human keypress.
+
+**Not yet covered:** anonymous sign-in, joining a room, the reconnect screen, the account-link
+warning (all require M4+ networking/M5 accounts, which do not exist yet); supported-browser smoke
+tests beyond Chromium (deferred; no cross-browser requirement yet).
 
 ### 2.4 Load tests — deferred (M8/M9)
 

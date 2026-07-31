@@ -24,6 +24,12 @@ coverage/
 .vitest/
 .nyc_output/
 
+# Playwright (docs/TEST_PLAN.md §2.3): screenshots/traces from local/CI runs
+# and the browser binaries `playwright install` downloads.
+apps/client/test-results/
+apps/client/playwright-report/
+apps/client/blob-report/
+
 # Vite / caches
 .vite/
 

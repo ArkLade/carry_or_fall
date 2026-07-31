@@ -9,6 +9,7 @@
  */
 import Phaser from "phaser";
 
+import { installDebugHook } from "./debug/debug-hook";
 import { BootScene } from "./scenes/BootScene";
 import { LoadoutScene } from "./scenes/LoadoutScene";
 import { PlayScene } from "./scenes/PlayScene";
@@ -28,4 +29,11 @@ export const game = new Phaser.Game({
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
   scene: [LoadoutScene, PlayScene, BootScene],
+});
+
+// Dev/test-only observation hook (docs/TEST_PLAN.md §2.3); stripped from the
+// production bundle (`debug-hook.ts`'s module doc explains how and why).
+installDebugHook({
+  getActiveSceneKey: () => game.scene.getScenes(true)[0]?.scene.key ?? null,
+  getWorld: () => (game.scene.getScene("play") as PlayScene | null)?.getWorld() ?? null,
 });

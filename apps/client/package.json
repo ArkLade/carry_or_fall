@@ -3,11 +3,12 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Phaser 4 browser client (Vite). Boots into the local PlayScene: fixed-step movement, map collision, aim, and the sword/bow attack pipeline, no server required. BootScene (build info + live server connection status) is retained for the M4 networked entry point.",
+  "description": "Phaser 4 browser client (Vite). Boots into the local LoadoutScene, then PlayScene: fixed-step movement, map collision, aim, the sword/bow attack pipeline, loot/extraction, and data-driven skills, no server required. BootScene (build info + live server connection status) is retained for the M4 networked entry point.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@carry-or-fall/game-content": "workspace:*",
@@ -17,6 +18,7 @@
     "phaser": "4.2.1"
   },
   "devDependencies": {
+    "@playwright/test": "1.62.1",
     "@types/node": "24.13.3",
     "vite": "8.1.5"
   }

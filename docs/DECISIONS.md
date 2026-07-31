@@ -366,3 +366,42 @@ milestone, not implemented yet).
   adds accounts and M6 adds lobbies, this screen's validation logic (`createSkillLoadout`) is reused;
   its ephemeral, no-persistence framing is what changes.
 - **Status:** Approved.
+
+## D32. Playwright pulled forward from M5 to M3; browser suite runs as a separate CI job
+
+- **Date:** 2026-07-31.
+- **Decision:** Add `@playwright/test` (pinned `1.62.1`) as a client devDependency and install the
+  Chromium browser binary, superseding `docs/TEST_PLAN.md` §2.3's earlier "Playwright is not
+  installed... add it around M5" deferral — that section is corrected in this same change so it and
+  this entry do not contradict each other. The suite (`apps/client/e2e/*.spec.ts`) runs as a
+  **separate CI job**, not a seventh step in the existing six-gate `verify` job.
+- **Reason:** A prior M3 follow-up task reported, for the fourth consecutive session, that it could
+  not visually verify client behavior — no browser automation capability existed. That gap blocked
+  diagnosing a reported "skills don't behave correctly in the running game" defect: 273 unit tests
+  already proved every effect function correct in isolation, so the only way to find a wiring defect
+  between the real client and the simulation (if one existed) was to actually drive a browser.
+  Technical plan §30.3 already requires this layer, and §38 M4's "two real browsers can play" exit
+  criterion presupposes it, so this is required infrastructure arriving two milestones early, not new
+  scope. Running the suite as a separate job (not a seventh gate) follows from the task's explicit
+  "do not slow or destabilize the existing six gates": a real Chromium instance, animation-frame
+  timing, and live-enemy navigation are categorically slower and more failure-prone than the six
+  fast, deterministic gates, and mixing them would make the fast gates' signal noisier.
+- **Consequences:** `pnpm-lock.yaml` gains Playwright and its transitive packages; no `allowBuilds`
+  entry was needed in `pnpm-workspace.yaml` — verified empirically that `@playwright/test`/
+  `playwright-core`/`playwright` ship no npm install/postinstall build script under pnpm 11's
+  build-script gate, so `pnpm install` did not require one. Browser binaries are fetched separately
+  via `playwright install chromium` (already how Playwright is meant to be used; not a pnpm
+  build-script concern). A dev-only, read-only debug hook
+  (`apps/client/src/debug/debug-hook.ts`, `docs/TEST_PLAN.md` §2.3) was added so tests can observe
+  simulation state through the `<canvas>` Phaser renders to; it is gated on `import.meta.env.DEV`
+  and verified absent from the production bundle by a `test:integration` assertion. Building this
+  gate correctly surfaced and fixed a real, pre-existing defect: the shared root `.env`'s
+  `NODE_ENV=development` (there for the server, D20) was also leaking into Vite's own
+  production/development detection for the **client** build, via `envDir` pointing at that same
+  file — `import.meta.env.DEV` stayed `true` even inside `vite build`'s output. Fixed in
+  `apps/client/vite.config.ts` by defining `import.meta.env.DEV`/`PROD` explicitly from Vite's
+  `command` parameter (reliably `"serve"` vs `"build"`) instead of trusting the NODE_ENV-influenced
+  default. This means the debug hook would have shipped in every production client bundle built
+  before this fix, undetected, until this verification capability was built specifically to catch
+  it.
+- **Status:** Approved.
