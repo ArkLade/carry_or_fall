@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Deterministic, fixed-step simulation shared by the local client (M1) and, later, the authoritative server (M4). Ships a seeded PRNG, movement, map collision, aim, and the shared attack pipeline (sword + bow, with hard caps); the enemy, health/death, and dash are added by later M1 chunks.",
+  "description": "Deterministic, fixed-step simulation. Hosted by the authoritative Colyseus room since M4: one world holds two to eight players, advanced 50ms at a time from their validated inputs. Ships a seeded PRNG, movement, collision, the shared attack pipeline with the hard caps, enemies, inventory and the secure slot, skills, extraction, and run results.",
   "types": "./src/index.ts",
   "exports": {
     ".": {

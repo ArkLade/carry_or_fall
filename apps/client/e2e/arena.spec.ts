@@ -1,13 +1,14 @@
 /**
- * Browser coverage for the M4-prep arena tuning: three tankier enemies on a
- * map twice the size, and the run-end handoff back to `LoadoutScene`.
+ * Browser coverage for the arena the match is played on — three tankier enemies
+ * on the large map — and for the run-end handoff back to `LoadoutScene`.
  *
- * These assert things only a real run can show — how many enemies actually
- * spawn and where, whether a projectile survives long enough to return, and
- * whether the scene flow loops — rather than re-checking the content values
- * that `packages/*` unit tests already cover.
+ * These assert things only a real match can show: how many enemies the server
+ * actually spawns and where, whether a projectile survives long enough to
+ * return, and whether the scene flow loops — rather than re-checking content
+ * values that `packages/*` unit tests already cover.
  */
-import { basicBow, basicSword, chaser } from "@carry-or-fall/game-content";
+import { basicBow, basicSword, chaser, testArena } from "@carry-or-fall/game-content";
+import { PROJECTILE_LIFESPAN_MS } from "@carry-or-fall/simulation-core";
 import { expect, test } from "@playwright/test";
 
 import {
@@ -15,32 +16,28 @@ import {
   attackChaserUntil,
   dieToChasers,
   getActiveSceneKey,
-  getWorld,
+  getLocalPlayer,
+  getPrivateState,
+  getSnapshot,
   gotoGame,
   meetChasers,
   pressKey,
   rangedAttackFor,
   startRunWithLoadout,
+  waitForSnapshot,
+  walkToOpenLane,
   walkToward,
 } from "./helpers";
 
-/**
- * Matches `PlayScene`'s `RETURNING_SHOT_LANE_Y`: the lower lane, which has no
- * wall across the map's width and sits directly below the player's start.
- */
-const CLEAR_LANE_Y = 900;
-
-test.describe("arena configuration (M4 prep)", () => {
-  test("a run spawns three enemies, each at its own position", async ({ page }) => {
+test.describe("arena configuration", () => {
+  test("a match spawns three enemies, each at its own position", async ({ page }) => {
     await gotoGame(page);
     await startRunWithLoadout(page, []);
-    const world = await getWorld(page);
+    const snapshot = await getSnapshot(page);
 
-    expect(world.enemies).toHaveLength(3);
-    const positions = world.enemies.map(
-      (enemy) => `${String(enemy.position.x)},${String(enemy.position.y)}`,
-    );
-    expect(new Set(positions).size).toBe(3);
+    expect(snapshot.enemies).toHaveLength(testArena.enemyCount);
+    const positions = snapshot.enemies.map((enemy) => `${String(enemy.x)},${String(enemy.y)}`);
+    expect(new Set(positions).size).toBe(testArena.enemyCount);
   });
 
   test("no enemy starts close enough to reach the player before they can react", async ({
@@ -48,106 +45,112 @@ test.describe("arena configuration (M4 prep)", () => {
   }) => {
     await gotoGame(page);
     await startRunWithLoadout(page, []);
-    const world = await getWorld(page);
+    const snapshot = await getSnapshot(page);
+    const player = await getLocalPlayer(page);
 
     // Straight-line distance is the optimistic case for the enemy — it
     // ignores having to path around the divider — so a floor here is a real
     // floor on reaction time.
-    const secondsOfWarning = world.enemies.map((enemy) => {
-      const distance = Math.hypot(
-        enemy.position.x - world.player.position.x,
-        enemy.position.y - world.player.position.y,
-      );
-      return distance / chaser.moveSpeed;
-    });
+    const secondsOfWarning = snapshot.enemies.map(
+      (enemy) => Math.hypot(enemy.x - player.x, enemy.y - player.y) / chaser.moveSpeed,
+    );
     expect(Math.min(...secondsOfWarning)).toBeGreaterThan(5);
   });
 
   test("an enemy survives a landed sword hit, so a fight lasts long enough to observe", async ({
     page,
   }) => {
-    test.setTimeout(120_000);
+    test.setTimeout(150_000);
     await gotoGame(page);
     await startRunWithLoadout(page, []);
     await meetChasers(page);
 
-    // The point of the health change: a landed swing damages an enemy but
-    // does not delete it, which is what gives stun, shield, and skill effects
-    // time to be visible at all. Before the change a chaser died to one hit.
+    // The point of the health value: a landed swing damages an enemy but does
+    // not delete it, which is what gives stun, shield, and skill effects time
+    // to be visible at all.
     expect(chaser.health).toBeGreaterThan(basicSword.damage);
 
-    const world = await attackChaserUntil(
+    const snapshot = await attackChaserUntil(
       page,
-      (w) => w.enemies.some((enemy) => enemy.health < chaser.health && enemy.health > 0),
-      40_000,
+      (view) => view.enemies.some((enemy) => enemy.health < chaser.health && enemy.health > 0),
+      60_000,
     );
 
-    const damagedSurvivor = world.enemies.find(
+    const damagedSurvivor = snapshot.enemies.find(
       (enemy) => enemy.health < chaser.health && enemy.health > 0,
     );
     expect(damagedSurvivor).toBeDefined();
   });
 });
 
-test.describe("returning_shot is reachable on the larger map (M3 gap)", () => {
-  test("a shot fired along a clear lane survives its lifespan and reverses", async ({ page }) => {
-    test.setTimeout(60_000);
+/**
+ * How far a `basic_bow` projectile travels before its lifespan expires. Derived
+ * from the content and the engine constant rather than hardcoded, so a change to
+ * either moves the requirement below instead of silently invalidating it.
+ */
+const PROJECTILE_TRAVEL_PX = (PROJECTILE_LIFESPAN_MS / 1000) * (basicBow.projectileSpeed ?? 0);
+
+/**
+ * Where the shot is fired from: far enough west that the projectile expires in
+ * open air rather than hitting the far border first. Firing from the middle of
+ * the lane looks like it should work and does not — the shot reaches the east
+ * wall a few pixels before its lifespan ends, and a projectile stopped by a wall
+ * never returns.
+ */
+const FIRING_X = 400;
+
+test.describe("returning_shot is reachable on this arena", () => {
+  test("a shot fired along the open lane survives its lifespan and reverses", async ({ page }) => {
+    test.setTimeout(120_000);
     await gotoGame(page);
     await startRunWithLoadout(page, ["returning_shot"]);
 
-    // Drop straight down into the lower clear lane, then fire along it. The
-    // old map was too short for a projectile to ever reach its lifespan in
-    // open space, so this behavior could not be observed at all before the
-    // map doubled.
-    let world = await getWorld(page);
-    await walkToward(page, world.player.position.x, CLEAR_LANE_Y, 25_000);
-    world = await getWorld(page);
-    await aimAt(page, world.player.position.x + 400, world.player.position.y);
+    // The arena has to be long enough for the shot to expire in open space; a
+    // shorter map makes this behavior unobservable entirely, which is why
+    // `ArenaDefinition.openLaneY` exists at all.
+    expect(testArena.width - FIRING_X).toBeGreaterThan(PROJECTILE_TRAVEL_PX + 100);
+
+    await walkToOpenLane(page);
+    await walkToward(page, FIRING_X, testArena.openLaneY, 30_000);
+    const player = await getLocalPlayer(page);
+    await aimAt(page, player.x + 400, player.y);
     await rangedAttackFor(page, 80);
 
-    world = await getWorld(page);
-    expect(world.projectiles).toHaveLength(1);
-    const outboundVelocityX = world.projectiles[0]!.velocity.x;
-    expect(outboundVelocityX).toBeGreaterThan(0);
-    expect(world.projectiles[0]!.canReturn).toBe(true);
+    const fired = await waitForSnapshot(page, (view) => view.projectiles.length > 0);
+    expect(fired.projectiles).toHaveLength(1);
+    expect(fired.projectiles[0]!.velocityX).toBeGreaterThan(0);
+    expect(fired.projectiles[0]!.canReturn).toBe(true);
 
-    // Poll past the projectile's 2000ms lifespan for the reversal.
-    let returned: { velocity: { x: number }; returnsSoFar: number } | undefined;
-    for (let i = 0; i < 40; i += 1) {
-      await page.waitForTimeout(100);
-      world = await getWorld(page);
-      const projectile = world.projectiles[0];
-      if (projectile !== undefined && projectile.returnsSoFar > 0) {
-        returned = projectile;
-        break;
-      }
-      if (world.projectiles.length === 0) {
-        break;
-      }
-    }
-
-    expect(returned, "projectile never returned — it expired or hit a wall first").toBeDefined();
-    expect(returned!.returnsSoFar).toBe(1);
-    expect(returned!.velocity.x).toBeLessThan(0); // reversed back toward the shooter
+    // Poll past the projectile's 2000 ms lifespan for the reversal.
+    const returned = await waitForSnapshot(
+      page,
+      (view) => view.projectiles.some((projectile) => projectile.returnsSoFar > 0),
+      8000,
+      100,
+    );
+    const reversed = returned.projectiles.find((projectile) => projectile.returnsSoFar > 0)!;
+    expect(reversed.returnsSoFar).toBe(1);
+    expect(reversed.velocityX).toBeLessThan(0); // reversed back toward the shooter
     expect(basicBow.projectileSpeed).toBeGreaterThan(0);
   });
 });
 
-test.describe("run end returns to the loadout screen (M4 prep item 4)", () => {
+test.describe("run end returns to the loadout screen", () => {
   test("finishing a run shows the result, then Enter hands off to LoadoutScene", async ({
     page,
   }) => {
-    test.setTimeout(120_000);
+    test.setTimeout(180_000);
     await gotoGame(page);
     await startRunWithLoadout(page, ["ricochet"]);
 
     // Die to the chasers: the shortest reliable way to end a run.
-    const world = await dieToChasers(page);
-    expect(world.player.alive).toBe(false);
+    const dead = await dieToChasers(page);
+    expect(dead.alive).toBe(false);
 
     // The result is on screen and the run is over, but we are still in
     // PlayScene until the player acknowledges it.
-    expect(world.runResult).not.toBeNull();
+    const result = await getPrivateState(page);
+    expect(result.runResult?.outcome).toBe("died");
     expect(await getActiveSceneKey(page)).toBe("play");
 
     await pressKey(page, "Enter");
@@ -157,42 +160,45 @@ test.describe("run end returns to the loadout screen (M4 prep item 4)", () => {
     expect(await getActiveSceneKey(page)).toBe("loadout");
   });
 
-  test("a different loadout can be chosen for the next run, and it takes effect", async ({
+  test("a different loadout can be chosen for the next match, and it takes effect", async ({
     page,
   }) => {
-    test.setTimeout(120_000);
+    test.setTimeout(180_000);
     await gotoGame(page);
     await startRunWithLoadout(page, ["ricochet"]);
+    expect((await getPrivateState(page)).skillIds).toEqual(["ricochet"]);
 
-    let world = await getWorld(page);
-    expect(world.player.skillLoadout.map((skill) => skill.id)).toEqual(["ricochet"]);
-
-    world = await dieToChasers(page);
-    expect(world.player.alive).toBe(false);
+    const dead = await dieToChasers(page);
+    expect(dead.alive).toBe(false);
 
     await pressKey(page, "Enter");
     await page.waitForFunction(
       () => window.__CARRY_OR_FALL_DEBUG__?.getActiveSceneKey() === "loadout",
     );
 
-    // Swap ricochet out for piercing_rounds and start again.
+    // Swap ricochet out for piercing_rounds and start a fresh match.
     await pressKey(page, "2"); // ricochet off
     await pressKey(page, "3"); // piercing_rounds on
     await pressKey(page, "Enter");
     await page.waitForFunction(
       () => window.__CARRY_OR_FALL_DEBUG__?.getActiveSceneKey() === "play",
     );
+    await page.waitForFunction(
+      () => window.__CARRY_OR_FALL_DEBUG__?.getSnapshot()?.phase === "running",
+      undefined,
+      { timeout: 30_000 },
+    );
 
-    world = await getWorld(page);
-    expect(world.player.skillLoadout.map((skill) => skill.id)).toEqual(["piercing_rounds"]);
-    expect(world.player.alive).toBe(true);
-    expect(world.runResult).toBeNull();
+    expect((await getPrivateState(page)).skillIds).toEqual(["piercing_rounds"]);
+    const player = await getLocalPlayer(page);
+    expect(player.alive).toBe(true);
+    expect((await getPrivateState(page)).runResult).toBeNull();
 
     // And the new skill really is the one driving the projectile now.
-    await aimAt(page, world.player.position.x + 400, world.player.position.y);
+    await aimAt(page, player.x + 400, player.y);
     await rangedAttackFor(page, 80);
-    world = await getWorld(page);
-    expect(world.projectiles[0]!.piercesRemaining).toBe(2);
-    expect(world.projectiles[0]!.bouncesRemaining).toBe(0);
+    const fired = await waitForSnapshot(page, (view) => view.projectiles.length > 0);
+    expect(fired.projectiles[0]!.piercesRemaining).toBe(2);
+    expect(fired.projectiles[0]!.bouncesRemaining).toBe(0);
   });
 });

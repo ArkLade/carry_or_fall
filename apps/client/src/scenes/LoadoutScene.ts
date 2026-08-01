@@ -1,12 +1,15 @@
 /**
- * The pre-run local skill picker (M3.8, `docs/M3_ISSUES.md` M3.8 and §1).
+ * The pre-run skill picker (M3.8, `docs/M3_ISSUES.md` M3.8 and §1).
  * Concept §8.3 fixes three permanent skill slots chosen "before entering the
  * match"; technical plan §38 M3 lists "three pre-run skill slots" as a
- * deliverable. M3 still has no account or lobby (M5/M6), so this is a
- * client-only, local menu: nothing is written to storage, the choice does
- * not survive a page reload, and there is no networked matchmaking or
- * waiting room (`docs/M3_ISSUES.md` §1, in the same spirit as
- * `docs/DECISIONS.md` D27's secure-slot local scope).
+ * deliverable. Nothing is written to storage and the choice does not survive a
+ * page reload — there are still no accounts (M5) and no matchmaking (M6).
+ *
+ * M4 gives the choice a destination: pressing Enter no longer starts a local
+ * world, it starts a room join carrying this selection as **join options**
+ * (`docs/DECISIONS.md` D38). That is the only moment it can be made, because a
+ * match starts together and late join is disabled (technical plan §8.3), and
+ * one room is one match (D7).
  *
  * This scene computes no game rule itself: toggling a skill is validated by
  * calling `createSkillLoadout` (a pure function in `simulation-core`), and a
@@ -148,7 +151,12 @@ export class LoadoutScene extends Phaser.Scene {
     if (Phaser.Input.Keyboard.JustDown(this.startKey)) {
       const result = createSkillLoadout(this.selectedIds);
       if (result.ok) {
-        this.scene.start("play", { skillLoadout: result.loadout });
+        // The ids, not the resolved definitions: from M4 this selection becomes
+        // the room's join options, and the server re-validates it through this
+        // same `createSkillLoadout` before admitting the player
+        // (`docs/M4_ISSUES.md` M4.3). The check here is a courtesy that shows a
+        // legal choice; the one on the server is the authority.
+        this.scene.start("play", { skillLoadoutIds: [...this.selectedIds] });
         return;
       }
       // Defensive only: toggling already refuses anything createSkillLoadout

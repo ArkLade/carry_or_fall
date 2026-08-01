@@ -39,7 +39,8 @@ import {
   MAX_RECOVERY_REDUCTION_ADD,
   MAX_STUN_CHANCE_ADD,
 } from "./skill-effects";
-import type { InputState, Wall } from "./world";
+import type { SkillLoadout } from "./skill-loadout";
+import type { InputState, Player, Wall, World } from "./world";
 
 const NO_INPUT: InputState = {
   moveX: 0,
@@ -81,17 +82,42 @@ function fullStressInventory() {
   return inventory;
 }
 
-function baseConfig(overrides: Partial<SimulationConfig>): SimulationConfig {
+const SOLO = "player-1";
+
+/** The one player in these solo stress worlds (`world.players` replaced `world.player` in M4). */
+function solo(world: World): Player {
+  const player = world.players[0];
+  if (player === undefined) {
+    throw new Error("expected a solo world to hold exactly one player");
+  }
+  return player;
+}
+
+/** Advance a solo world one step with `input` for its only player. */
+function step(world: World, input: InputState): World {
+  return stepSimulation(world, new Map([[SOLO, input]])).world;
+}
+
+type StressOverrides = Partial<SimulationConfig> & { readonly skillLoadout?: SkillLoadout };
+
+function baseConfig(overrides: StressOverrides): SimulationConfig {
+  const { skillLoadout, ...config } = overrides;
   return {
     walls: [],
-    playerStart: { x: 0, y: 0 },
-    meleeWeapon: basicSword,
-    rangedWeapon: basicBow,
+    players: [
+      {
+        id: SOLO,
+        position: { x: 0, y: 0 },
+        meleeWeapon: basicSword,
+        rangedWeapon: basicBow,
+        ...(skillLoadout === undefined ? {} : { skillLoadout }),
+      },
+    ],
     enemyDefinition: chaser,
     enemySpawnPoints: [FAR_AWAY],
     extractionCandidatePoints: FAR_AWAY_EXTRACTION,
     seed: 1,
-    ...overrides,
+    ...config,
   };
 }
 
@@ -100,10 +126,10 @@ describe("M3.6: hard caps hold under the worst legal combination (recursive-effe
     let world = createSimulation(
       baseConfig({ skillLoadout: [ricochet, piercingRounds, homingArrows], seed: 11 }),
     );
-    world = { ...world, player: { ...world.player, inventory: fullStressInventory() } };
+    world = { ...world, players: [{ ...solo(world), inventory: fullStressInventory() }] };
 
     for (let i = 0; i < 400; i += 1) {
-      ({ world } = stepSimulation(world, FIRE));
+      world = step(world, FIRE);
 
       // Cap 1 / 7: per-attack and per-player active-projectile ceilings.
       expect(world.projectiles.length).toBeLessThanOrEqual(MAX_ACTIVE_PROJECTILES_PER_PLAYER);
@@ -157,9 +183,9 @@ describe("M3.6: hard caps hold under the worst legal combination (recursive-effe
     let hitCount = 0;
     let previousHealth = tankyStationaryChaser.health;
     for (let i = 0; i < 300; i += 1) {
-      const input = world.player.meleeAttack === null ? ATTACK : NO_INPUT;
-      ({ world } = stepSimulation(world, input));
-      expect(world.player.meleeCooldownMs).toBeGreaterThanOrEqual(0);
+      const input = solo(world).meleeAttack === null ? ATTACK : NO_INPUT;
+      world = step(world, input);
+      expect(solo(world).meleeCooldownMs).toBeGreaterThanOrEqual(0);
       const currentHealth = world.enemies[0]!.health;
       if (currentHealth < previousHealth) {
         hitCount += 1;
@@ -181,10 +207,10 @@ describe("M3.6: hard caps hold under the worst legal combination (recursive-effe
         seed: 13,
       }),
     );
-    ({ world } = stepSimulation(world, FIRE));
+    world = step(world, FIRE);
 
     for (let i = 0; i < 300; i += 1) {
-      ({ world } = stepSimulation(world, NO_INPUT));
+      world = step(world, NO_INPUT);
       for (const projectile of world.projectiles) {
         expect(projectile.returnsSoFar).toBeLessThanOrEqual(MAX_RETURNS_PER_PROJECTILE);
         expect(projectile.bouncesRemaining).toBeGreaterThanOrEqual(0);

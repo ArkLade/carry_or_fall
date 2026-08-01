@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Phaser 4 browser client (Vite). Boots into the local LoadoutScene, then PlayScene: fixed-step movement, map collision, aim, the sword/bow attack pipeline, loot/extraction, and data-driven skills, no server required. BootScene (build info + live server connection status) is retained for the M4 networked entry point.",
+  "description": "Phaser 4 browser client (Vite). Boots into LoadoutScene, then joins the authoritative match room: it sends input intent and renders interpolated authoritative state, and runs no simulation of its own. BootScene remains the connection/health diagnostic view.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

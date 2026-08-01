@@ -1,7 +1,14 @@
 /**
- * The single M0 room. It exists to prove the authoritative loop end-to-end:
+ * The connection-only probe room. It proves the authoritative loop end-to-end —
  * clients join, the server owns the synchronized state, and the room disposes
- * itself when empty. There is no gameplay here yet.
+ * itself when empty — with no gameplay and no match.
+ *
+ * M4 added `match_room` but kept this one (`docs/DECISIONS.md` D40): joining the
+ * match room now has consequences (it takes one of eight seats and starts a
+ * lobby countdown), so a probe that allocates no match is a genuinely different
+ * capability, and it is the one `BootScene` and a later deployment health check
+ * want. The drift risk of two rooms is removed by both calling the same
+ * `authorizeHandshake` gate rather than each implementing the version check.
  *
  * Server configuration (build version, limits, logger) is injected through a
  * closure rather than Colyseus room options on purpose: Colyseus merges a
@@ -9,17 +16,11 @@
  * options could be spoofed by a client. Capturing config in the closure keeps
  * the server the sole authority (see docs/DEVELOPMENT_RULES.md, "Authority").
  */
-import { type Client, Room, type Server, ServerError } from "@colyseus/core";
-import {
-  FOUNDATION_ROOM,
-  INCOMPATIBLE_CLIENT_MESSAGE,
-  isProtocolCompatible,
-  PROTOCOL_MISMATCH_CODE,
-  PROTOCOL_VERSION,
-  validateClientHandshake,
-} from "@carry-or-fall/protocol";
+import { type Client, Room, type Server } from "@colyseus/core";
+import { FOUNDATION_ROOM } from "@carry-or-fall/protocol";
 
 import type { Logger } from "../logger";
+import { authorizeHandshake } from "./authorize";
 import { FoundationState, type FoundationStateType } from "./FoundationState";
 
 export interface FoundationRoomDeps {
@@ -49,29 +50,7 @@ export function defineFoundationRoom(gameServer: Server, deps: FoundationRoomDep
      * as authoritative game state.
      */
     override onAuth(client: Client, options: unknown): boolean {
-      const result = validateClientHandshake(options);
-      if (!result.ok) {
-        logger.warn("refused malformed client handshake", {
-          sessionId: client.sessionId,
-          error: result.error,
-        });
-        throw new ServerError(PROTOCOL_MISMATCH_CODE, INCOMPATIBLE_CLIENT_MESSAGE);
-      }
-
-      if (!isProtocolCompatible(result.value.protocolVersion)) {
-        logger.warn("refused incompatible client protocol", {
-          sessionId: client.sessionId,
-          clientProtocol: result.value.protocolVersion,
-          serverProtocol: PROTOCOL_VERSION,
-        });
-        throw new ServerError(PROTOCOL_MISMATCH_CODE, INCOMPATIBLE_CLIENT_MESSAGE);
-      }
-
-      logger.info("accepted client handshake", {
-        sessionId: client.sessionId,
-        clientProtocol: result.value.protocolVersion,
-        clientBuildVersion: result.value.buildVersion,
-      });
+      authorizeHandshake(options, client.sessionId, logger);
       return true;
     }
 

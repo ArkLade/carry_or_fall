@@ -53,6 +53,7 @@ export function startMeleeAttack(
   return {
     started: true,
     state: {
+      ownerId: actor.id,
       weapon: preparation.definition.weapon,
       origin: preparation.definition.origin,
       facing: preparation.definition.facing,
@@ -148,7 +149,12 @@ export function resolveMeleeHits(
     const damaged = applyDamage(target, state.weapon.damage);
     const knockedBack = applyKnockback(damaged, state.origin, knockbackPx);
     updatedTargets.push(knockedBack);
-    hitEvents.push({ targetId: target.id, damage: state.weapon.damage, position: target.position });
+    hitEvents.push({
+      ownerId: state.ownerId,
+      targetId: target.id,
+      damage: state.weapon.damage,
+      position: target.position,
+    });
     if (stunChance > 0 && rng.next() < stunChance) {
       stunnedTargetIds.push(target.id);
     }

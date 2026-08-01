@@ -1,11 +1,11 @@
 /**
  * Captures WASD movement, the space-bar dash intent, the `E` interact/extract
- * intent (concept §13.1), and the M2 inventory controls. This is the keyboard
+ * intent (concept §13.1), and the inventory controls. This is the keyboard
  * half of the input-intent path (`docs/M1_EXECUTION_PLAN.md` §2.1): the
  * client decides only what keys are held/were just pressed (technical plan
- * §5.1) and hands that intent to the simulation through the single seam in
- * `PlayScene`; it never decides an outcome itself — whether a discard/secure
- * actually succeeds is `simulation-core`'s call (`docs/M2_ISSUES.md` §1).
+ * §5.1) and hands that intent through the single seam in `PlayScene` — which
+ * from M4 is the authoritative room. It never decides an outcome itself:
+ * whether a discard or secure actually succeeds is the server's call.
  *
  * Digit keys `1`-`6` discard that inventory slot; `Shift`+digit secures it
  * instead — a local-only control scheme (concept §13.1 fixes `E`/`Tab`/`I`
@@ -14,13 +14,23 @@
  * simulation step within the same rendered frame.
  */
 import Phaser from "phaser";
-import type { InputState } from "@carry-or-fall/simulation-core";
 
-/** The keyboard subset of `InputState`; `PlayScene` merges this with `PointerInput`'s aim/attack fields. */
-export type KeyboardInputState = Pick<
-  InputState,
-  "moveX" | "moveY" | "dashPressed" | "interactPressed" | "discardSlotIndex" | "secureSlotIndex"
->;
+/**
+ * The keyboard half of a frame's intent. `PlayScene` merges the movement/action
+ * fields with `PointerInput`'s aim/attack into the `InputMessage` it sends, and
+ * turns the two one-shot slot fields into their own `secure_item`/`discard_item`
+ * messages (technical plan §14.2) rather than folding them into the 20-per-second
+ * input stream.
+ */
+export interface KeyboardInputState {
+  readonly moveX: -1 | 0 | 1;
+  readonly moveY: -1 | 0 | 1;
+  readonly dashPressed: boolean;
+  readonly interactPressed: boolean;
+  /** `null` means "no request this frame"; an edge-triggered keypress, not a held key. */
+  readonly discardSlotIndex: number | null;
+  readonly secureSlotIndex: number | null;
+}
 
 export class KeyboardInput {
   private readonly up: Phaser.Input.Keyboard.Key;

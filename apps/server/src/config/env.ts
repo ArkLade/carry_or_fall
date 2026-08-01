@@ -17,6 +17,27 @@ export interface ServerEnv {
   readonly allowedOrigins: readonly string[];
   readonly buildVersion: string;
   readonly logLevel: LogLevel;
+  /**
+   * Fixes the seed every match is generated from, or `null` for a fresh random
+   * seed per match (the normal case; technical plan §9.4). Pinning it makes
+   * enemy, loot, chip, and extraction placement reproducible, which is what the
+   * browser suite needs to assert about a specific position without depending on
+   * whichever layout that run happened to draw.
+   */
+  readonly matchSeed: number | null;
+  /**
+   * How long the lobby countdown runs before a match starts, or `null` for the
+   * gameplay default (`MatchRoom.DEFAULT_LOBBY_MS`).
+   *
+   * This exists so an automated suite does not spend real seconds waiting out a
+   * countdown that is there for humans: concept §22.2 wants a lobby long enough
+   * that a second player can realistically join, which is a human-timescale
+   * requirement and pure dead time for a test that drives both clients itself.
+   * Shortening it is configuration, exactly like {@link ServerEnv.matchSeed} —
+   * not a test backdoor, and it is server-side, so it cannot reach the browser
+   * bundle at all.
+   */
+  readonly matchLobbyMs: number | null;
 }
 
 /** Subset of `process.env` this module reads; injectable so it is unit-testable. */
@@ -29,12 +50,20 @@ const DEFAULT_PORT = 2567;
 const MIN_PORT = 0; // 0 lets the OS pick an ephemeral port (used by integration tests).
 const MAX_PORT = 65535;
 
+/** A seed is reduced to an unsigned 32-bit integer by the PRNG, so bound it there. */
+const MAX_MATCH_SEED = 0xffff_ffff;
+
+/** An hour: absurd for a lobby, and low enough that a typo cannot hang a server for a day. */
+const MAX_MATCH_LOBBY_MS = 3_600_000;
+
 const DEFAULTS: ServerEnv = {
   nodeEnv: "development",
   port: DEFAULT_PORT,
   allowedOrigins: ["http://localhost:5173"],
   buildVersion: "0.0.0-m0",
   logLevel: "info",
+  matchSeed: null,
+  matchLobbyMs: null,
 };
 
 /**
@@ -101,6 +130,32 @@ export function loadServerEnv(source: EnvSource = process.env): ServerEnv {
     }
   }
 
+  let matchSeed = DEFAULTS.matchSeed;
+  const seedRaw = source["MATCH_SEED"];
+  if (seedRaw !== undefined && seedRaw !== "") {
+    const parsed = Number(seedRaw);
+    if (Number.isInteger(parsed) && parsed >= 0 && parsed <= MAX_MATCH_SEED) {
+      matchSeed = parsed;
+    } else {
+      errors.push(
+        `MATCH_SEED must be an integer between 0 and ${String(MAX_MATCH_SEED)} (got "${seedRaw}")`,
+      );
+    }
+  }
+
+  let matchLobbyMs = DEFAULTS.matchLobbyMs;
+  const lobbyRaw = source["MATCH_LOBBY_MS"];
+  if (lobbyRaw !== undefined && lobbyRaw !== "") {
+    const parsed = Number(lobbyRaw);
+    if (Number.isInteger(parsed) && parsed >= 0 && parsed <= MAX_MATCH_LOBBY_MS) {
+      matchLobbyMs = parsed;
+    } else {
+      errors.push(
+        `MATCH_LOBBY_MS must be an integer between 0 and ${String(MAX_MATCH_LOBBY_MS)} (got "${lobbyRaw}")`,
+      );
+    }
+  }
+
   if (errors.length > 0) {
     throw new Error(`Invalid server environment configuration:\n- ${errors.join("\n- ")}`);
   }
@@ -111,5 +166,7 @@ export function loadServerEnv(source: EnvSource = process.env): ServerEnv {
     allowedOrigins: Object.freeze([...allowedOrigins]),
     buildVersion,
     logLevel,
+    matchSeed,
+    matchLobbyMs,
   });
 }

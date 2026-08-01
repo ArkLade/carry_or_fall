@@ -1,8 +1,13 @@
 /**
- * The only scene in M0. It renders the title, the client build status, and the
- * live server connection status, then opens the connection. There is no
- * gameplay: this scene exists to prove the client boots and reflects the
- * authoritative server's state.
+ * The connection diagnostic scene. It renders the title, the client build
+ * status, and the live server connection status, then opens a connection to the
+ * connection-only probe room (`docs/DECISIONS.md` D40) and probes the HTTP
+ * health endpoint separately.
+ *
+ * It is deliberately not the scene a player uses: joining the *match* room takes
+ * one of eight seats and starts a lobby countdown, so a diagnostic that joined
+ * it would disturb live play. This scene answers "can this client reach this
+ * server at all", nothing more, and `main.ts` registers it without starting it.
  */
 import Phaser from "phaser";
 

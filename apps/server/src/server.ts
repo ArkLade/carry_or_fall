@@ -11,6 +11,7 @@ import { HEALTH_PATH, type HealthResponse, PROTOCOL_VERSION } from "@carry-or-fa
 
 import type { Logger } from "./logger";
 import { defineFoundationRoom } from "./rooms/FoundationRoom";
+import { defineMatchRoom, type MatchRoomDeps } from "./rooms/MatchRoom";
 
 const DEFAULT_MAX_CLIENTS = 64;
 
@@ -18,8 +19,16 @@ export interface GameServerDeps {
   readonly buildVersion: string;
   readonly logger: Logger;
   readonly allowedOrigins: readonly string[];
-  /** Per-room client cap. Defaults to a sane M0 value; overridable in tests. */
+  /** Per-room client cap for the connection-only probe room. Overridable in tests. */
   readonly maxClients?: number;
+  /**
+   * Match-room timings and seed. Every field is optional and defaults to the
+   * real values; integration tests override them so a suite does not sit
+   * through a real 8-second lobby or a 12-minute match (M4.3). The match room's
+   * own client cap is fixed at eight (technical plan §8.1) and is deliberately
+   * not configurable.
+   */
+  readonly match?: Omit<MatchRoomDeps, "buildVersion" | "logger">;
 }
 
 export interface GameServerHandle {
@@ -82,6 +91,10 @@ export function createGameServer(deps: GameServerDeps): GameServerHandle {
     logger,
     maxClients: deps.maxClients ?? DEFAULT_MAX_CLIENTS,
   });
+
+  // One room per match (docs/DECISIONS.md D7), alongside the connection-only
+  // probe room above (D40).
+  defineMatchRoom(gameServer, { buildVersion, logger, ...deps.match });
 
   return { gameServer, httpServer };
 }

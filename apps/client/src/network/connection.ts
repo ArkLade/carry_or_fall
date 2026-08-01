@@ -14,6 +14,7 @@ import {
   type FoundationRoomState,
   PROTOCOL_VERSION,
 } from "@carry-or-fall/protocol";
+import { CONTENT_VERSION } from "@carry-or-fall/game-content";
 import { Client } from "@colyseus/sdk";
 
 export type ConnectionStatus = "connecting" | "connected" | "failed";
@@ -46,6 +47,7 @@ export async function connectToFoundationRoom(
 
   const handshake: ClientHandshake = {
     protocolVersion: PROTOCOL_VERSION,
+    contentVersion: CONTENT_VERSION,
     buildVersion: options.buildVersion,
   };
 

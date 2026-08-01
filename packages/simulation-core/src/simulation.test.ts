@@ -19,7 +19,29 @@ import {
   stepSimulation,
   type SimulationConfig,
 } from "./simulation";
-import type { InputState, Wall, World } from "./world";
+import type { SkillLoadout } from "./skill-loadout";
+import type { InputState, Player, Vec2, Wall, World } from "./world";
+
+/**
+ * These cases predate M4 and cover the single-player rules M1-M3 established;
+ * they are kept intact, driven through the multi-player API with one player.
+ * `multiplayer.test.ts` covers what only a world with several players can show.
+ */
+const SOLO = "player-1";
+
+/** The one player in a solo world (`world.players` replaced `world.player` in M4). */
+function solo(world: World): Player {
+  const player = world.players[0];
+  if (player === undefined) {
+    throw new Error("expected a solo world to hold exactly one player");
+  }
+  return player;
+}
+
+/** Advance a solo world one step with `input` for its only player. */
+function step(world: World, input: InputState): ReturnType<typeof stepSimulation> {
+  return stepSimulation(world, new Map([[SOLO, input]]));
+}
 
 const NO_INPUT: InputState = {
   moveX: 0,
@@ -46,43 +68,48 @@ const FAR_AWAY_EXTRACTION_CANDIDATES = [
   { x: 700_000, y: 0 },
 ];
 
-function newSimulation(overrides: Partial<SimulationConfig> = {}) {
+/** Config overrides, plus the two solo-player fields these cases vary most. */
+type SoloOverrides = Partial<SimulationConfig> & {
+  readonly playerStart?: Vec2;
+  readonly skillLoadout?: SkillLoadout;
+};
+
+function newSimulation(overrides: SoloOverrides = {}) {
+  const { playerStart, skillLoadout, ...config } = overrides;
   return createSimulation({
     walls: [],
-    playerStart: { x: 0, y: 0 },
-    meleeWeapon: basicSword,
-    rangedWeapon: basicBow,
+    players: [
+      {
+        id: SOLO,
+        position: playerStart ?? { x: 0, y: 0 },
+        meleeWeapon: basicSword,
+        rangedWeapon: basicBow,
+        ...(skillLoadout === undefined ? {} : { skillLoadout }),
+      },
+    ],
     enemyDefinition: chaser,
     enemySpawnPoints: [FAR_AWAY_SPAWN],
     extractionCandidatePoints: FAR_AWAY_EXTRACTION_CANDIDATES,
     seed: 1,
-    ...overrides,
+    ...config,
   });
 }
 
 describe("createSimulation", () => {
-  it("places the player at playerStart, at full health, alive, with the configured weapons", () => {
+  it("places the player at their spawn, at full health, alive, with the configured weapons", () => {
     const walls: Wall[] = [{ x: 0, y: 0, width: 10, height: 10 }];
-    const world = createSimulation({
-      walls,
-      playerStart: { x: 5, y: 7 },
-      meleeWeapon: basicSword,
-      rangedWeapon: basicBow,
-      enemyDefinition: chaser,
-      enemySpawnPoints: [FAR_AWAY_SPAWN],
-      extractionCandidatePoints: FAR_AWAY_EXTRACTION_CANDIDATES,
-      seed: 1,
-    });
-    expect(world.player.position).toEqual({ x: 5, y: 7 });
-    expect(world.player.radius).toBe(PLAYER_RADIUS);
-    expect(world.player.facing).toBe(0);
-    expect(world.player.health).toBe(PLAYER_MAX_HEALTH);
-    expect(world.player.maxHealth).toBe(PLAYER_MAX_HEALTH);
-    expect(world.player.alive).toBe(true);
-    expect(world.player.meleeWeapon).toBe(basicSword);
-    expect(world.player.rangedWeapon).toBe(basicBow);
-    expect(world.player.meleeAttack).toBeNull();
-    expect(world.player.dashCooldownMs).toBe(0);
+    const world = newSimulation({ walls, playerStart: { x: 5, y: 7 } });
+    expect(solo(world).id).toBe(SOLO);
+    expect(solo(world).position).toEqual({ x: 5, y: 7 });
+    expect(solo(world).radius).toBe(PLAYER_RADIUS);
+    expect(solo(world).facing).toBe(0);
+    expect(solo(world).health).toBe(PLAYER_MAX_HEALTH);
+    expect(solo(world).maxHealth).toBe(PLAYER_MAX_HEALTH);
+    expect(solo(world).alive).toBe(true);
+    expect(solo(world).meleeWeapon).toBe(basicSword);
+    expect(solo(world).rangedWeapon).toBe(basicBow);
+    expect(solo(world).meleeAttack).toBeNull();
+    expect(solo(world).dashCooldownMs).toBe(0);
     expect(world.walls).toBe(walls);
     expect(world.projectiles).toEqual([]);
   });
@@ -169,15 +196,15 @@ describe("stepSimulation: movement/collision (M1.1/M1.3/M1.5, unchanged this chu
 
   it("advances the player by exactly one fixed step's worth of movement", () => {
     const world = newSimulation();
-    const { world: next } = stepSimulation(world, MOVE_RIGHT);
+    const { world: next } = step(world, MOVE_RIGHT);
     const expectedDeltaX = PLAYER_SPEED * (SIMULATION_DT_MS / 1000);
-    expect(next.player.position.x).toBeCloseTo(expectedDeltaX, 6);
+    expect(solo(next).position.x).toBeCloseTo(expectedDeltaX, 6);
   });
 
   it("is deterministic: identical world + input always produce identical output", () => {
     const world = newSimulation({ walls: [{ x: 40, y: -50, width: 20, height: 200 }] });
-    const a = stepSimulation(world, MOVE_RIGHT);
-    const b = stepSimulation(world, MOVE_RIGHT);
+    const a = step(world, MOVE_RIGHT);
+    const b = step(world, MOVE_RIGHT);
     expect(a).toEqual(b);
   });
 
@@ -185,56 +212,56 @@ describe("stepSimulation: movement/collision (M1.1/M1.3/M1.5, unchanged this chu
     const wall: Wall = { x: 40, y: -50, width: 20, height: 200 };
     let world = newSimulation({ walls: [wall] });
     for (let i = 0; i < 50; i += 1) {
-      ({ world } = stepSimulation(world, MOVE_RIGHT));
+      ({ world } = step(world, MOVE_RIGHT));
     }
-    expect(world.player.position.x + world.player.radius).toBeLessThanOrEqual(wall.x);
+    expect(solo(world).position.x + solo(world).radius).toBeLessThanOrEqual(wall.x);
   });
 });
 
 describe("stepSimulation: aim (M1.4, unchanged this chunk)", () => {
   it("stores a finite aimAngle as the player's facing, normalized", () => {
     const world = newSimulation();
-    const { world: next } = stepSimulation(world, { ...NO_INPUT, aimAngle: Math.PI / 2 });
-    expect(next.player.facing).toBeCloseTo(Math.PI / 2, 10);
+    const { world: next } = step(world, { ...NO_INPUT, aimAngle: Math.PI / 2 });
+    expect(solo(next).facing).toBeCloseTo(Math.PI / 2, 10);
   });
 });
 
 describe("stepSimulation: dash (M1.S1)", () => {
   it("moves the player further than an ordinary step in the held movement direction", () => {
     const world = newSimulation();
-    const { world: dashed } = stepSimulation(world, DASH_RIGHT);
-    const { world: walked } = stepSimulation(world, MOVE_RIGHT);
-    expect(dashed.player.position.x).toBeGreaterThan(walked.player.position.x);
+    const { world: dashed } = step(world, DASH_RIGHT);
+    const { world: walked } = step(world, MOVE_RIGHT);
+    expect(solo(dashed).position.x).toBeGreaterThan(solo(walked).position.x);
   });
 
   it("sets a cooldown that blocks a second dash immediately after", () => {
     let world = newSimulation();
-    ({ world } = stepSimulation(world, DASH_RIGHT));
-    const xAfterFirstDash = world.player.position.x;
-    ({ world } = stepSimulation(world, DASH_RIGHT));
+    ({ world } = step(world, DASH_RIGHT));
+    const xAfterFirstDash = solo(world).position.x;
+    ({ world } = step(world, DASH_RIGHT));
     // Only the ordinary movement step applies now; position gain should be
     // much smaller than another full dash would add.
-    const xAfterSecondAttempt = world.player.position.x;
+    const xAfterSecondAttempt = solo(world).position.x;
     const ordinaryStepDistance = PLAYER_SPEED * (SIMULATION_DT_MS / 1000);
     expect(xAfterSecondAttempt - xAfterFirstDash).toBeCloseTo(ordinaryStepDistance, 6);
   });
 
   it("dashes toward facing when no movement direction is held", () => {
     const world = newSimulation();
-    const { world: aimed } = stepSimulation(world, { ...NO_INPUT, aimAngle: Math.PI });
-    const { world: dashed } = stepSimulation(aimed, {
+    const { world: aimed } = step(world, { ...NO_INPUT, aimAngle: Math.PI });
+    const { world: dashed } = step(aimed, {
       ...NO_INPUT,
       aimAngle: Math.PI,
       dashPressed: true,
     });
-    expect(dashed.player.position.x).toBeLessThan(aimed.player.position.x);
+    expect(solo(dashed).position.x).toBeLessThan(solo(aimed).position.x);
   });
 
   it("is blocked by a wall exactly like ordinary movement", () => {
     const wall: Wall = { x: 30, y: -200, width: 300, height: 400 };
     const world = newSimulation({ walls: [wall] });
-    const { world: next } = stepSimulation(world, DASH_RIGHT);
-    expect(next.player.position.x + next.player.radius).toBeLessThanOrEqual(wall.x);
+    const { world: next } = step(world, DASH_RIGHT);
+    expect(solo(next).position.x + solo(next).radius).toBeLessThanOrEqual(wall.x);
   });
 
   it("[D-2 regression] does not tunnel through a wall thinner than DASH_DISTANCE_PX (140px)", () => {
@@ -245,8 +272,8 @@ describe("stepSimulation: dash (M1.S1)", () => {
     // pre-fix code, this test fails (player ends up past the wall).
     const wall: Wall = { x: 30, y: -200, width: 20, height: 400 };
     const world = newSimulation({ walls: [wall] });
-    const { world: next } = stepSimulation(world, DASH_RIGHT);
-    expect(next.player.position.x + next.player.radius).toBeLessThanOrEqual(wall.x);
+    const { world: next } = step(world, DASH_RIGHT);
+    expect(solo(next).position.x + solo(next).radius).toBeLessThanOrEqual(wall.x);
   });
 });
 
@@ -259,7 +286,7 @@ describe("stepSimulation: swept wall collision fixes D-1 and D-2 (docs/M1_ISSUES
     // positioned past the wall).
     const wall: Wall = { x: 10, y: -50, width: 15, height: 100 };
     let world = newSimulation({ walls: [wall] });
-    ({ world } = stepSimulation(world, FIRE));
+    ({ world } = step(world, FIRE));
     expect(world.projectiles).toHaveLength(0);
   });
 
@@ -269,8 +296,8 @@ describe("stepSimulation: swept wall collision fixes D-1 and D-2 (docs/M1_ISSUES
     // the wall and damages the enemy on the second step, failing this test.
     const wall: Wall = { x: 10, y: -50, width: 15, height: 100 };
     let world = newSimulation({ walls: [wall], enemySpawnPoints: [{ x: 60, y: 0 }] });
-    ({ world } = stepSimulation(world, FIRE));
-    ({ world } = stepSimulation(world, NO_INPUT));
+    ({ world } = step(world, FIRE));
+    ({ world } = step(world, NO_INPUT));
     expect(world.enemies[0]!.health).toBe(chaser.health);
     expect(world.projectiles).toHaveLength(0);
   });
@@ -285,12 +312,12 @@ function swingBasicSwordOnce(world: World): World {
   const stepsToActive = Math.ceil(basicSword.windupMs! / SIMULATION_DT_MS);
   const attackIntervalSteps = Math.ceil(basicSword.attackIntervalMs / SIMULATION_DT_MS);
   let current = world;
-  ({ world: current } = stepSimulation(current, ATTACK));
+  ({ world: current } = step(current, ATTACK));
   for (let i = 0; i < stepsToActive; i += 1) {
-    ({ world: current } = stepSimulation(current, NO_INPUT));
+    ({ world: current } = step(current, NO_INPUT));
   }
   for (let i = 0; i < attackIntervalSteps - (1 + stepsToActive); i += 1) {
-    ({ world: current } = stepSimulation(current, NO_INPUT));
+    ({ world: current } = step(current, NO_INPUT));
   }
   return current;
 }
@@ -298,10 +325,10 @@ function swingBasicSwordOnce(world: World): World {
 describe("stepSimulation: melee/ranged attacks now target the real enemy (M1.6-M1.9 integration)", () => {
   it("damages the enemy once a melee swing reaches its active window", () => {
     let world = newSimulation({ enemySpawnPoints: [{ x: 40, y: 0 }] });
-    ({ world } = stepSimulation(world, ATTACK));
+    ({ world } = step(world, ATTACK));
     const stepsToActive = Math.ceil(basicSword.windupMs! / SIMULATION_DT_MS);
     for (let i = 0; i < stepsToActive; i += 1) {
-      ({ world } = stepSimulation(world, NO_INPUT));
+      ({ world } = step(world, NO_INPUT));
     }
     expect(world.enemies[0]!.health).toBe(chaser.health - basicSword.damage);
   });
@@ -325,7 +352,7 @@ describe("stepSimulation: melee/ranged attacks now target the real enemy (M1.6-M
 
   it("damages the enemy with a bow projectile", () => {
     let world = newSimulation({ enemySpawnPoints: [{ x: 30, y: 0 }] });
-    ({ world } = stepSimulation(world, FIRE));
+    ({ world } = step(world, FIRE));
     expect(world.enemies[0]!.health).toBe(chaser.health - basicBow.damage);
     expect(world.projectiles).toHaveLength(0); // consumed on hit
   });
@@ -334,11 +361,11 @@ describe("stepSimulation: melee/ranged attacks now target the real enemy (M1.6-M
 describe("stepSimulation: chaser movement and contact damage (M1.9/M1.10)", () => {
   it("moves the enemy toward the player over successive steps", () => {
     let world = newSimulation({ enemySpawnPoints: [{ x: 500, y: 0 }] });
-    const startDistance = world.enemies[0]!.position.x - world.player.position.x;
+    const startDistance = world.enemies[0]!.position.x - solo(world).position.x;
     for (let i = 0; i < 10; i += 1) {
-      ({ world } = stepSimulation(world, NO_INPUT));
+      ({ world } = step(world, NO_INPUT));
     }
-    const endDistance = world.enemies[0]!.position.x - world.player.position.x;
+    const endDistance = world.enemies[0]!.position.x - solo(world).position.x;
     expect(endDistance).toBeLessThan(startDistance);
   });
 
@@ -347,26 +374,26 @@ describe("stepSimulation: chaser movement and contact damage (M1.9/M1.10)", () =
       enemyDefinition: { ...chaser, behavior: "heavy" },
       enemySpawnPoints: [{ x: 500, y: 0 }],
     });
-    const { world: next } = stepSimulation(world, NO_INPUT);
+    const { world: next } = step(world, NO_INPUT);
     expect(next.enemies[0]!.position).toEqual(world.enemies[0]!.position);
   });
 
   it("damages the player on contact, then gates further contact damage by a cooldown", () => {
     const touchingDistance = PLAYER_RADIUS + ENEMY_RADIUS - 1;
     let world = newSimulation({ enemySpawnPoints: [{ x: touchingDistance, y: 0 }] });
-    ({ world } = stepSimulation(world, NO_INPUT));
-    expect(world.player.health).toBe(PLAYER_MAX_HEALTH - chaser.contactDamage);
+    ({ world } = step(world, NO_INPUT));
+    expect(solo(world).health).toBe(PLAYER_MAX_HEALTH - chaser.contactDamage);
 
     // Immediately stepping again (well within the contact cooldown) must not re-damage.
-    ({ world } = stepSimulation(world, NO_INPUT));
-    expect(world.player.health).toBe(PLAYER_MAX_HEALTH - chaser.contactDamage);
+    ({ world } = step(world, NO_INPUT));
+    expect(solo(world).health).toBe(PLAYER_MAX_HEALTH - chaser.contactDamage);
 
     // After the contact cooldown fully elapses, contact damage can apply again.
     const stepsToCooldown = Math.ceil(chaser.contactDamageIntervalMs / SIMULATION_DT_MS);
     for (let i = 0; i < stepsToCooldown; i += 1) {
-      ({ world } = stepSimulation(world, NO_INPUT));
+      ({ world } = step(world, NO_INPUT));
     }
-    expect(world.player.health).toBe(PLAYER_MAX_HEALTH - 2 * chaser.contactDamage);
+    expect(solo(world).health).toBe(PLAYER_MAX_HEALTH - 2 * chaser.contactDamage);
   });
 });
 
@@ -378,24 +405,28 @@ describe("stepSimulation: player health and death (M1.10)", () => {
       enemyDefinition: highContactDamageEnemy,
       enemySpawnPoints: [{ x: touchingDistance, y: 0 }],
     });
-    ({ world } = stepSimulation(world, NO_INPUT));
-    expect(world.player.health).toBe(0);
-    expect(world.player.alive).toBe(false);
+    ({ world } = step(world, NO_INPUT));
+    expect(solo(world).health).toBe(0);
+    expect(solo(world).alive).toBe(false);
   });
 
-  it("stops all processing once the player is dead (movement, cooldowns, everything freezes)", () => {
+  it("freezes a dead player while the world keeps running (M4: the match is no longer one player's run)", () => {
     const touchingDistance = PLAYER_RADIUS + ENEMY_RADIUS - 1;
     const highContactDamageEnemy = { ...chaser, contactDamage: PLAYER_MAX_HEALTH };
     let world = newSimulation({
       enemyDefinition: highContactDamageEnemy,
       enemySpawnPoints: [{ x: touchingDistance, y: 0 }],
     });
-    ({ world } = stepSimulation(world, NO_INPUT));
-    expect(world.player.alive).toBe(false);
+    ({ world } = step(world, NO_INPUT));
+    expect(solo(world).alive).toBe(false);
 
-    const { world: next, hitEvents } = stepSimulation(world, MOVE_RIGHT);
-    expect(next).toEqual(world); // fully frozen: not even movement applies
+    const { world: next, hitEvents } = step(world, MOVE_RIGHT);
+    // Through M3 this asserted the whole world froze, because the world *was*
+    // the one player's run. In M4 the other seven players' matches continue, so
+    // what freezes is the dead player: not even movement applies to them.
+    expect(solo(next)).toEqual(solo(world));
     expect(hitEvents).toEqual([]);
+    expect(next.tick).toBe(world.tick + 1);
   });
 });
 
@@ -405,15 +436,15 @@ describe("stepSimulation: loot pickup (M2.6)", () => {
   it("adds a nearby ground-loot item to the inventory while interact is held", () => {
     let world = newSimulation({ groundLootSpawnPoints: [{ x: 0, y: 0 }] });
     expect(world.groundLoot).toHaveLength(1);
-    ({ world } = stepSimulation(world, INTERACT));
-    expect(world.player.inventory[0]?.id).toBe(honingStone.id);
+    ({ world } = step(world, INTERACT));
+    expect(solo(world).inventory[0]?.id).toBe(honingStone.id);
     expect(world.groundLoot).toHaveLength(0); // picked up, removed from the ground
   });
 
   it("does nothing when no ground loot is nearby", () => {
     let world = newSimulation({ groundLootSpawnPoints: [{ x: 100_000, y: 100_000 }] });
-    ({ world } = stepSimulation(world, INTERACT));
-    expect(world.player.inventory.every((slot) => slot === null)).toBe(true);
+    ({ world } = step(world, INTERACT));
+    expect(solo(world).inventory.every((slot) => slot === null)).toBe(true);
     expect(world.groundLoot).toHaveLength(1);
   });
 });
@@ -428,13 +459,13 @@ describe("stepSimulation: carried loot changes build (M2.4 exit criterion)", () 
       enemySpawnPoints: [{ x: 40, y: 0 }],
       groundLootSpawnPoints: [{ x: 0, y: 0 }],
     });
-    ({ world } = stepSimulation(world, INTERACT));
-    expect(world.player.inventory[0]?.id).toBe(honingStone.id);
+    ({ world } = step(world, INTERACT));
+    expect(solo(world).inventory[0]?.id).toBe(honingStone.id);
 
-    ({ world } = stepSimulation(world, ATTACK));
+    ({ world } = step(world, ATTACK));
     const stepsToActive = Math.ceil(basicSword.windupMs! / SIMULATION_DT_MS);
     for (let i = 0; i < stepsToActive; i += 1) {
-      ({ world } = stepSimulation(world, NO_INPUT));
+      ({ world } = step(world, NO_INPUT));
     }
     expect(world.enemies[0]!.health).toBe(chaser.health - (basicSword.damage + 3));
   });
@@ -446,17 +477,17 @@ describe("stepSimulation: secure slot removes active effect (M2.5 exit criterion
       enemySpawnPoints: [{ x: 40, y: 0 }],
       groundLootSpawnPoints: [{ x: 0, y: 0 }],
     });
-    ({ world } = stepSimulation(world, INTERACT));
-    expect(world.player.inventory[0]?.id).toBe(honingStone.id);
+    ({ world } = step(world, INTERACT));
+    expect(solo(world).inventory[0]?.id).toBe(honingStone.id);
 
-    ({ world } = stepSimulation(world, { ...NO_INPUT, secureSlotIndex: 0 }));
-    expect(world.player.secureSlot?.id).toBe(honingStone.id);
-    expect(world.player.inventory[0]).toBeNull();
+    ({ world } = step(world, { ...NO_INPUT, secureSlotIndex: 0 }));
+    expect(solo(world).secureSlot?.id).toBe(honingStone.id);
+    expect(solo(world).inventory[0]).toBeNull();
 
-    ({ world } = stepSimulation(world, ATTACK));
+    ({ world } = step(world, ATTACK));
     const stepsToActive = Math.ceil(basicSword.windupMs! / SIMULATION_DT_MS);
     for (let i = 0; i < stepsToActive; i += 1) {
-      ({ world } = stepSimulation(world, NO_INPUT));
+      ({ world } = step(world, NO_INPUT));
     }
     // No carried build effect anymore: plain basic_sword damage, not +3.
     expect(world.enemies[0]!.health).toBe(chaser.health - basicSword.damage);
@@ -469,17 +500,17 @@ describe("stepSimulation: secure slot removes active effect (M2.5 exit criterion
         { x: 5, y: 0 },
       ],
     });
-    ({ world } = stepSimulation(world, INTERACT));
-    ({ world } = stepSimulation(world, INTERACT));
-    expect(world.player.inventory.filter((slot) => slot !== null)).toHaveLength(2);
+    ({ world } = step(world, INTERACT));
+    ({ world } = step(world, INTERACT));
+    expect(solo(world).inventory.filter((slot) => slot !== null)).toHaveLength(2);
 
-    ({ world } = stepSimulation(world, { ...NO_INPUT, secureSlotIndex: 0 }));
-    const securedFirst = world.player.secureSlot;
+    ({ world } = step(world, { ...NO_INPUT, secureSlotIndex: 0 }));
+    const securedFirst = solo(world).secureSlot;
     expect(securedFirst).not.toBeNull();
 
-    ({ world } = stepSimulation(world, { ...NO_INPUT, secureSlotIndex: 1 }));
-    expect(world.player.secureSlot).toBe(securedFirst); // unchanged, refused
-    expect(world.player.inventory[1]).not.toBeNull(); // the second item stayed put
+    ({ world } = step(world, { ...NO_INPUT, secureSlotIndex: 1 }));
+    expect(solo(world).secureSlot).toBe(securedFirst); // unchanged, refused
+    expect(solo(world).inventory[1]).not.toBeNull(); // the second item stayed put
   });
 });
 
@@ -497,17 +528,17 @@ describe("stepSimulation: rotating extraction (M2.7)", () => {
 
     const stepsToChannel = Math.ceil(5000 / SIMULATION_DT_MS); // EXTRACTION_CHANNEL_MS
     for (let i = 0; i < stepsToChannel; i += 1) {
-      ({ world } = stepSimulation(world, INTERACT));
+      ({ world } = step(world, INTERACT));
     }
-    expect(world.runResult?.outcome).toBe("extracted");
+    expect(solo(world).runResult?.outcome).toBe("extracted");
   });
 
   it("releasing interact resets channel progress instead of accumulating it", () => {
     let world = newSimulation({ extractionCandidatePoints: EXTRACTION_HERE });
-    ({ world } = stepSimulation(world, INTERACT));
-    expect(world.player.extractionProgressMs).toBeGreaterThan(0);
-    ({ world } = stepSimulation(world, NO_INPUT));
-    expect(world.player.extractionProgressMs).toBe(0);
+    ({ world } = step(world, INTERACT));
+    expect(solo(world).extractionProgressMs).toBeGreaterThan(0);
+    ({ world } = step(world, NO_INPUT));
+    expect(solo(world).extractionProgressMs).toBe(0);
   });
 
   it("taking contact damage interrupts an in-progress channel", () => {
@@ -516,12 +547,12 @@ describe("stepSimulation: rotating extraction (M2.7)", () => {
       extractionCandidatePoints: EXTRACTION_HERE,
       enemySpawnPoints: [{ x: touchingDistance, y: 0 }],
     });
-    ({ world } = stepSimulation(world, INTERACT));
+    ({ world } = step(world, INTERACT));
     // Contact damage applies this same step (the enemy already touches the
     // player at spawn), so progress should have been reset to zero, not
     // accumulated.
-    expect(world.player.extractionProgressMs).toBe(0);
-    expect(world.player.health).toBeLessThan(PLAYER_MAX_HEALTH);
+    expect(solo(world).extractionProgressMs).toBe(0);
+    expect(solo(world).health).toBeLessThan(PLAYER_MAX_HEALTH);
   });
 });
 
@@ -536,19 +567,19 @@ describe("stepSimulation: death and extraction differ correctly (M2.8 exit crite
       extractionCandidatePoints: EXTRACTION_HERE,
       groundLootSpawnPoints: [{ x: 0, y: 0 }],
     });
-    ({ world } = stepSimulation(world, INTERACT)); // picks up honing_stone into inventory[0]
+    ({ world } = step(world, INTERACT)); // picks up honing_stone into inventory[0]
 
     const stepsToChannel = Math.ceil(5000 / SIMULATION_DT_MS);
     for (let i = 0; i < stepsToChannel; i += 1) {
-      ({ world } = stepSimulation(world, INTERACT));
+      ({ world } = step(world, INTERACT));
     }
-    expect(world.runResult).toEqual({
+    expect(solo(world).runResult).toEqual({
       outcome: "extracted",
       pointsGained: honingStone.points,
       itemsConverted: 1,
       itemsLost: 0,
     });
-    expect(world.player.inventory.every((slot) => slot === null)).toBe(true);
+    expect(solo(world).inventory.every((slot) => slot === null)).toBe(true);
   });
 
   // The enemy spawns far away so the pickup step happens with no contact yet,
@@ -558,10 +589,10 @@ describe("stepSimulation: death and extraction differ correctly (M2.8 exit crite
   // same step.
   function stepUntilDead(world: import("./world").World, maxSteps = 300): import("./world").World {
     let current = world;
-    for (let i = 0; i < maxSteps && current.player.alive; i += 1) {
-      ({ world: current } = stepSimulation(current, NO_INPUT));
+    for (let i = 0; i < maxSteps && solo(current).alive; i += 1) {
+      ({ world: current } = step(current, NO_INPUT));
     }
-    if (current.player.alive) {
+    if (solo(current).alive) {
       throw new Error("player did not die within maxSteps; test setup is wrong");
     }
     return current;
@@ -574,17 +605,17 @@ describe("stepSimulation: death and extraction differ correctly (M2.8 exit crite
       enemySpawnPoints: [{ x: 500, y: 0 }],
       groundLootSpawnPoints: [{ x: 0, y: 0 }],
     });
-    ({ world } = stepSimulation(world, INTERACT)); // picks up honing_stone; enemy still far away
-    expect(world.player.inventory[0]?.id).toBe(honingStone.id);
+    ({ world } = step(world, INTERACT)); // picks up honing_stone; enemy still far away
+    expect(solo(world).inventory[0]?.id).toBe(honingStone.id);
 
     world = stepUntilDead(world);
-    expect(world.runResult).toEqual({
+    expect(solo(world).runResult).toEqual({
       outcome: "died",
       pointsGained: { force: 0, precision: 0, motion: 0, guard: 0, signal: 0 }, // not converted
       itemsConverted: 0,
       itemsLost: 1,
     });
-    expect(world.player.inventory.every((slot) => slot === null)).toBe(true);
+    expect(solo(world).inventory.every((slot) => slot === null)).toBe(true);
     expect(world.groundLoot.some((loot) => loot.id.startsWith("loot-death-"))).toBe(true);
   });
 
@@ -595,12 +626,12 @@ describe("stepSimulation: death and extraction differ correctly (M2.8 exit crite
       enemySpawnPoints: [{ x: 500, y: 0 }],
       groundLootSpawnPoints: [{ x: 0, y: 0 }],
     });
-    ({ world } = stepSimulation(world, INTERACT)); // picks up honing_stone
-    ({ world } = stepSimulation(world, { ...NO_INPUT, secureSlotIndex: 0 })); // secures it
-    expect(world.player.secureSlot?.id).toBe(honingStone.id);
+    ({ world } = step(world, INTERACT)); // picks up honing_stone
+    ({ world } = step(world, { ...NO_INPUT, secureSlotIndex: 0 })); // secures it
+    expect(solo(world).secureSlot?.id).toBe(honingStone.id);
 
     world = stepUntilDead(world);
-    expect(world.runResult).toEqual({
+    expect(solo(world).runResult).toEqual({
       outcome: "died",
       pointsGained: honingStone.points, // the secure slot survives and converts
       itemsConverted: 1,
@@ -608,16 +639,18 @@ describe("stepSimulation: death and extraction differ correctly (M2.8 exit crite
     });
   });
 
-  it("stepSimulation is a full no-op once runResult is set", () => {
+  it("leaves an extracted player untouched by every later step", () => {
     let world = newSimulation({ extractionCandidatePoints: EXTRACTION_HERE });
     const stepsToChannel = Math.ceil(5000 / SIMULATION_DT_MS);
     for (let i = 0; i < stepsToChannel; i += 1) {
-      ({ world } = stepSimulation(world, INTERACT));
+      ({ world } = step(world, INTERACT));
     }
-    expect(world.runResult).not.toBeNull();
+    expect(solo(world).runResult).not.toBeNull();
 
-    const { world: next, hitEvents } = stepSimulation(world, MOVE_RIGHT);
-    expect(next).toEqual(world);
+    const { world: next, hitEvents } = step(world, MOVE_RIGHT);
+    // The extracted player is out of the match: their input does nothing and
+    // their settled result cannot be recomputed or overwritten by a later step.
+    expect(solo(next)).toEqual(solo(world));
     expect(hitEvents).toEqual([]);
   });
 });
@@ -633,10 +666,10 @@ describe("stepSimulation: skill effects flow through the real pipeline (M3.3 exi
       enemyDefinition: STATIONARY_CHASER,
       enemySpawnPoints: [{ x: 80, y: 0 }],
     });
-    ({ world } = stepSimulation(world, ATTACK));
+    ({ world } = step(world, ATTACK));
     const stepsToActive = Math.ceil(basicSword.windupMs! / SIMULATION_DT_MS);
     for (let i = 0; i < stepsToActive; i += 1) {
-      ({ world } = stepSimulation(world, NO_INPUT));
+      ({ world } = step(world, NO_INPUT));
     }
     expect(world.enemies[0]!.health).toBe(chaser.health);
   });
@@ -648,17 +681,17 @@ describe("stepSimulation: skill effects flow through the real pipeline (M3.3 exi
       skillLoadout: [extendedReach],
       enemySpawnPoints: [{ x: 80, y: 0 }],
     });
-    ({ world } = stepSimulation(world, ATTACK));
+    ({ world } = step(world, ATTACK));
     const stepsToActive = Math.ceil(basicSword.windupMs! / SIMULATION_DT_MS);
     for (let i = 0; i < stepsToActive; i += 1) {
-      ({ world } = stepSimulation(world, NO_INPUT));
+      ({ world } = step(world, NO_INPUT));
     }
     expect(world.enemies[0]!.health).toBeLessThan(chaser.health);
   });
 
   it("multishot in the permanent loadout spawns more projectiles through a real attack", () => {
     let world = newSimulation({ skillLoadout: [multishot] });
-    ({ world } = stepSimulation(world, FIRE));
+    ({ world } = step(world, FIRE));
     expect(world.projectiles).toHaveLength((basicBow.projectileCount ?? 0) + 2);
   });
 
@@ -668,14 +701,14 @@ describe("stepSimulation: skill effects flow through the real pipeline (M3.3 exi
       skillLoadout: [bulwarkStrike],
       enemySpawnPoints: [{ x: 40, y: 0 }],
     });
-    expect(world.player.shieldHp).toBe(0);
-    ({ world } = stepSimulation(world, ATTACK));
+    expect(solo(world).shieldHp).toBe(0);
+    ({ world } = step(world, ATTACK));
     const stepsToActive = Math.ceil(basicSword.windupMs! / SIMULATION_DT_MS);
     for (let i = 0; i < stepsToActive; i += 1) {
-      ({ world } = stepSimulation(world, NO_INPUT));
+      ({ world } = step(world, NO_INPUT));
     }
     expect(world.enemies[0]!.health).toBeLessThan(chaser.health); // the hit landed
-    expect(world.player.shieldHp).toBe(bulwarkStrike.effects.shieldOnHitAdd);
+    expect(solo(world).shieldHp).toBe(bulwarkStrike.effects.shieldOnHitAdd);
   });
 
   it("shield absorbs contact damage before health", () => {
@@ -687,10 +720,10 @@ describe("stepSimulation: skill effects flow through the real pipeline (M3.3 exi
     });
     // Seed a shield directly (isolating the contact-damage-consumes-shield
     // wiring from how the shield was earned, which is covered above).
-    world = { ...world, player: { ...world.player, shieldHp: 4 } };
-    ({ world } = stepSimulation(world, NO_INPUT));
-    expect(world.player.shieldHp).toBe(0);
-    expect(world.player.health).toBe(PLAYER_MAX_HEALTH - 1); // 5 contact damage - 4 shield
+    world = { ...world, players: [{ ...solo(world), shieldHp: 4 }] };
+    ({ world } = step(world, NO_INPUT));
+    expect(solo(world).shieldHp).toBe(0);
+    expect(solo(world).health).toBe(PLAYER_MAX_HEALTH - 1); // 5 contact damage - 4 shield
   });
 });
 
@@ -698,16 +731,16 @@ describe("stepSimulation: wildcard skill chip (M3.7)", () => {
   it("picking up a nearby skill chip sets the wildcard skill and removes the chip", () => {
     let world = newSimulation({ skillChipSpawnPoints: [{ x: 0, y: 0 }] });
     expect(world.skillChips).toHaveLength(1);
-    expect(world.player.wildcardSkill).toBeNull();
-    ({ world } = stepSimulation(world, INTERACT));
-    expect(world.player.wildcardSkill).not.toBeNull();
+    expect(solo(world).wildcardSkill).toBeNull();
+    ({ world } = step(world, INTERACT));
+    expect(solo(world).wildcardSkill).not.toBeNull();
     expect(world.skillChips).toHaveLength(0);
   });
 
   it("does nothing when no skill chip is nearby", () => {
     let world = newSimulation({ skillChipSpawnPoints: [{ x: 100_000, y: 100_000 }] });
-    ({ world } = stepSimulation(world, INTERACT));
-    expect(world.player.wildcardSkill).toBeNull();
+    ({ world } = step(world, INTERACT));
+    expect(solo(world).wildcardSkill).toBeNull();
     expect(world.skillChips).toHaveLength(1);
   });
 
@@ -718,17 +751,17 @@ describe("stepSimulation: wildcard skill chip (M3.7)", () => {
         { x: 5, y: 0 },
       ],
     });
-    ({ world } = stepSimulation(world, INTERACT));
-    expect(world.player.wildcardSkill).not.toBeNull();
-    ({ world } = stepSimulation(world, INTERACT));
+    ({ world } = step(world, INTERACT));
+    expect(solo(world).wildcardSkill).not.toBeNull();
+    ({ world } = step(world, INTERACT));
     expect(world.skillChips).toHaveLength(0); // both picked up
-    expect(world.player.wildcardSkill).not.toBeNull(); // still set, never refused
+    expect(solo(world).wildcardSkill).not.toBeNull(); // still set, never refused
   });
 
   it("the wildcard's effects are included in aggregation alongside the permanent loadout", () => {
     let world = newSimulation({});
-    world = { ...world, player: { ...world.player, wildcardSkill: multishot } };
-    ({ world } = stepSimulation(world, FIRE));
+    world = { ...world, players: [{ ...solo(world), wildcardSkill: multishot }] };
+    ({ world } = step(world, FIRE));
     expect(world.projectiles).toHaveLength((basicBow.projectileCount ?? 0) + 2);
   });
 
@@ -739,9 +772,9 @@ describe("stepSimulation: wildcard skill chip (M3.7)", () => {
       enemyDefinition: highContactDamageEnemy,
       enemySpawnPoints: [{ x: touchingDistance, y: 0 }],
     });
-    world = { ...world, player: { ...world.player, wildcardSkill: multishot } };
-    ({ world } = stepSimulation(world, NO_INPUT));
-    expect(world.player.alive).toBe(false);
-    expect(world.player.wildcardSkill).toBeNull();
+    world = { ...world, players: [{ ...solo(world), wildcardSkill: multishot }] };
+    ({ world } = step(world, NO_INPUT));
+    expect(solo(world).alive).toBe(false);
+    expect(solo(world).wildcardSkill).toBeNull();
   });
 });

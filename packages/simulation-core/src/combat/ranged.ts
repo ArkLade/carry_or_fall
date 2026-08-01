@@ -68,9 +68,15 @@ export type RangedStartResult =
  *
  * `spawnSequence` seeds deterministic projectile ids (e.g. the world's step
  * counter) — no `Math.random`/PRNG is needed since the spread distribution
- * below is a fixed, deterministic formula, not a random draw. `carriedEffects`
- * (M2, `docs/M2_ISSUES.md` M2.4) defaults to {@link NO_BUILD_EFFECTS};
- * `skillEffects` (M3) defaults to {@link NO_SKILL_EFFECTS}.
+ * below is a fixed, deterministic formula, not a random draw. Ids also carry
+ * `actor.id` (M4), so two players firing on the same tick cannot produce
+ * colliding ids. `carriedEffects` (M2, `docs/M2_ISSUES.md` M2.4) defaults to
+ * {@link NO_BUILD_EFFECTS}; `skillEffects` (M3) defaults to
+ * {@link NO_SKILL_EFFECTS}.
+ *
+ * `activeProjectileCount` is **this actor's** live projectile count, not the
+ * world's: §13.4's cap 7 is written per player, so with several players sharing
+ * one world it must be counted per owner (`docs/M4_ISSUES.md` §1.1).
  */
 export function startRangedAttack(
   actor: AttackActor,
@@ -119,7 +125,8 @@ export function startRangedAttack(
     const spreadFraction = count === 1 ? 0 : i / (count - 1) - 0.5;
     const angle = definition.facing + (spreadFraction * spreadDegrees * Math.PI) / 180;
     projectiles.push({
-      id: `projectile-${String(spawnSequence)}-${String(i)}`,
+      id: `projectile-${actor.id}-${String(spawnSequence)}-${String(i)}`,
+      ownerId: actor.id,
       position: definition.origin,
       velocity: { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed },
       radius: PROJECTILE_RADIUS_PX,
@@ -330,7 +337,12 @@ export function stepProjectiles(
 
     if (hitIndex !== -1) {
       const target = workingTargets[hitIndex]!;
-      hitEvents.push({ targetId: target.id, damage, position: movedPosition });
+      hitEvents.push({
+        ownerId: projectile.ownerId,
+        targetId: target.id,
+        damage,
+        position: movedPosition,
+      });
       workingTargets = workingTargets.map((candidate, index) =>
         index === hitIndex ? applyDamage(candidate, damage) : candidate,
       );

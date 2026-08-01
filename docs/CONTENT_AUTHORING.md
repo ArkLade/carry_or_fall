@@ -1,6 +1,6 @@
 # Content Authoring
 
-Status: **M3 shipped.** §3 (weapons), §4 (skills), §5 (loot), and §6 (enemies) are all shipped —
+Status: **M4 shipped.** §3 (weapons), §4 (skills), §5 (loot), §6 (enemies), and §6.1 (the arena) are all shipped —
 `basic_sword`, `basic_bow`, `chaser`, the six `ALL_LOOT` items, and the ten `ALL_SKILLS` skills are
 real data in `@carry-or-fall/game-content`, read by the shared attack pipeline, `build-effects.ts`,
 and `skill-effects.ts` in `@carry-or-fall/simulation-core`. This document explains how to add a
@@ -263,9 +263,48 @@ export const chaser: EnemyDefinition = {
 `health` was raised from `20` to `100` during M4 preparation: at `20` a chaser died to a single
 `basic_sword` swing, so no fight lasted long enough for skill effects, stun, or shield to be
 observable in a playtest. Like every other number in this document it stays proposed and
-balance-deferred (concept §12.3). Note that the number of enemies a run spawns is **not** a
-content value — it is `SimulationConfig.enemyCount`, supplied by the map (`PlayScene`), because
-enemy count is a property of a map's encounter design rather than of the enemy definition.
+balance-deferred (concept §12.3). The number of enemies a match spawns is **not** a property of the
+enemy definition — it belongs to the map's encounter design, and since M4 it lives on the arena
+definition below as `enemyCount`.
+
+## 6.1 Arenas (M4, shipped)
+
+The map a match is played on is content. It was a client constant through M3, and had to move at M4:
+the server now owns the map — the authoritative simulation collides against these walls and spawns
+from these points — while the client draws the same geometry. Two ends needing the same data means
+one definition, and a definition consumed by both ends is content (technical plan §7.1 shares
+definitions, never authority).
+
+```ts
+export interface ArenaDefinition extends ContentDefinition {
+  readonly kind: "arena";
+  readonly width: number;
+  readonly height: number;
+  readonly walls: readonly ArenaWall[];      // axis-aligned boxes (technical plan §12.1)
+  readonly playerSpawnPoints: readonly ArenaPoint[]; // at least 8: a full room must not stack
+  readonly enemySpawnPoints: readonly ArenaPoint[];
+  readonly enemyCount: number;               // distinct candidates chosen per match by the seeded RNG
+  readonly groundLootSpawnPoints: readonly ArenaPoint[];
+  readonly skillChipSpawnPoints: readonly ArenaPoint[];
+  readonly extractionCandidatePoints: readonly ArenaPoint[]; // more than the two active at once
+  readonly openLaneY: number;                // a full-width lane with no wall across it
+}
+```
+
+`testArena` is the one arena the game ships (concept §21.1's "initial map"); `ALL_ARENAS` and
+`findArena(id)` are how both ends resolve the `arenaId` the server publishes in match state.
+
+Rules when adding or changing one:
+
+- **No spawn point may sit inside a wall or outside the bounds.** An actor spawned inside geometry is
+  stuck for the whole match: its own collision resolution will not move it out.
+  `arena.test.ts` enforces this for every arena in `ALL_ARENAS`, so a new one is checked for free.
+- **At least eight distinct player spawns**, far enough apart not to overlap — a room holds eight
+  (technical plan §8.1).
+- **More extraction candidates than the two active at once**, because concept §17.1 requires a point
+  to "reopen elsewhere".
+- **Changing arena geometry is a content-version change** (`docs/DECISIONS.md` D34): a client with
+  the old walls would draw a map the server does not collide against.
 
 ## 7. How to add a content item
 
@@ -282,7 +321,11 @@ Adapted from the technical plan §43. Adding **data** (the common case):
    (e.g. a projectile skill stack cannot exceed the weapon's `maxBounces`), not that a constant
    equals itself.
 6. If you introduced a new field or `kind`, update this document.
-7. Run all tests (`pnpm test`, and `pnpm test:integration` if server behavior changed).
+7. **Bump `CONTENT_VERSION`** (`packages/game-content/src/version.ts`) if the change would make a
+   stale client disagree with the server about what a player sees or is awarded — new or removed ids,
+   changed damage or ranges, changed arena geometry. A purely cosmetic change does not need it. The
+   join handshake compares this version and refuses a mismatched client (`docs/DECISIONS.md` D34).
+8. Run all tests (`pnpm test`, and `pnpm test:integration` if server behavior changed).
 
 Adding a **new effect primitive** (rare) is not content work and requires more (technical plan
 §43): design approval, server implementation, client visualization, protocol review, anti-recursion

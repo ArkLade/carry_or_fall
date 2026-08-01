@@ -5,8 +5,11 @@
  */
 import { PROTOCOL_VERSION } from "@carry-or-fall/protocol";
 
+import { matchMaker } from "@colyseus/core";
+
 import { loadServerEnv } from "./config/env";
 import { createLogger } from "./logger";
+import { startMetricsReporter } from "./metrics";
 import { createGameServer } from "./server";
 
 function toMessage(error: unknown): string {
@@ -20,6 +23,12 @@ async function main(): Promise<void> {
     buildVersion: env.buildVersion,
     logger,
     allowedOrigins: env.allowedOrigins,
+    // Each key is omitted entirely when unset, so the room falls back to its
+    // own gameplay defaults rather than being handed a null.
+    match: {
+      ...(env.matchSeed === null ? {} : { seed: env.matchSeed }),
+      ...(env.matchLobbyMs === null ? {} : { lobbyDurationMs: env.matchLobbyMs }),
+    },
   });
 
   let shuttingDown = false;
@@ -41,6 +50,13 @@ async function main(): Promise<void> {
 
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
+
+  // Periodic health numbers (technical plan §32.2). Cheap, and the only way a
+  // server that degrades over a long session shows up before a user notices.
+  startMetricsReporter({
+    logger,
+    getActiveRooms: async () => (await matchMaker.query({})).length,
+  });
 
   await gameServer.listen(env.port);
   logger.info("server listening", {
