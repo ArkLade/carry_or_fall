@@ -67,7 +67,37 @@ async function joinSameMatch(pageA: Page, pageB: Page): Promise<void> {
   await confirmLoadout(pageB);
 
   await Promise.all([waitForMatchRunning(pageA), waitForMatchRunning(pageB)]);
+
+  // Assert the thing every test below silently assumes. The room locks when the
+  // countdown expires (technical plan §8.3), so a second client that is slow to
+  // join lands in a *different* match — and then every assertion about "the
+  // other player" is waiting for someone who was never there, which reads as a
+  // slow test rather than a broken premise. Checked once, here, so it is named.
+  const [playersA, playersB] = await Promise.all([getSnapshot(pageA), getSnapshot(pageB)]);
+  if (playersA.players.length !== 2 || playersB.players.length !== 2) {
+    throw new Error(
+      "the two clients did not land in the same match " +
+        `(client A sees ${String(playersA.players.length)} player(s), ` +
+        `client B sees ${String(playersB.players.length)}). ` +
+        "The lobby countdown (MATCH_LOBBY_MS in playwright.config.ts) is the window " +
+        "in which the second client must join; it is too short for this machine.",
+    );
+  }
 }
+
+/**
+ * How long an idle player survives once a match starts, with this suite's seed.
+ *
+ * Not a guess: the three chasers spawn at least ~900 px away (`MATCH_SEED=76`
+ * puts them all in the far or lower half), they close at 90 px/s, and contact
+ * costs 5 health every 500 ms against 100 health. So the earliest an untouched,
+ * motionless player can die is roughly 10 s of travel plus 10 s of grinding.
+ *
+ * The two-client tests keep one client idle while the other acts, so this is the
+ * budget that client's stillness has to fit inside. Tests below assert they
+ * finished well within it rather than trusting that they did.
+ */
+const IDLE_PLAYER_SURVIVES_MS = 20_000;
 
 test.describe("two real browsers play one match (§38 M4 exit criterion 1)", () => {
   test("both clients join the same room and see two players", async ({ page, browser }) => {
@@ -208,13 +238,38 @@ test.describe("two real browsers play one match (§38 M4 exit criterion 1)", () 
       )[0]!;
       const idA = await getLocalPlayerId(page);
 
-      // A walks to it and channels to completion. B does nothing: their run
-      // must be entirely unaffected.
+      // A walks to it and channels to completion. B does nothing: their run must
+      // be entirely unaffected. The clock starts here because this is when B's
+      // stillness starts costing them (see IDLE_PLAYER_SURVIVES_MS).
+      const idleStartedAt = Date.now();
       await walkToArenaPoint(page, point.x, point.y, 45_000);
-      await interactFor(page, 8_000);
 
-      const resultA = (await getPrivateState(page)).runResult;
+      // Hold interact until the server actually reports the extraction, rather
+      // than for a fixed span. The channel is five seconds; waiting a fixed
+      // eight spent three of them keeping B idle for no reason, and the whole
+      // difficulty in this test is how long B is left standing still.
+      await page.keyboard.down("KeyE");
+      let resultA: Awaited<ReturnType<typeof getPrivateState>>["runResult"] = null;
+      try {
+        const deadline = Date.now() + 15_000;
+        while (Date.now() < deadline) {
+          resultA = (await getPrivateState(page)).runResult;
+          if (resultA !== null) {
+            break;
+          }
+          await page.waitForTimeout(200);
+        }
+      } finally {
+        await page.keyboard.up("KeyE");
+      }
       expect(resultA?.outcome).toBe("extracted");
+
+      // The premise this test rests on, asserted rather than assumed: B was only
+      // ever idle for a fraction of the time it takes the chasers to kill them,
+      // so "B is still alive" below is a property of the design and not of how
+      // busy the machine happened to be.
+      const idleMs = Date.now() - idleStartedAt;
+      expect(idleMs).toBeLessThan(IDLE_PLAYER_SURVIVES_MS);
 
       // B is still playing, still alive, and has no result of their own.
       const stateB = await getPrivateState(second);

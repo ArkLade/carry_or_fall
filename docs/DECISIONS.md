@@ -586,3 +586,61 @@ milestone, not implemented yet).
   the balance decisions §15/§16 imply. `docs/M3_ISSUES.md`'s parenthetical grouping of PvP with "other
   players (M4)" is superseded by this entry.
 - **Status:** Approved.
+
+## D42. The browser suite configures itself; it never reads the gitignored `.env`
+
+- **Date:** 2026-08-01.
+- **Decision:** `apps/client/playwright.config.ts` supplies every variable the end-to-end suite needs
+  through its `webServer` `env` blocks — `VITE_GAME_SERVER_URL` and `VITE_BUILD_VERSION` for the
+  client, `PORT`, `ALLOWED_ORIGINS`, `GAME_BUILD_VERSION`, `LOG_LEVEL`, `MATCH_SEED`, and
+  `MATCH_LOBBY_MS` for the server. The suite reads nothing from the repository-root `.env`. CI is
+  narrowed to `push` on `main` plus `pull_request`, with a concurrency group keyed on
+  `github.head_ref || github.ref`; the browser job gains `timeout-minutes: 25`, and the suite runs
+  with `maxFailures: 3` and `retries: 0` in CI.
+- **Reason:** The root `.env` is gitignored by policy (`DEVELOPMENT_RULES.md`: only `.env.example` is
+  tracked), so it can never exist on a CI runner or a fresh clone. The suite depended on it for the
+  client's `VITE_*` variables, and `loadClientEnv` correctly throws when they are absent — so in CI
+  the client threw before it could connect, no authoritative state ever arrived, and all 29 tests
+  that enter a match timed out identically after 33 minutes. **An automated suite may not depend on a
+  file that policy forbids committing**; that is the durable rule this entry exists to record.
+  Narrowing `push` removes a second defect found in the same run: an unrestricted `push` trigger plus
+  `pull_request` ran the whole workflow twice for one commit, and the old concurrency group could not
+  collapse them because `github.ref` differs between the two events for the same branch.
+- **Consequences:** A fresh clone with no `.env` passes the suite; this is verified by renaming the
+  local `.env` aside and re-running, and is the standard way to check any future change here. The
+  suite's runtime dropped from roughly ten minutes to roughly four, because `MATCH_LOBBY_MS` removes
+  eight seconds of countdown from every one of thirty tests — a human-timescale wait (concept §22.2)
+  that a suite driving both clients itself has no use for. `MATCH_SEED` and `MATCH_LOBBY_MS` are
+  server configuration, read from the environment like `PORT`; `apps/client/test/build.test.ts`
+  asserts neither reaches the client production bundle, since a client that could set its own
+  countdown or seed would be a client asserting a match rule (technical plan §5.1). Retries are off:
+  the flake sources this suite had were each traced and fixed, so a failure is now information rather
+  than noise to absorb.
+- **Status:** Approved.
+
+## D43. Server metrics; the e2e lobby window is sized from a measured join time
+
+- **Date:** 2026-08-01.
+- **Decision:** The server reports the technical plan §32.2 metrics it can produce — active rooms,
+  average and maximum room tick duration, event-loop lag, heap and RSS — as one periodic structured
+  log line (`apps/server/src/metrics.ts`), and `apps/server/test/match-lifecycle.test.ts` asserts that
+  matches created and abandoned in sequence dispose and leave step timing flat. Separately, the
+  browser suite's `MATCH_LOBBY_MS` is set to **5000**, chosen from a measurement rather than picked.
+- **Reason:** A browser test that ran 17s alone took 49s inside the full suite, and the obvious
+  suspicion — abandoned rooms still running their 50 ms step loop — needed measuring rather than
+  arguing about. It was wrong: rooms peak at 4 (bounded overlap from the reconnect window) and end at
+  0, and tick time, event-loop lag, and memory were all flat or better late in a session than early.
+  The real cause was the lobby window. The countdown starts on the first join and the room locks when
+  it expires (§8.3), so it is the whole window for a *second* browser to reach the same match; that
+  join measures 620-930 ms, and a previously-chosen one-second lobby left as little as 70 ms of
+  margin. Under full-suite load the second client missed it, the two clients landed in **different
+  matches**, and assertions about the other player waited out their timeouts. Verified by shrinking
+  the window to 300 ms, where the clients split on every attempt.
+- **Consequences:** The metrics exist because "is the server still healthy after a while" is a §38 M8
+  requirement, and without them a degrading server is invisible until a user notices; they cost two
+  counters and a periodic log line. The 5000 ms lobby costs roughly three minutes across thirty tests
+  (the suite runs ~8 minutes rather than ~5), which is the price of not depending on a race — and
+  `joinSameMatch` now asserts the two clients landed together, so if the window is ever too tight
+  again the failure names that cause immediately. `MATCH_LOBBY_MS` remains server configuration;
+  `apps/client/test/build.test.ts` asserts it never reaches the client production bundle.
+- **Status:** Approved.

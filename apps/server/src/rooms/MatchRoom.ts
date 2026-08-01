@@ -65,6 +65,7 @@ import {
 import { type Client, CloseCode, Room, type Server, ServerError } from "@colyseus/core";
 
 import type { Logger } from "../logger";
+import { matchMetrics } from "../metrics";
 import { authorizeHandshake } from "./authorize";
 import { InputGuard } from "./input-guard";
 import { syncMatchState } from "./match-sync";
@@ -466,9 +467,15 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
             this.startMatch();
           }
           return;
-        case "running":
+        case "running": {
+          // Timed for the metrics report (technical plan §32.2's "average room
+          // tick duration"). A step that grows over a session is the signal that
+          // something is accumulating.
+          const startedAt = performance.now();
           this.stepMatch();
+          matchMetrics.recordTick(performance.now() - startedAt);
           return;
+        }
         case "ending":
           this.endingElapsedMs += SIMULATION_DT_MS;
           if (this.endingElapsedMs >= endingDurationMs) {

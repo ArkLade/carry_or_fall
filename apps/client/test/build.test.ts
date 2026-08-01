@@ -31,4 +31,19 @@ describe("client production build", () => {
     const bundled = await readBuiltJs();
     expect(bundled).not.toContain(DEBUG_HOOK_KEY);
   }, 120_000);
+
+  it("ships no test-only configuration in the production bundle", async () => {
+    // The browser suite shortens the lobby countdown and pins the match seed so
+    // it does not spend real seconds waiting for a human-timescale timer. Both
+    // are *server* configuration, read from the process environment exactly like
+    // `PORT` — the point of this assertion is that they stayed there. A knob
+    // that let a browser shorten its own countdown or choose its own seed would
+    // be a client asserting a match rule, which is precisely what the authority
+    // model forbids (technical plan §5.1).
+    await build({ root: clientDir, logLevel: "warn" });
+    const bundled = await readBuiltJs();
+    for (const testOnlyKnob of ["MATCH_LOBBY_MS", "MATCH_SEED"]) {
+      expect(bundled).not.toContain(testOnlyKnob);
+    }
+  }, 120_000);
 });

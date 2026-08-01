@@ -1,14 +1,27 @@
 name: CI
 
-# Verifies every push and pull request. This workflow validates only; it never
-# deploys. Deployment (Cloudflare Pages, Railway) is deferred to a later milestone.
+# Verifies the default branch and every pull request. This workflow validates
+# only; it never deploys. Deployment (Cloudflare Pages, Railway) is deferred to a
+# later milestone.
+#
+# `push` is limited to `main` on purpose. Previously it was unrestricted, so a
+# branch that had an open pull request ran the whole workflow twice for one
+# commit — once for the branch push and once for the pull request — including two
+# ten-minute browser jobs that could only ever agree with each other. Narrowing
+# the trigger removes the duplicate at its source; the concurrency group below
+# then handles the remaining case, superseded commits on the same branch.
 on:
   push:
+    branches: [main]
   pull_request:
 
-# Cancel superseded runs on the same ref so CI reflects the latest commit only.
+# Cancel superseded runs so CI reflects the latest commit only. Keyed on the head
+# branch rather than `github.ref`, because for a pull request `github.ref` is the
+# merge ref (`refs/pull/N/merge`) while for a push it is the branch — different
+# strings for the same branch, which is exactly the case that needs to collapse
+# into one group.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -58,6 +71,12 @@ jobs:
   browser:
     name: Browser end-to-end (Playwright)
     runs-on: ubuntu-latest
+    # A ceiling, not a target: the suite takes roughly ten minutes of real
+    # browser time, and Playwright's own `maxFailures` stops a broken run long
+    # before this. It exists so a hang — a dev server that never binds, a page
+    # that never loads — is cut off and reported instead of running until
+    # GitHub's six-hour default.
+    timeout-minutes: 25
     env:
       COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
     steps:

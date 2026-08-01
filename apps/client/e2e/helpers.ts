@@ -34,12 +34,19 @@ export const GAME_HEIGHT = testArena.height;
 export const DEFAULT_SKILL_LOADOUT_IDS = ["ricochet", "extended_reach", "bulwark_strike"];
 
 /**
- * How long to allow for joining a room and playing through the lobby
- * countdown. The server's default lobby is 8s (`MatchRoom.DEFAULT_LOBBY_MS`)
- * and the browser suite runs against the real server with real timings, so
- * every "start a match" helper has to outlast it.
+ * How long to allow for joining a room and playing through the lobby countdown.
+ *
+ * The countdown itself is shortened to a second by `MATCH_LOBBY_MS` in
+ * `playwright.config.ts`, so almost all of this budget is headroom for the parts
+ * that genuinely vary: a cold runner compiling Phaser on first request, the
+ * WebSocket handshake, and the first state patch arriving. A CI runner is slower
+ * and more contended than any development machine, so it gets more — generously,
+ * because the cost of a too-tight timeout is a false failure that looks exactly
+ * like a real one, while the cost of a too-loose one is only that a genuine hang
+ * takes longer to report (and `maxFailures` caps that anyway).
  */
-export const MATCH_START_TIMEOUT_MS = 30_000;
+export const MATCH_START_TIMEOUT_MS =
+  process.env.CI !== undefined && process.env.CI !== "" ? 60_000 : 30_000;
 
 /**
  * Bring `page` to the front before driving it.
@@ -66,8 +73,37 @@ export async function pressKey(page: Page, key: string, holdMs = 50): Promise<vo
   await page.keyboard.up(key);
 }
 
+/**
+ * Fail immediately, and legibly, if the page has no debug hook.
+ *
+ * Every read in this file goes through `window.__CARRY_OR_FALL_DEBUG__?.…`, and
+ * optional chaining on an absent hook yields `undefined` — which is
+ * indistinguishable from "the value is not ready yet". Without this check, a
+ * client built without the hook does not fail; it makes every single test wait
+ * out its timeout and report whatever it happened to be waiting for. Thirty
+ * identical timeouts are a much worse bug report than one sentence naming the
+ * cause.
+ *
+ * The hook is installed only when `import.meta.env.DEV` is true
+ * (`apps/client/src/debug/debug-hook.ts`), which the client's Vite config
+ * derives from the command rather than from `NODE_ENV`, so it is present under
+ * `vite` (dev) and verifiably absent from a production build.
+ */
+async function assertDebugHookPresent(page: Page): Promise<void> {
+  const present = await page.evaluate(() => window.__CARRY_OR_FALL_DEBUG__ !== undefined);
+  if (!present) {
+    throw new Error(
+      "the dev-only debug hook (window.__CARRY_OR_FALL_DEBUG__) is not installed on this page. " +
+        "The browser suite reads all state through it, so nothing can be observed without it. " +
+        "It ships only when import.meta.env.DEV is true, so this usually means the suite is " +
+        "pointed at a production build instead of the Vite dev server.",
+    );
+  }
+}
+
 export async function gotoGame(page: Page): Promise<void> {
   await page.goto("/");
+  await assertDebugHookPresent(page);
   // Wait for LoadoutScene's own create() to have actually run (not just for
   // the hook object to exist, which main.ts installs synchronously before
   // Phaser's async boot/scene-start sequence completes) — otherwise an

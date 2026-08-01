@@ -39,3 +39,26 @@ describe("loadServerEnv: MATCH_SEED", () => {
     expect(() => loadServerEnv({ MATCH_SEED: "abc", LOG_LEVEL: "loud" })).toThrow(/LOG_LEVEL/);
   });
 });
+
+describe("loadServerEnv: MATCH_LOBBY_MS", () => {
+  it("defaults to no override, so the room uses its own gameplay countdown", () => {
+    expect(loadServerEnv({}).matchLobbyMs).toBeNull();
+  });
+
+  it("accepts an in-range duration, including zero for no countdown at all", () => {
+    expect(loadServerEnv({ MATCH_LOBBY_MS: "1000" }).matchLobbyMs).toBe(1000);
+    expect(loadServerEnv({ MATCH_LOBBY_MS: "0" }).matchLobbyMs).toBe(0);
+  });
+
+  it("treats an empty value as unset rather than as an instant match start", () => {
+    // An exported-but-empty variable is a common shell accident; reading it as
+    // zero would silently remove the lobby a second player needs to join.
+    expect(loadServerEnv({ MATCH_LOBBY_MS: "" }).matchLobbyMs).toBeNull();
+  });
+
+  it("refuses a malformed, negative, or absurd duration instead of coercing it", () => {
+    for (const lobby of ["-1", "1.5", "abc", "3600001", "NaN"]) {
+      expect(() => loadServerEnv({ MATCH_LOBBY_MS: lobby })).toThrow(/MATCH_LOBBY_MS/);
+    }
+  });
+});

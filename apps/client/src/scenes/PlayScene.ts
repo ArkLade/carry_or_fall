@@ -87,8 +87,15 @@ export class PlayScene extends Phaser.Scene {
   }
 
   private async connect(skillLoadoutIds: readonly string[]): Promise<void> {
-    const env = loadClientEnv();
     try {
+      // Inside the `try` deliberately. `loadClientEnv` throws on missing or
+      // malformed configuration — which is correct, that is a real
+      // misconfiguration — but this method is invoked as `void this.connect(…)`,
+      // so a throw from outside the `try` became an unhandled rejection: the
+      // scene sat on an empty screen with no connection and no message, and
+      // anything waiting for authoritative state waited forever. Failing loudly
+      // is right; failing silently is not.
+      const env = loadClientEnv();
       this.connection = await MatchConnection.join(
         { ...env, skillLoadoutIds },
         {

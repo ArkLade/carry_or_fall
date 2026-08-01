@@ -135,13 +135,58 @@ invariant the whole milestone rests on: no file under `apps/client/src` referenc
 `stepSimulation` or `createSimulation`. There is one simulation and it runs on the server; a
 "just for smoothing" local step would fail the build.
 
+**The suite configures itself.** `playwright.config.ts` supplies every variable both servers need —
+the client's `VITE_GAME_SERVER_URL` and `VITE_BUILD_VERSION`, the server's `PORT`,
+`ALLOWED_ORIGINS`, `MATCH_SEED`, and `MATCH_LOBBY_MS` — through its `webServer` `env` blocks. It
+must, and the rule is worth stating plainly: **an automated suite may not depend on a file that
+policy forbids committing.** The repository-root `.env` is gitignored (`DEVELOPMENT_RULES.md`: only
+`.env.example` is tracked), so it cannot exist on a CI runner or a fresh clone. A suite that reads it
+passes only on the machine that created it. Verify any change here the same way: rename your local
+`.env` aside and run the suite.
+
+`MATCH_LOBBY_MS` is **sized from a measurement, not a guess**, and the reason is worth keeping.
+The countdown starts when the first client joins and the room locks when it expires (technical plan
+§8.3), so it is also the entire window in which a *second* browser can reach the same match. That
+second join measures 620-930 ms unloaded. A one-second lobby therefore left as little as 70 ms of
+margin: it held when a two-client spec ran alone and failed inside the full suite, where the clients
+landed in **different matches** and every assertion about "the other player" waited out its timeout —
+which looked like a mysteriously slow test rather than a broken premise. Confirmed by shrinking the
+window to 300 ms, at which the clients split on every attempt. Five seconds is roughly five times the
+measured join; `joinSameMatch` also asserts the two clients really did land together, so a future
+violation is named immediately instead of being paid for in timeouts.
+
+Two of those variables are about time rather than reachability. `MATCH_SEED` pins spawn placement so
+a test that walks to "the first extraction point" gets the same one every run (technical plan §9.4
+asks for reproducible seeded tests). `MATCH_LOBBY_MS` shortens the pre-match countdown from eight
+seconds to one: the countdown exists so a human can join a friend's match (concept §22.2), and a
+suite that drives both clients itself is only watching a timer. Both are **server** configuration,
+read from the environment exactly like `PORT`; `apps/client/test/build.test.ts` asserts neither
+appears in the client production bundle, because a client able to set its own countdown or seed would
+be a client asserting a match rule.
+
 **CI wiring:** the Playwright suite runs as a **separate CI job** (`.github/workflows/ci.yml`'s
 `browser` job), not a seventh step in the existing `verify` job. Reason: browser tests are
 categorically slower (a real Chromium instance, real animation-frame timing, `walkToward`-style
 navigation against a live, moving enemy) and have different failure modes (timing sensitivity,
 headless-rendering quirks) than the six fast, deterministic gates; keeping them separate means a
-slow or flaky browser run never blocks or slows the fast feedback loop those six gates provide,
-matching this task's explicit "do not slow or destabilize the existing six gates."
+slow or flaky browser run never blocks or slows the fast feedback loop those six gates provide.
+
+**A broken browser suite must fail cheaply.** Three settings enforce that, because a systematic
+breakage fails every test identically and there is nothing to learn from watching it happen thirty
+times:
+
+- `maxFailures: 3` in CI stops the run after a handful of failures.
+- `retries: 0`. A retry earns its cost when failures are genuinely random; the flake sources this
+  suite had were each traced to a cause and fixed, so a failure now carries information and retrying
+  it only doubles the worst-case run time to hide the signal.
+- `timeout-minutes: 25` on the `browser` job, so a hang is cut off rather than running to GitHub's
+  six-hour default.
+
+**The suite fails fast when it cannot observe anything.** Every read goes through
+`window.__CARRY_OR_FALL_DEBUG__?.…`, and optional chaining on an absent hook yields `undefined` —
+indistinguishable from "not ready yet", so a client built without the hook does not fail, it makes
+every test wait out its timeout. `gotoGame` therefore asserts the hook exists before anything else
+and names the likely cause (the suite pointed at a production build rather than the dev server).
 
 **Known test-harness lesson (recorded so it is not rediscovered):** `LoadoutScene`'s digit/Enter
 keys are read via Phaser's edge-triggered `JustDown`, polled once per animation frame. Playwright's
@@ -154,6 +199,20 @@ also a more faithful simulation of an actual human keypress.
 **Not yet covered:** anonymous sign-in, joining a room, the reconnect screen, the account-link
 warning (all require M4+ networking/M5 accounts, which do not exist yet); supported-browser smoke
 tests beyond Chromium (deferred; no cross-browser requirement yet).
+
+### 2.3.1 Session durability
+
+The browser suite runs thirty tests against **one** server process and abandons every match by
+closing a browser rather than leaving politely, which makes it a small soak test whether or not it
+was meant to be one. `apps/server/test/match-lifecycle.test.ts` covers that shape directly: it
+creates and abandons matches in sequence and asserts rooms are disposed and step timing stays flat.
+
+The server carries the §32.2 metrics needed to see this from the outside — active rooms, average and
+maximum tick duration, event-loop lag, and heap/RSS — reported periodically as one structured log
+line (`apps/server/src/metrics.ts`). Measured across a full browser session: active rooms peaked at
+4 and ended at 0, average tick time went from 0.450 ms to 0.229 ms, event-loop lag from 14.7 ms to
+7.2 ms, and RSS from 96 MB to 93 MB. **The server does not degrade across a session**, and that is
+now a measurement anyone can repeat rather than an assumption.
 
 ### 2.4 Load tests — deferred (M8/M9)
 
