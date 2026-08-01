@@ -2,11 +2,21 @@
  * Core world/entity types. M1 shipped movement, map collision, aim, the
  * shared attack pipeline (sword + bow), the chaser enemy, health/death, and
  * dash (`docs/M1_EXECUTION_PLAN.md` §3). M2 adds the inventory, secure slot,
- * ground loot, rotating extraction, and the local run result (`docs/
- * M2_ISSUES.md`).
+ * ground loot, rotating extraction, and the run result (`docs/M2_ISSUES.md`);
+ * M3 adds skills, the wildcard chip, stun, and the shield.
  *
- * M2 is still local and single-player (no network, no other players), so
- * `World` holds exactly one `player`, not a collection.
+ * M4 makes the world **multi-player** (`docs/M4_ISSUES.md` §1.1). Through M3
+ * this file declared the opposite — "`World` holds exactly one `player`, not a
+ * collection" — because there was no network and no other players. M4 puts this
+ * same simulation behind an authoritative Colyseus room holding two to eight of
+ * them, so `World.player` becomes `World.players`, `Player` gains an `id`, the
+ * run result moves from the world to the player (extraction ends *that
+ * player's* run, concept §17.1), and a `Projectile` records who fired it.
+ *
+ * Nothing else changed: every rule module (movement, collision, combat,
+ * inventory, extraction, loot, skills) was already a pure function over one
+ * actor plus world data, so none of them needed to know that there is now more
+ * than one player.
  */
 import type {
   EnemyDefinition,
@@ -52,8 +62,16 @@ import type { Vec2 } from "./vec2";
  * until a `SkillChip` is picked up), replaced freely and lost on death.
  * `shieldHp` (concept §9.2 "shield generation") is a capped pool that absorbs
  * damage before `health` (`skill-effects.ts`'s `applyDamageToPlayer`).
+ *
+ * `id` (M4) identifies this player within the world — on the server it is the
+ * Colyseus session id, so it is server-generated and a client cannot choose or
+ * spoof it (technical plan §33, "server-generated IDs"). `runResult` (M4, moved
+ * off `World`) is `null` while this player's run is in progress; once set, by
+ * their death or their extraction, that player is inert while everyone else
+ * keeps playing.
  */
 export interface Player {
+  readonly id: string;
   readonly position: Vec2;
   readonly radius: number;
   readonly facing: number;
@@ -72,14 +90,18 @@ export interface Player {
   readonly extractionProgressMs: number;
   readonly skillLoadout: SkillLoadout;
   readonly wildcardSkill: SkillDefinition | null;
+  readonly runResult: RunResult | null;
 }
 
 /**
  * The in-flight state of one melee swing, tracked across simulation steps so
  * hit resolution happens only during the weapon's "active" window
- * (`combat/melee.ts`, M1.7).
+ * (`combat/melee.ts`, M1.7). `ownerId` (M4) is the player whose swing it is, so
+ * a landed hit can credit the right player's shield-on-hit skill when several
+ * players are swinging in the same world.
  */
 export interface MeleeAttackState {
+  readonly ownerId: string;
   readonly weapon: WeaponDefinition;
   readonly origin: Vec2;
   readonly facing: number;
@@ -104,6 +126,14 @@ export interface MeleeAttackState {
  */
 export interface Projectile {
   readonly id: string;
+  /**
+   * The player who fired it (M4). Two things depend on it: §13.4's cap 7 (the
+   * active-projectile ceiling) is counted per owner, so eight players sharing
+   * one world cannot collectively exceed a cap that was written per player; and
+   * a landed hit credits that player's shield-on-hit skill rather than whoever
+   * happens to be stepping.
+   */
+  readonly ownerId: string;
   readonly position: Vec2;
   readonly velocity: Vec2;
   readonly radius: number;
@@ -196,10 +226,11 @@ export interface ExtractionPoint {
 }
 
 /**
- * The outcome of a finished local run (M2.8, `docs/M2_ISSUES.md`): death
+ * The outcome of one player's finished run (M2.8, `docs/M2_ISSUES.md`): death
  * converts only the secure slot and drops the inventory; a successful
- * extraction converts both. Displayed once by the client HUD; never
- * persisted (`docs/DECISIONS.md` D27).
+ * extraction converts both. Displayed once by that player's HUD; never
+ * persisted (`docs/DECISIONS.md` D27 — still true in M4, which adds no
+ * storage).
  */
 export interface RunResult {
   readonly outcome: "extracted" | "died";
@@ -236,23 +267,27 @@ export interface InputState {
 }
 
 /**
- * The full simulation world: the single local player, the static map
+ * The full simulation world: every player in the match, the static map
  * geometry, any live projectiles, enemies, ground loot, and extraction
  * points. The renderer reads this; it never mutates it or derives outcomes
  * from it (technical plan §5.1). `tick` is the fixed-step counter, used to
- * seed deterministic projectile ids (`combat/ranged.ts`) — not networked, not
- * a game rule. `runResult` is `null` while the run is in progress; once set
- * (M2.8), `stepSimulation` becomes a full no-op. `rng` is the same seeded
- * generator created at `createSimulation` (technical plan §9.4), carried
- * across steps and reused (not re-seeded) so ground-loot choice and
- * extraction-point rotation stay part of one deterministic sequence for the
- * whole run. `extractionCandidatePoints` is the fixed candidate list
+ * seed deterministic projectile ids (`combat/ranged.ts`) — not a game rule.
+ * `rng` is the same seeded generator created at `createSimulation` (technical
+ * plan §9.4), carried across steps and reused (not re-seeded) so ground-loot
+ * choice and extraction-point rotation stay part of one deterministic sequence
+ * for the whole match. `extractionCandidatePoints` is the fixed candidate list
  * extraction points rotate among; it never changes after creation, like
  * `walls`. `skillChips` (M3.7) are wildcard-skill pickups scattered on the
  * map, the skill counterpart of `groundLoot`.
+ *
+ * `players` (M4) holds two to eight of them, in a stable order: `stepSimulation`
+ * processes them in array order, which is what makes a contested outcome (two
+ * players reaching the same item on the same tick) resolve identically on every
+ * machine replaying the same inputs. A player whose `runResult` is set is inert
+ * but stays in the array, because the other players' matches continue.
  */
 export interface World {
-  readonly player: Player;
+  readonly players: readonly Player[];
   readonly walls: readonly Wall[];
   readonly projectiles: readonly Projectile[];
   readonly enemies: readonly Enemy[];
@@ -260,7 +295,6 @@ export interface World {
   readonly skillChips: readonly SkillChip[];
   readonly extractionPoints: readonly ExtractionPoint[];
   readonly extractionCandidatePoints: readonly Vec2[];
-  readonly runResult: RunResult | null;
   readonly rng: Rng;
   readonly tick: number;
 }

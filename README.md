@@ -24,7 +24,10 @@ Supporting control documents:
 
 - [`docs/DEVELOPMENT_RULES.md`](docs/DEVELOPMENT_RULES.md) — durable rules.
 - [`docs/DECISIONS.md`](docs/DECISIONS.md) — approved architecture decisions.
-- [`docs/M0_EXECUTION_PLAN.md`](docs/M0_EXECUTION_PLAN.md) — the M0 plan.
+- [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — the client/server wire contract.
+- [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md) — the testing layers.
+- Per-milestone issue lists and execution plans: `docs/M0_EXECUTION_PLAN.md`
+  through `docs/M4_EXECUTION_PLAN.md`.
 
 ## Prerequisites
 

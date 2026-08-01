@@ -13,7 +13,12 @@
  * milestone.
  */
 import Phaser from "phaser";
-import type { Vec2 } from "@carry-or-fall/simulation-core";
+
+/** The minimal origin shape aim is measured from: the player's last authoritative position. */
+interface AimOrigin {
+  readonly x: number;
+  readonly y: number;
+}
 
 export class PointerInput {
   private readonly scene: Phaser.Scene;
@@ -26,7 +31,7 @@ export class PointerInput {
   }
 
   /** The angle (radians) from `origin` to the current pointer position, unnormalized. */
-  aimAngleFrom(origin: Vec2): number {
+  aimAngleFrom(origin: AimOrigin): number {
     const pointer = this.scene.input.activePointer;
     return Math.atan2(pointer.worldY - origin.y, pointer.worldX - origin.x);
   }

@@ -18,7 +18,7 @@ import { circleIntersectsCircle } from "./collision";
 import type { SpatialGrid } from "./collision";
 import { resolveAxisMovement } from "./collision";
 import { pickDistinct, type Rng } from "./prng";
-import type { Enemy, Vec2, Wall } from "./world";
+import type { Enemy, RunResult, Vec2, Wall } from "./world";
 
 /**
  * Build a live `Enemy` from its content definition, spawned at one of
@@ -136,6 +136,41 @@ export function stepEnemyMovement(
   const y = resolveAxisMovement(afterX, "y", deltaY, enemy.radius, wallGrid);
 
   return { ...enemy, position: { x, y }, contactCooldownMs, stunnedMs };
+}
+
+/**
+ * The live player nearest to `from`, or `null` if none are left (M4). Concept
+ * §14.2 defines the chaser as moving "directly toward the **nearest** player";
+ * through M3 that was trivially the only player, so `simulation.ts` passed the
+ * one player's position directly. With two to eight in a world it is a real
+ * choice, and it is re-made every step — a chaser whose target dies or extracts
+ * immediately turns on whoever is now closest.
+ *
+ * A player whose run has ended (`runResult` set) is not a target: they are inert
+ * and no longer present in the fight, even though they remain in the array.
+ */
+export function nearestLivePlayer<
+  T extends {
+    readonly position: Vec2;
+    readonly alive: boolean;
+    readonly runResult: RunResult | null;
+  },
+>(from: Vec2, players: readonly T[]): T | null {
+  let nearest: T | null = null;
+  let nearestDistanceSquared = Number.POSITIVE_INFINITY;
+  for (const player of players) {
+    if (!player.alive || player.runResult !== null) {
+      continue;
+    }
+    const dx = player.position.x - from.x;
+    const dy = player.position.y - from.y;
+    const distanceSquared = dx * dx + dy * dy;
+    if (distanceSquared < nearestDistanceSquared) {
+      nearest = player;
+      nearestDistanceSquared = distanceSquared;
+    }
+  }
+  return nearest;
 }
 
 /** Whether `enemy` currently overlaps the player's circle. */

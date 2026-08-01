@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { PROTOCOL_VERSION, isBuildVersion, isProtocolCompatible } from "./version";
+import {
+  PROTOCOL_VERSION,
+  isBuildVersion,
+  isContentCompatible,
+  isProtocolCompatible,
+} from "./version";
 
 describe("protocol version", () => {
   it("is a positive integer", () => {
@@ -15,6 +20,20 @@ describe("protocol version", () => {
   it("treats a different peer version as incompatible", () => {
     expect(isProtocolCompatible(PROTOCOL_VERSION + 1)).toBe(false);
     expect(isProtocolCompatible(PROTOCOL_VERSION - 1)).toBe(false);
+  });
+});
+
+describe("isContentCompatible", () => {
+  it("accepts a peer whose content tables match the local ones", () => {
+    expect(isContentCompatible(3, 3)).toBe(true);
+  });
+
+  it("refuses a peer running older or newer content", () => {
+    // A stale tab would draw arcs, projectile behavior, and point previews from
+    // a different content table than the one deciding outcomes (technical plan
+    // §35; `docs/DECISIONS.md` D34).
+    expect(isContentCompatible(2, 3)).toBe(false);
+    expect(isContentCompatible(4, 3)).toBe(false);
   });
 });
 

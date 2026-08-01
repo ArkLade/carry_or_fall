@@ -1,11 +1,10 @@
 /**
- * Client entry point. Boots Phaser directly into the local `LoadoutScene`
- * (M3, `docs/M3_ISSUES.md` M3.8), which starts `PlayScene` once a legal
- * skill loadout is confirmed (`docs/M1_EXECUTION_PLAN.md` §9 M1.1's boot-flow
- * clarification still applies: this is local, single-player, no network
- * required). `BootScene` (the M0 connection/health view) is registered but
- * not started by default; it is retained unchanged as the networked entry
- * point M4 reuses.
+ * Client entry point. Boots Phaser into `LoadoutScene` (M3,
+ * `docs/M3_ISSUES.md` M3.8), which starts `PlayScene` once a legal skill
+ * loadout is confirmed — and from M4 that scene joins the authoritative match
+ * room carrying the selection as join options, rather than starting a local
+ * world. `BootScene` (the connection/health diagnostic view, which joins the
+ * connection-only probe room) is registered but not started by default.
  */
 import Phaser from "phaser";
 
@@ -41,7 +40,12 @@ export const game = new Phaser.Game({
 
 // Dev/test-only observation hook (docs/TEST_PLAN.md §2.3); stripped from the
 // production bundle (`debug-hook.ts`'s module doc explains how and why).
+const playScene = (): PlayScene | null => game.scene.getScene("play") as PlayScene | null;
+
 installDebugHook({
   getActiveSceneKey: () => game.scene.getScenes(true)[0]?.scene.key ?? null,
-  getWorld: () => (game.scene.getScene("play") as PlayScene | null)?.getWorld() ?? null,
+  getSnapshot: () => playScene()?.getSnapshot() ?? null,
+  getLocalPlayerId: () => playScene()?.getLocalPlayerId() ?? null,
+  getPrivateState: () => playScene()?.getPrivateState() ?? null,
+  getConnectionStatus: () => playScene()?.getConnectionStatus() ?? "connecting",
 });

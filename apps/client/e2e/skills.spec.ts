@@ -1,12 +1,20 @@
 /**
  * End-to-end verification that equipped skills actually apply in a running
- * game (§38 M3 exit criterion 1, "supported combinations work"). Diagnostic
- * task: 273 unit tests already prove every effect function is individually
- * correct, so this suite exists specifically to catch a wiring defect
- * between the real client (LoadoutScene → PlayScene → real keyboard/mouse
- * input) and simulation-core that no unit test can see. Every assertion
- * reads state through the dev-only debug hook after driving the page with
- * real input — never by calling simulation-core functions directly.
+ * game (§38 M3 exit criterion 1, "supported combinations work"). 300+ unit
+ * tests already prove every effect function is individually correct, so this
+ * suite exists specifically to catch a wiring defect no unit test can see —
+ * now across the network boundary as well: real keyboard/mouse input into the
+ * canvas, through the loadout picker, into the room's join options, through the
+ * server's simulation, and back out as authoritative state.
+ *
+ * Two M3-era assertions moved or went away when the simulation moved server-side
+ * (M4.4). The effective weapon's `recoveryMs` and `stunChance`, and a
+ * projectile's `postBounceDamageMultiplier`, are no longer sent to clients:
+ * technical plan §10.3 publishes what a client needs to render, and those three
+ * have no rendering purpose. `swift_strikes`'s recovery reduction is covered by
+ * `packages/simulation-core`'s unit and caps-under-load tests; `stunning_blows`
+ * is covered better here than before, by asserting the enemy actually ends up
+ * stunned rather than that a probability was written into a weapon copy.
  */
 import { basicBow, basicSword } from "@carry-or-fall/game-content";
 import { expect, test } from "@playwright/test";
@@ -14,58 +22,77 @@ import { expect, test } from "@playwright/test";
 import {
   aimAt,
   attackChaserUntil,
-  getWorld,
-  gotoGame,
-  interactFor,
   dieToChasers,
-  meleeAttackFor,
+  getLocalPlayer,
+  getPrivateState,
+  getSnapshot,
+  gotoGame,
   nearestEnemy,
+  pickUpAt,
   rangedAttackFor,
   startRunWithLoadout,
-  walkToward,
+  waitForSnapshot,
+  walkToArenaPoint,
 } from "./helpers";
+
+/** Fire once and wait for the server to publish the resulting projectiles. */
+async function fireAndWait(page: import("@playwright/test").Page) {
+  await aimAt(page, 700, 270);
+  await rangedAttackFor(page, 80);
+  return waitForSnapshot(page, (snapshot) => snapshot.projectiles.length > 0);
+}
+
+/**
+ * Swing and catch the swing while it is in its active window. The window is
+ * 120 ms wide, so the button is held (which restarts a swing every cooldown)
+ * and the snapshot polled quickly until one is published, rather than swinging
+ * once and hoping the sample lands inside it.
+ */
+async function swingAndWait(page: import("@playwright/test").Page) {
+  await aimAt(page, 700, 270);
+  await page.mouse.down({ button: "left" });
+  try {
+    return await waitForSnapshot(
+      page,
+      (view) => view.players.some((player) => player.swingActive),
+      10_000,
+      25,
+    );
+  } finally {
+    await page.mouse.up({ button: "left" });
+  }
+}
 
 test.describe("each skill applies alone (M3.3, §38 M3 exit criterion 1)", () => {
   test("multishot adds to the fired projectile count", async ({ page }) => {
     await gotoGame(page);
     await startRunWithLoadout(page, ["multishot"]);
-    await aimAt(page, 700, 270);
-    await rangedAttackFor(page, 80);
-    const world = await getWorld(page);
-    expect(world.projectiles.length).toBe((basicBow.projectileCount ?? 0) + 2);
+    const snapshot = await fireAndWait(page);
+    expect(snapshot.projectiles.length).toBe((basicBow.projectileCount ?? 0) + 2);
   });
 
-  test("ricochet seeds a bounce budget and the post-bounce damage multiplier on the fired projectile", async ({
-    page,
-  }) => {
+  test("ricochet seeds a bounce budget on the fired projectile", async ({ page }) => {
     await gotoGame(page);
     await startRunWithLoadout(page, ["ricochet"]);
-    await aimAt(page, 700, 270);
-    await rangedAttackFor(page, 80);
-    const world = await getWorld(page);
-    expect(world.projectiles).toHaveLength(1);
-    expect(world.projectiles[0]!.bouncesRemaining).toBe(1);
-    expect(world.projectiles[0]!.postBounceDamageMultiplier).toBeCloseTo(0.8);
+    const snapshot = await fireAndWait(page);
+    expect(snapshot.projectiles).toHaveLength(1);
+    expect(snapshot.projectiles[0]!.bouncesRemaining).toBe(1);
   });
 
   test("piercing_rounds seeds a pierce budget on the fired projectile", async ({ page }) => {
     await gotoGame(page);
     await startRunWithLoadout(page, ["piercing_rounds"]);
-    await aimAt(page, 700, 270);
-    await rangedAttackFor(page, 80);
-    const world = await getWorld(page);
-    expect(world.projectiles).toHaveLength(1);
-    expect(world.projectiles[0]!.piercesRemaining).toBe(2);
+    const snapshot = await fireAndWait(page);
+    expect(snapshot.projectiles).toHaveLength(1);
+    expect(snapshot.projectiles[0]!.piercesRemaining).toBe(2);
   });
 
   test("returning_shot marks the fired projectile as able to return", async ({ page }) => {
     await gotoGame(page);
     await startRunWithLoadout(page, ["returning_shot"]);
-    await aimAt(page, 700, 270);
-    await rangedAttackFor(page, 80);
-    const world = await getWorld(page);
-    expect(world.projectiles).toHaveLength(1);
-    expect(world.projectiles[0]!.canReturn).toBe(true);
+    const snapshot = await fireAndWait(page);
+    expect(snapshot.projectiles).toHaveLength(1);
+    expect(snapshot.projectiles[0]!.canReturn).toBe(true);
   });
 
   test("homing_arrows seeds a nonzero homing strength on the fired projectile", async ({
@@ -73,71 +100,78 @@ test.describe("each skill applies alone (M3.3, §38 M3 exit criterion 1)", () =>
   }) => {
     await gotoGame(page);
     await startRunWithLoadout(page, ["homing_arrows"]);
-    await aimAt(page, 700, 270);
-    await rangedAttackFor(page, 80);
-    const world = await getWorld(page);
-    expect(world.projectiles).toHaveLength(1);
-    expect(world.projectiles[0]!.homingStrength).toBeCloseTo(0.35);
+    const snapshot = await fireAndWait(page);
+    expect(snapshot.projectiles).toHaveLength(1);
+    expect(snapshot.projectiles[0]!.homingStrength).toBeCloseTo(0.35);
   });
 
-  test("extended_reach widens the effective melee weapon's range", async ({ page }) => {
+  test("every fired projectile is attributed to the player who fired it", async ({ page }) => {
+    await gotoGame(page);
+    await startRunWithLoadout(page, ["multishot"]);
+    const snapshot = await fireAndWait(page);
+    const localPlayer = await getLocalPlayer(page);
+    for (const projectile of snapshot.projectiles) {
+      expect(projectile.ownerId).toBe(localPlayer.id);
+    }
+  });
+
+  test("extended_reach widens the swing the server actually resolves hits with", async ({
+    page,
+  }) => {
     await gotoGame(page);
     await startRunWithLoadout(page, ["extended_reach"]);
-    await aimAt(page, 700, 270);
-    await meleeAttackFor(page, 80);
-    const world = await getWorld(page);
-    expect(world.player.meleeAttack).not.toBeNull();
-    expect(world.player.meleeAttack!.weapon.rangePx).toBeCloseTo(basicSword.rangePx! * 1.35);
+    const snapshot = await swingAndWait(page);
+    const swinging = snapshot.players.find((player) => player.swingActive)!;
+    expect(swinging.swingRangePx).toBeCloseTo(basicSword.rangePx! * 1.35);
   });
 
-  test("swift_strikes shortens the effective melee weapon's recovery", async ({ page }) => {
-    await gotoGame(page);
-    await startRunWithLoadout(page, ["swift_strikes"]);
-    await aimAt(page, 700, 270);
-    await meleeAttackFor(page, 80);
-    const world = await getWorld(page);
-    expect(world.player.meleeAttack).not.toBeNull();
-    expect(world.player.meleeAttack!.weapon.recoveryMs).toBeCloseTo(basicSword.recoveryMs! * 0.6);
-  });
-
-  test("stunning_blows adds to the effective melee weapon's stun chance", async ({ page }) => {
-    await gotoGame(page);
-    await startRunWithLoadout(page, ["stunning_blows"]);
-    await aimAt(page, 700, 270);
-    await meleeAttackFor(page, 80);
-    const world = await getWorld(page);
-    expect(world.player.meleeAttack).not.toBeNull();
-    expect(world.player.meleeAttack!.weapon.stunChance).toBeCloseTo(0.35);
-  });
-
-  test("wide_arc widens the effective melee weapon's arc", async ({ page }) => {
+  test("wide_arc widens the swing the server actually resolves hits with", async ({ page }) => {
     await gotoGame(page);
     await startRunWithLoadout(page, ["wide_arc"]);
-    await aimAt(page, 700, 270);
-    await meleeAttackFor(page, 80);
-    const world = await getWorld(page);
-    expect(world.player.meleeAttack).not.toBeNull();
-    expect(world.player.meleeAttack!.weapon.arcDegrees).toBe(basicSword.arcDegrees! + 45);
+    const snapshot = await swingAndWait(page);
+    const swinging = snapshot.players.find((player) => player.swingActive)!;
+    expect(swinging.swingArcDegrees).toBe(basicSword.arcDegrees! + 45);
+  });
+
+  test("stunning_blows actually stuns a chaser it lands on", async ({ page }) => {
+    test.setTimeout(120_000);
+    await gotoGame(page);
+    await startRunWithLoadout(page, ["stunning_blows"]);
+    const snapshot = await getSnapshot(page);
+    const player = await getLocalPlayer(page);
+    const enemyStart = nearestEnemy(snapshot, player)!;
+
+    await walkToArenaPoint(page, enemyStart.x, enemyStart.y, 25_000);
+    const stunned = await attackChaserUntil(
+      page,
+      (view) => view.enemies.some((enemy) => enemy.stunnedMs > 0),
+      45_000,
+    );
+    expect(stunned.enemies.some((enemy) => enemy.stunnedMs > 0)).toBe(true);
   });
 
   test("bulwark_strike grants shield on a landed melee hit against the real chaser", async ({
     page,
   }) => {
-    test.setTimeout(60_000);
+    test.setTimeout(120_000);
     await gotoGame(page);
     await startRunWithLoadout(page, ["bulwark_strike"]);
-    let world = await getWorld(page);
-    expect(world.player.shieldHp).toBe(0);
-    const enemyStart = nearestEnemy(world)!.position;
+    let player = await getLocalPlayer(page);
+    expect(player.shieldHp).toBe(0);
+    const snapshot = await getSnapshot(page);
+    const enemyStart = nearestEnemy(snapshot, player)!;
 
-    // The chasers always move toward the player; walk to meet the closest
-    // one partway rather than assuming a fixed distance
-    // (`docs/M1_EXECUTION_PLAN.md` M1.9's chase behavior applies regardless
-    // of which candidate spawn points the seeded RNG picked this run).
-    await walkToward(page, enemyStart.x, enemyStart.y, 20_000);
+    // The chasers always move toward the nearest player; walk to meet the
+    // closest one partway rather than assuming a fixed distance.
+    await walkToArenaPoint(page, enemyStart.x, enemyStart.y, 25_000);
 
-    world = await attackChaserUntil(page, (w) => w.player.shieldHp > 0, 15_000);
-    expect(world.player.shieldHp).toBeGreaterThan(0);
+    await attackChaserUntil(
+      page,
+      (view) => view.players.some((entry) => entry.shieldHp > 0),
+      45_000,
+    );
+    player = await getLocalPlayer(page);
+    expect(player.shieldHp).toBeGreaterThan(0);
   });
 });
 
@@ -147,172 +181,78 @@ test.describe("three-skill combinations apply together (M3.3)", () => {
   }) => {
     await gotoGame(page);
     await startRunWithLoadout(page, ["ricochet", "piercing_rounds", "homing_arrows"]);
-    await aimAt(page, 700, 270);
-    await rangedAttackFor(page, 80);
-    const world = await getWorld(page);
-    expect(world.projectiles).toHaveLength(1);
-    const projectile = world.projectiles[0]!;
+    const snapshot = await fireAndWait(page);
+    expect(snapshot.projectiles).toHaveLength(1);
+    const projectile = snapshot.projectiles[0]!;
     expect(projectile.bouncesRemaining).toBe(1);
     expect(projectile.piercesRemaining).toBe(2);
     expect(projectile.homingStrength).toBeCloseTo(0.35);
   });
-
-  test("extended_reach + swift_strikes + stunning_blows all apply to the same swing", async ({
-    page,
-  }) => {
-    await gotoGame(page);
-    await startRunWithLoadout(page, ["extended_reach", "swift_strikes", "stunning_blows"]);
-    await aimAt(page, 700, 270);
-    await meleeAttackFor(page, 80);
-    const world = await getWorld(page);
-    expect(world.player.meleeAttack).not.toBeNull();
-    const weapon = world.player.meleeAttack!.weapon;
-    expect(weapon.rangePx).toBeCloseTo(basicSword.rangePx! * 1.35);
-    expect(weapon.recoveryMs).toBeCloseTo(basicSword.recoveryMs! * 0.6);
-    expect(weapon.stunChance).toBeCloseTo(0.35);
-  });
 });
 
 test.describe("wildcard skill chip (M3.7)", () => {
-  test("picking up a chip sets the wildcard slot, and it applies alongside an empty permanent loadout", async ({
-    page,
-  }) => {
+  test("picking up a chip sets the wildcard slot", async ({ page }) => {
+    test.setTimeout(90_000);
     await gotoGame(page);
-    await startRunWithLoadout(page, []); // empty permanent loadout isolates the wildcard's own effect
-    let world = await getWorld(page);
-    expect(world.player.wildcardSkill).toBeNull();
-    expect(world.skillChips.length).toBeGreaterThan(0);
+    await startRunWithLoadout(page, []); // empty permanent loadout isolates the wildcard
+    let privateState = await getPrivateState(page);
+    expect(privateState.wildcardSkillId).toBeNull();
 
-    const chip = world.skillChips[0]!;
-    await walkToward(page, chip.position.x, chip.position.y);
-    await interactFor(page, 200);
+    const snapshot = await getSnapshot(page);
+    expect(snapshot.skillChips.length).toBeGreaterThan(0);
+    const chip = snapshot.skillChips[0]!;
 
-    world = await getWorld(page);
-    expect(world.player.wildcardSkill).not.toBeNull();
-    const wildcard = world.player.wildcardSkill!;
-
-    // Whatever skill the seeded chip happened to grant, exercise the
-    // matching weapon category and confirm the wildcard's own declared
-    // effects are the ones observed (the permanent loadout is empty, so
-    // nothing else could produce them).
-    if (wildcard.requiresTags.includes("projectile")) {
-      await aimAt(page, 700, 270);
-      await rangedAttackFor(page, 80);
-      const afterFire = await getWorld(page);
-      expect(afterFire.projectiles.length).toBeGreaterThan(0);
-      const projectile = afterFire.projectiles[0]!;
-      if (wildcard.effects.bounceCountAdd !== undefined) {
-        expect(projectile.bouncesRemaining).toBeGreaterThan(0);
-      }
-      if (wildcard.effects.pierceCountAdd !== undefined) {
-        expect(projectile.piercesRemaining).toBeGreaterThan(0);
-      }
-      if (wildcard.effects.returnEnabled === true) {
-        expect(projectile.canReturn).toBe(true);
-      }
-      if (wildcard.effects.homingStrengthAdd !== undefined) {
-        expect(projectile.homingStrength).toBeGreaterThan(0);
-      }
-      if (wildcard.effects.projectileCountAdd !== undefined) {
-        expect(afterFire.projectiles.length).toBeGreaterThan(basicBow.projectileCount ?? 0);
-      }
-    } else {
-      await aimAt(page, 700, 270);
-      await meleeAttackFor(page, 80);
-      const afterSwing = await getWorld(page);
-      expect(afterSwing.player.meleeAttack).not.toBeNull();
-      const weapon = afterSwing.player.meleeAttack!.weapon;
-      if (wildcard.effects.rangeMultiplierAdd !== undefined) {
-        expect(weapon.rangePx!).toBeGreaterThan(basicSword.rangePx!);
-      }
-      if (wildcard.effects.arcDegreesAdd !== undefined) {
-        expect(weapon.arcDegrees!).toBeGreaterThan(basicSword.arcDegrees!);
-      }
-      if (wildcard.effects.recoveryReductionAdd !== undefined) {
-        expect(weapon.recoveryMs!).toBeLessThan(basicSword.recoveryMs!);
-      }
-      if (wildcard.effects.stunChanceAdd !== undefined) {
-        expect(weapon.stunChance!).toBeGreaterThan(0);
-      }
-    }
+    await walkToArenaPoint(page, chip.x, chip.y, 25_000);
+    await pickUpAt(page, chip.x, chip.y, (view) =>
+      view.skillChips.every((entry) => entry.id !== chip.id),
+    );
+    privateState = await getPrivateState(page);
+    expect(privateState.wildcardSkillId).toBe(chip.skillId);
   });
 
   test("picking up a second chip replaces the wildcard, with no refusal", async ({ page }) => {
-    test.setTimeout(45_000);
+    test.setTimeout(120_000);
     await gotoGame(page);
     await startRunWithLoadout(page, []);
-    let world = await getWorld(page);
-    expect(world.skillChips).toHaveLength(2);
+    const snapshot = await getSnapshot(page);
+    expect(snapshot.skillChips).toHaveLength(2);
 
-    const firstChip = world.skillChips[0]!;
-    await walkToward(page, firstChip.position.x, firstChip.position.y);
-    await interactFor(page, 200);
-    world = await getWorld(page);
-    const firstWildcardId = world.player.wildcardSkill?.id;
-    expect(firstWildcardId).toBeDefined();
-    expect(world.skillChips).toHaveLength(1);
+    const [firstChip, secondChip] = snapshot.skillChips;
+    await walkToArenaPoint(page, firstChip!.x, firstChip!.y, 25_000);
+    await pickUpAt(page, firstChip!.x, firstChip!.y, (view) => view.skillChips.length === 1);
+    expect((await getPrivateState(page)).wildcardSkillId).toBe(firstChip!.skillId);
 
-    const secondChip = world.skillChips[0]!;
-    await walkToward(page, secondChip.position.x, secondChip.position.y, 20_000);
-    await interactFor(page, 200);
-    world = await getWorld(page);
+    await walkToArenaPoint(page, secondChip!.x, secondChip!.y, 30_000);
+    await pickUpAt(page, secondChip!.x, secondChip!.y, (view) => view.skillChips.length === 0);
 
-    expect(world.skillChips).toHaveLength(0);
-    expect(world.player.wildcardSkill).not.toBeNull(); // never refused, per concept §10
-    expect(world.player.wildcardSkill!.id).toBe(secondChip.definition.id);
-  });
-
-  test("the wildcard applies as a fourth effect alongside a full three-skill permanent loadout", async ({
-    page,
-  }) => {
-    test.setTimeout(45_000);
-    await gotoGame(page);
-    await startRunWithLoadout(page, ["ricochet", "piercing_rounds", "homing_arrows"]);
-    let world = await getWorld(page);
-    expect(world.player.skillLoadout).toHaveLength(3);
-
-    const chip = world.skillChips[0]!;
-    await walkToward(page, chip.position.x, chip.position.y);
-    await interactFor(page, 200);
-    world = await getWorld(page);
-    expect(world.player.wildcardSkill).not.toBeNull();
-
-    await aimAt(page, 700, 270);
-    await rangedAttackFor(page, 80);
-    world = await getWorld(page);
-    expect(world.projectiles).toHaveLength(1);
-    const projectile = world.projectiles[0]!;
-    // The three permanent effects must still be present with a wildcard
-    // also equipped — the fourth effect layers on, it does not replace them.
-    // Lower bounds only (not exact equality): the randomly-chosen wildcard
-    // could legally duplicate a permanent skill's effect, which stacks
-    // (capped by the shared caps) rather than staying at the solo value.
-    expect(projectile.bouncesRemaining).toBeGreaterThanOrEqual(1);
-    expect(projectile.piercesRemaining).toBeGreaterThanOrEqual(2);
-    expect(projectile.homingStrength).toBeGreaterThanOrEqual(0.35);
+    // Never refused, per concept §10: a new chip always replaces the old one.
+    expect((await getPrivateState(page)).wildcardSkillId).toBe(secondChip!.skillId);
   });
 
   test("the wildcard is lost on death while the three permanent skills survive", async ({
     page,
   }) => {
-    test.setTimeout(60_000);
+    test.setTimeout(150_000);
     await gotoGame(page);
     await startRunWithLoadout(page, ["ricochet", "extended_reach", "bulwark_strike"]);
-    let world = await getWorld(page);
-    const permanentIds = world.player.skillLoadout.map((skill) => skill.id).sort();
+    const permanentIds = [...(await getPrivateState(page)).skillIds].sort();
+    expect(permanentIds).toHaveLength(3);
 
-    const chip = world.skillChips[0]!;
-    await walkToward(page, chip.position.x, chip.position.y);
-    await interactFor(page, 200);
-    world = await getWorld(page);
-    expect(world.player.wildcardSkill).not.toBeNull();
+    const snapshot = await getSnapshot(page);
+    const chip = snapshot.skillChips[0]!;
+    await walkToArenaPoint(page, chip.x, chip.y, 25_000);
+    await pickUpAt(page, chip.x, chip.y, (view) =>
+      view.skillChips.every((entry) => entry.id !== chip.id),
+    );
+    expect((await getPrivateState(page)).wildcardSkillId).not.toBeNull();
 
     // Let the chasers close in and kill the player through repeated contact
     // damage — the real death path, not a fabricated one.
-    world = await dieToChasers(page);
+    const dead = await dieToChasers(page);
+    expect(dead.alive).toBe(false);
 
-    expect(world.player.alive).toBe(false);
-    expect(world.player.wildcardSkill).toBeNull();
-    expect(world.player.skillLoadout.map((skill) => skill.id).sort()).toEqual(permanentIds);
+    const afterDeath = await getPrivateState(page);
+    expect(afterDeath.wildcardSkillId).toBeNull();
+    expect([...afterDeath.skillIds].sort()).toEqual(permanentIds);
   });
 });

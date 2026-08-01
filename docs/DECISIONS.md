@@ -421,3 +421,168 @@ milestone, not implemented yet).
   knockback later requires a new primitive in simulation-core plus a content
   definition, and serves as a live check that the data-driven claim holds.
 - **Status:** Approved.
+## D34. The content version activates in the join handshake
+
+- **Date:** 2026-07-31.
+- **Decision:** `CONTENT_VERSION` (new, in `@carry-or-fall/game-content`) is sent in the join
+  handshake alongside the protocol and build versions, and gates the join by **exact match**, exactly
+  like `PROTOCOL_VERSION`. `packages/protocol` gains `isContentCompatible(peerVersion, localVersion)`
+  — two arguments, so the protocol package keeps its no-dependencies property — and both rooms call it
+  through the shared `authorizeHandshake`. This supersedes `docs/PROTOCOL.md` §3's "Reserved" row,
+  which is updated in the same change.
+- **Reason:** Technical plan §35 requires the client and server to exchange **three** versions.
+  `docs/PROTOCOL.md` §3 deferred the third with an explicit condition — "when `game-content` gains
+  real definitions (M2-M3), add a `CONTENT_VERSION` constant here and include it in the handshake" —
+  and that condition is now satisfied: there are weapons, an enemy, loot, ten skills, and an arena.
+  It matters at M4 specifically because both ends now read those tables for different purposes: the
+  client draws melee arcs, projectile behavior cues, and point previews from its copy while the
+  server computes outcomes from its copy. A client with a stale table would draw a different arc than
+  the one that hit, or preview points that will not be awarded — a silent disagreement about game
+  rules, which is what §35 exists to prevent.
+- **Consequences:** A browser tab loaded before a content change is refused at the join boundary with
+  the existing refresh/update message (D18) rather than desyncing. `CONTENT_VERSION` must be bumped
+  whenever a content change would make a stale client disagree with the server about what a player
+  sees or is awarded; a purely cosmetic change need not. The arena is content now (see D36), so map
+  geometry changes are content-version changes.
+- **Status:** Approved.
+
+## D35. Protocol version 2; inventory commands stay separate messages
+
+- **Date:** 2026-07-31.
+- **Decision:** `PROTOCOL_VERSION` goes 1 to 2. The M4 message set is: join options
+  (`MatchJoinOptions` = handshake plus `skillLoadoutIds`), `input` (with `secondaryAttackPressed`
+  added), `secure_item`, and `discard_item` — each with a runtime validator, which discharges D23.
+  Server to client is the synchronized `MatchState` schema plus one per-owner `player_private` message.
+- **Reason:** The wire contract changed in ways an older peer cannot survive: a new room name, a new
+  required handshake field, a new field on `InputMessage`, and two new message types. §14.2's shape is
+  followed literally for the inventory commands (`{ type: "secure_item", sourceSlot: 2 }`) rather than
+  folding them into `input`, because a one-shot command must not be resent twenty times a second
+  while the key is held; `secondaryAttackPressed` *is* folded in, because it is a held-button state
+  sampled every tick exactly like `attackPressed`, which `docs/PROTOCOL.md` §6's table already permits.
+- **Consequences:** `docs/PROTOCOL.md` is updated to M4 status in the same change. Hit events are
+  **not** broadcast: `stepSimulation` still produces them and the room still discards them, because no
+  client renders them yet and a channel nothing consumes would be an empty layer. The §10.4 rule they
+  exist to satisfy — never store short-lived effects in synchronized state — is preserved either way.
+- **Status:** Approved.
+
+## D36. `World` becomes multi-player; the simulation moves into the room unforked
+
+- **Date:** 2026-07-31.
+- **Decision:** `packages/simulation-core` moves behind the authoritative room without being forked,
+  reimplemented, or duplicated. Making that possible required changing `World` itself:
+  `World.player` becomes `World.players`, `Player` gains `id` and `runResult` (moved off `World`),
+  `Projectile` gains `ownerId`, `stepSimulation(world, input)` becomes
+  `stepSimulation(world, inputsByPlayerId)`, and `addPlayerToWorld`/`removePlayerFromWorld` are added.
+  The arena moves out of the client scene into `@carry-or-fall/game-content` as an `ArenaDefinition`.
+  An architectural test asserts `apps/client/src` contains no `stepSimulation`/`createSimulation`.
+- **Reason:** M1 kept the simulation headless and out of Phaser scene code specifically so it could
+  move behind a server room at M4, and that bet held for every *rule* module — movement, collision,
+  dash, the whole `combat/` pipeline, inventory, build effects, skill effects, extraction, loot, skill
+  chips, points, run results, and the PRNG all moved unchanged, because each was already a pure
+  function over one actor plus world data. What did not hold was the *world shape*: `world.ts` said in
+  as many words that it held "exactly one `player`, not a collection", because M1-M3 had no network
+  and no other players. Two to eight players in one room is exactly the assumption that sentence
+  encoded. The run result had to move to the player for the same reason: concept §17.1 ends the run
+  "for that player", not for the match.
+- **Consequences:** The change is recorded as a **modification, not a clean lift** — the honest
+  version. `Projectile.ownerId` makes §13.4's cap 7 (active projectiles per player) count per owner,
+  which is a strengthening: eight players can no longer collectively exceed a cap written per player.
+  The chaser now retargets the nearest live player every step (concept §14.2's actual wording, which
+  M1 could not exercise). Step order inside `stepSimulation` became a documented rule rather than an
+  implementation detail, because a contested pickup must resolve identically everywhere.
+- **Status:** Approved.
+
+## D37. Client-side lag handling is interpolation only; prediction stays deferred
+
+- **Date:** 2026-07-31.
+- **Decision:** The client renders every entity — including the local player — by interpolating
+  between the two most recent authoritative snapshots. There is no client-side prediction, no
+  speculative local world, no rewind, and no reconciliation. The interpolation factor is clamped at 1,
+  so a late patch holds the last position the server sent rather than extrapolating past it.
+- **Reason:** Technical plan §11.1 prescribes exactly this for the first implementation
+  ("server-authoritative movement, client interpolation, optional immediate local animation response,
+  no sophisticated client prediction") and §11.2 adds "do not implement prediction before basic
+  multiplayer correctness." Predicting the local player would also require the client to run the
+  movement rules, which is the second simulation D36 exists to prevent.
+- **Consequences:** The local player's movement lags input by up to one server tick (50 ms) plus
+  network latency. That cost is real and stated rather than hidden; whether it is acceptable is the
+  measurement §11.2 defers until multiplayer is correct — which is what this milestone establishes.
+  Adding prediction later is §11.2's five-step recipe and needs `InputMessage.sequence`, which already
+  exists and is already enforced to be strictly increasing.
+- **Status:** Approved.
+
+## D38. The pre-run loadout is join options, not a lobby choice
+
+- **Date:** 2026-07-31.
+- **Decision:** `LoadoutScene` stays a local, non-persistent picker (D31), but pressing Enter now
+  hands the selected **skill ids** to the room join as Colyseus join options. The server re-validates
+  them with `createSkillLoadout` — the identical function the client's picker uses — inside `onAuth`,
+  and refuses the join outright if the selection is illegal. The choice is fixed for the whole match.
+- **Reason:** D7 makes one room one match and technical plan §8.3 starts the match together with late
+  join disabled, so there is exactly one moment at which a loadout can be chosen: the join. Putting it
+  in the join options means an illegal loadout never occupies a seat, matching how D18 already handles
+  an incompatible version. Running the same validator on the trusted side is the point: the client's
+  copy shows the player a legal choice; the server's copy is the authority (technical plan §33
+  "loadout unlocks").
+- **Consequences:** A player cannot change skills mid-match, which is what concept §8.3 ("selected
+  before entering the match") already required. When M5 adds accounts, the same join option carries an
+  account-backed loadout instead of an ad-hoc selection, and the unlock check joins the same gate.
+- **Status:** Approved.
+
+## D39. Disconnect: stationary and vulnerable, then abandonment loses the run
+
+- **Date:** 2026-07-31.
+- **Decision:** An unconsented disconnect keeps the player in the world for a short reconnect window
+  (15 s). Their stored input becomes neutral, so they stand still, and they remain a valid target for
+  contact damage. Reconnecting restores control; letting the window lapse removes them and drops their
+  carried inventory on the ground for whoever is still playing. A deliberate leave removes them
+  immediately, with the same drop. Reconnection is authenticated with Colyseus's own single-use
+  reconnection token.
+- **Reason:** This is technical plan §34.1's policy verbatim, including its explicit "do not make
+  disconnected players invulnerable". §34.2's stronger requirement — a valid account token and a
+  matching identity — cannot be met: there are no accounts until M5. The Colyseus token is issued to
+  that socket and is not guessable by another client, which is the strongest identity that exists
+  right now.
+- **Consequences:** **An abandoned run is lost, including the secure slot.** Nothing is persisted
+  anywhere (D9, D16, D22), so there is nothing to settle a reward into, and D27's local-only
+  secure-slot promise is not honored across a disconnect. This is the concrete shape of the gap M5
+  must close: technical plan §14.3 requires a secure-slot action to be persisted *before* it is
+  reported successful, and until that exists the promise is only as durable as the room's memory.
+- **Status:** Approved.
+
+## D40. `foundation_room` stays alongside `match_room`, behind one shared handshake gate
+
+- **Date:** 2026-07-31.
+- **Decision:** The M0 connection-only room is kept, not replaced. Both rooms call one
+  `authorizeHandshake` helper for the protocol/content version gate instead of each implementing it.
+- **Reason:** Joining the match room now has consequences — it takes one of eight seats and starts a
+  lobby countdown — so a probe that allocates no match and starts no simulation is a genuinely
+  different capability, not a duplicate. It is what `BootScene` uses to report connection health
+  independently of gameplay, and what a deployment health check (M8) will want. The one real argument
+  for deleting it was drift: two rooms implementing the version gate twice would eventually disagree.
+  That is removed directly by extracting the gate, which is a better outcome than deletion because the
+  capability survives too.
+- **Consequences:** Two registered rooms. A change to the join gate is made once. The foundation
+  room's integration tests keep passing unchanged, which is itself evidence the extracted gate behaves
+  identically.
+- **Status:** Approved.
+
+## D41. No player-versus-player damage in M4; death looting arrives anyway
+
+- **Date:** 2026-07-31.
+- **Decision:** M4 ships no player-versus-player damage: melee swings and projectiles resolve against
+  enemies only. What does ship is concept §15.2's first three bullets — a dead player's normal
+  inventory drops, the drops are visible and lootable by **any** player, and the secure slot is not
+  dropped — plus contested extraction (§15.1's last bullet), where two players channelling the same
+  point each progress and extract independently.
+- **Reason:** Technical plan §38 M4's deliverable list does not include PvP, and concept §15 is a
+  system with its own unbuilt rules (ambush, protection, group balance §16) whose numbers exist in
+  neither document. Death looting and contested extraction, by contrast, are not new systems at all:
+  they are what M2's ground loot and extraction already do once several players share one world, so
+  excluding them would have taken deliberate extra work.
+- **Consequences:** Players can compete for loot and extraction points but cannot hurt each other.
+  Adding PvP damage later means letting the shared attack pipeline treat players as `AttackTarget`s
+  — the shape is already right, since `AttackTarget` is a minimal damageable-circle interface — plus
+  the balance decisions §15/§16 imply. `docs/M3_ISSUES.md`'s parenthetical grouping of PvP with "other
+  players (M4)" is superseded by this entry.
+- **Status:** Approved.

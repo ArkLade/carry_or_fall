@@ -367,7 +367,8 @@ the capability D32 added at M3.
    playing, and B's own outcome is computed separately.
 
 The Playwright config gains a second `webServer` entry for the game server, since the browser suite
-now needs both halves running.
+now needs both halves running, and pins `MATCH_SEED` so every spec sees the same spawn layout
+(technical plan §9.4 asks for reproducible seeded tests).
 
 ## Definition of done for M4
 

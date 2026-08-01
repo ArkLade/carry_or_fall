@@ -17,6 +17,14 @@ export interface ServerEnv {
   readonly allowedOrigins: readonly string[];
   readonly buildVersion: string;
   readonly logLevel: LogLevel;
+  /**
+   * Fixes the seed every match is generated from, or `null` for a fresh random
+   * seed per match (the normal case; technical plan §9.4). Pinning it makes
+   * enemy, loot, chip, and extraction placement reproducible, which is what the
+   * browser suite needs to assert about a specific position without depending on
+   * whichever layout that run happened to draw.
+   */
+  readonly matchSeed: number | null;
 }
 
 /** Subset of `process.env` this module reads; injectable so it is unit-testable. */
@@ -29,12 +37,16 @@ const DEFAULT_PORT = 2567;
 const MIN_PORT = 0; // 0 lets the OS pick an ephemeral port (used by integration tests).
 const MAX_PORT = 65535;
 
+/** A seed is reduced to an unsigned 32-bit integer by the PRNG, so bound it there. */
+const MAX_MATCH_SEED = 0xffff_ffff;
+
 const DEFAULTS: ServerEnv = {
   nodeEnv: "development",
   port: DEFAULT_PORT,
   allowedOrigins: ["http://localhost:5173"],
   buildVersion: "0.0.0-m0",
   logLevel: "info",
+  matchSeed: null,
 };
 
 /**
@@ -101,6 +113,19 @@ export function loadServerEnv(source: EnvSource = process.env): ServerEnv {
     }
   }
 
+  let matchSeed = DEFAULTS.matchSeed;
+  const seedRaw = source["MATCH_SEED"];
+  if (seedRaw !== undefined && seedRaw !== "") {
+    const parsed = Number(seedRaw);
+    if (Number.isInteger(parsed) && parsed >= 0 && parsed <= MAX_MATCH_SEED) {
+      matchSeed = parsed;
+    } else {
+      errors.push(
+        `MATCH_SEED must be an integer between 0 and ${String(MAX_MATCH_SEED)} (got "${seedRaw}")`,
+      );
+    }
+  }
+
   if (errors.length > 0) {
     throw new Error(`Invalid server environment configuration:\n- ${errors.join("\n- ")}`);
   }
@@ -111,5 +136,6 @@ export function loadServerEnv(source: EnvSource = process.env): ServerEnv {
     allowedOrigins: Object.freeze([...allowedOrigins]),
     buildVersion,
     logLevel,
+    matchSeed,
   });
 }

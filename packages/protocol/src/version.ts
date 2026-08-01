@@ -5,7 +5,7 @@
  * understand. The client sends its value at join time (see `ClientHandshake`)
  * so the server can refuse a stale client instead of letting it silently desync.
  */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /**
  * Whether a peer reporting `peerVersion` speaks a compatible protocol. M0 uses
@@ -16,11 +16,36 @@ export function isProtocolCompatible(peerVersion: number): boolean {
 }
 
 /**
+ * Whether a peer's content tables match the server's (technical plan §35's
+ * third version). Activated in M4 (`docs/DECISIONS.md` D34): the client renders
+ * melee arcs, projectile behavior, loot values, and point previews from its own
+ * copy of `@carry-or-fall/game-content` while the server computes outcomes from
+ * its copy, so a disagreement is a silent disagreement about game rules.
+ *
+ * Takes both versions rather than importing the content package, so this
+ * package keeps its "no dependencies, shared by both ends" property
+ * (`docs/PROTOCOL.md` §1). The caller supplies its own `CONTENT_VERSION`.
+ * Exact-match semantics, like {@link isProtocolCompatible}.
+ */
+export function isContentCompatible(peerVersion: number, localVersion: number): boolean {
+  return peerVersion === localVersion;
+}
+
+/**
  * Application-defined code the server returns when it refuses an incompatible
  * client at the join boundary. In the app-defined 4000+ range permitted for
  * WebSocket close/error codes.
  */
 export const PROTOCOL_MISMATCH_CODE = 4001;
+
+/**
+ * Application-defined code the server closes a connection with after that
+ * client has sent too many invalid or abusive messages (technical plan §33,
+ * "temporary disconnect after repeated invalid behavior"). Distinct from
+ * {@link PROTOCOL_MISMATCH_CODE} so a client can tell "you are out of date"
+ * from "you were dropped", and so tests can assert which one happened.
+ */
+export const INVALID_MESSAGE_DISCONNECT_CODE = 4002;
 
 /**
  * Message the server returns with {@link PROTOCOL_MISMATCH_CODE} when it refuses

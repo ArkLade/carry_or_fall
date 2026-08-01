@@ -20,6 +20,9 @@ async function main(): Promise<void> {
     buildVersion: env.buildVersion,
     logger,
     allowedOrigins: env.allowedOrigins,
+    // Omitted entirely when unset, so the room falls back to a fresh random
+    // seed per match rather than being handed a null one.
+    ...(env.matchSeed === null ? {} : { match: { seed: env.matchSeed } }),
   });
 
   let shuttingDown = false;

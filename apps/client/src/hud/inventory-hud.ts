@@ -1,21 +1,32 @@
 /**
- * The M2 inventory HUD panel (M2.9, `docs/M2_ISSUES.md`): the six inventory
- * slots, the secure slot, the current build-effect summary, and a live
- * "if extracted now" point preview. M3.8 (`docs/M3_ISSUES.md`) adds the
- * three permanent skill slots, the wildcard slot, and the player's current
- * shield value. Toggled by `I` (concept §13.1). Reads `World` only and
- * computes purely derived display values from it (the same treatment
- * `combat-hud.ts` gives cooldown-ratio formatting) — it decides no game rule
- * and holds no authority (technical plan §5.1).
+ * The inventory HUD panel (M2.9, `docs/M2_ISSUES.md`): the six inventory slots,
+ * the secure slot, the current build-effect summary, the three permanent skill
+ * slots, the wildcard slot, the player's shield, and a live "if extracted now"
+ * point preview. Toggled by `I` (concept §13.1).
+ *
+ * M4 changes where the data comes from, not what it shows: the panel reads this
+ * client's own `LocalPlayerState`, which the server sends to it alone
+ * (technical plan §10.3). It receives content **ids** and resolves them against
+ * the shared content tables, so the derived values below (build effects, point
+ * preview) are computed from definitions both ends agree on — the join
+ * handshake refuses a client whose content version differs
+ * (`docs/DECISIONS.md` D34).
+ *
+ * Everything here is display-only. The preview is what *would* be awarded; the
+ * server decides what actually is (technical plan §5.1).
  */
 import Phaser from "phaser";
+import type { LootDefinition } from "@carry-or-fall/game-content";
+import type { LocalPlayerState, PlayerView } from "@carry-or-fall/protocol";
 import {
   addPointTotals,
   aggregateBuildEffects,
   pointsFromLoot,
   sumInventoryPoints,
-  type World,
+  ZERO_POINTS,
 } from "@carry-or-fall/simulation-core";
+
+import { findLoot } from "../network/match-connection";
 
 const TEXT_COLOR = "#e6edf3";
 const MUTED_COLOR = "#8b949e";
@@ -41,6 +52,11 @@ function formatBuildEffects(effects: ReturnType<typeof aggregateBuildEffects>): 
     parts.push(`+${(effects.moveSpeedBonus * 100).toFixed(0)}% move spd`);
   if (effects.maxHealthAdd > 0) parts.push(`+${effects.maxHealthAdd.toFixed(0)} max HP`);
   return parts.length > 0 ? parts.join(" · ") : "none";
+}
+
+/** Resolve the server's inventory ids into definitions; an id this build cannot resolve reads as empty. */
+function resolveInventory(state: LocalPlayerState): readonly (LootDefinition | null)[] {
+  return state.inventory.map((id) => (id === null ? null : (findLoot(id) ?? null)));
 }
 
 export class InventoryHud {
@@ -104,39 +120,41 @@ export class InventoryHud {
     }
   }
 
-  render(world: World): void {
+  render(state: LocalPlayerState | null, localPlayer: PlayerView | null): void {
     if (!this.visible) {
       return;
     }
-    const { player } = world;
+    if (state === null) {
+      this.slotsText.setText("(waiting for the server)");
+      this.secureText.setText("");
+      this.buildText.setText("");
+      this.skillsText.setText("");
+      this.pointsText.setText("");
+      return;
+    }
 
-    const slotLines = player.inventory.map((item, index) => {
+    const inventory = resolveInventory(state);
+    const slotLines = inventory.map((item, index) => {
       const label = item === null ? "empty" : `${item.id} (${item.rarity})`;
       return `${String(index + 1)}: ${label}`;
     });
     this.slotsText.setText(slotLines.join("\n"));
 
-    this.secureText.setText(
-      `Secure slot: ${player.secureSlot === null ? "empty" : player.secureSlot.id}`,
-    );
+    this.secureText.setText(`Secure slot: ${state.secureSlotItemId ?? "empty"}`);
 
-    const effects = aggregateBuildEffects(player.inventory);
+    const effects = aggregateBuildEffects(inventory);
     this.buildText.setText(`Build: ${formatBuildEffects(effects)}`);
 
-    const loadoutLabel =
-      player.skillLoadout.length === 0
-        ? "none"
-        : player.skillLoadout.map((skill) => skill.id).join(", ");
-    const wildcardLabel = player.wildcardSkill === null ? "empty" : player.wildcardSkill.id;
+    const loadoutLabel = state.skillIds.length === 0 ? "none" : state.skillIds.join(", ");
+    const shieldHp = localPlayer === null ? 0 : Math.ceil(localPlayer.shieldHp);
     this.skillsText.setText(
-      `Skills: ${loadoutLabel}\nWildcard: ${wildcardLabel} · Shield: ${String(Math.ceil(player.shieldHp))}`,
+      `Skills: ${loadoutLabel}\nWildcard: ${state.wildcardSkillId ?? "empty"} · Shield: ${String(shieldHp)}`,
     );
 
+    const secured = state.secureSlotItemId === null ? null : findLoot(state.secureSlotItemId);
     const securePoints =
-      player.secureSlot === null
-        ? { force: 0, precision: 0, motion: 0, guard: 0, signal: 0 }
-        : pointsFromLoot(player.secureSlot);
-    const preview = addPointTotals(securePoints, sumInventoryPoints(player.inventory));
+      secured === undefined || secured === null ? ZERO_POINTS : pointsFromLoot(secured);
+    const preview = addPointTotals(securePoints, sumInventoryPoints(inventory));
     this.pointsText.setText(
       `If extracted now: F${String(preview.force)} P${String(preview.precision)} M${String(
         preview.motion,

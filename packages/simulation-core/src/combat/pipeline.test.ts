@@ -11,19 +11,19 @@ import {
 } from "./pipeline";
 import type { AttackActor, AttackTarget } from "./pipeline";
 
-const ACTOR: AttackActor = { position: { x: 0, y: 0 }, facing: 0, radius: 16 };
+const ACTOR: AttackActor = { id: "player-1", position: { x: 0, y: 0 }, facing: 0, radius: 16 };
 
 describe("prepareAttack (stages 1-5)", () => {
   it("refuses an actor with a non-finite position or facing (stage 1: validate actor)", () => {
     const badPosition = prepareAttack(
-      { position: { x: NaN, y: 0 }, facing: 0, radius: 16 },
+      { id: "player-1", position: { x: NaN, y: 0 }, facing: 0, radius: 16 },
       basicSword,
       0,
     );
     expect(badPosition).toEqual({ ready: false, reason: "invalid_actor" });
 
     const badFacing = prepareAttack(
-      { position: { x: 0, y: 0 }, facing: Infinity, radius: 16 },
+      { id: "player-1", position: { x: 0, y: 0 }, facing: Infinity, radius: 16 },
       basicSword,
       0,
     );

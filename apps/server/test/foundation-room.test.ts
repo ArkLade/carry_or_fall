@@ -1,9 +1,11 @@
+import { CONTENT_VERSION } from "@carry-or-fall/game-content";
 import { matchMaker } from "@colyseus/core";
 import { Client } from "@colyseus/sdk";
 import {
   FOUNDATION_ROOM,
   type FoundationRoomState,
   HEALTH_PATH,
+  MATCH_ROOM,
   INCOMPATIBLE_CLIENT_MESSAGE,
   PROTOCOL_MISMATCH_CODE,
   PROTOCOL_VERSION,
@@ -18,7 +20,12 @@ const BUILD_VERSION = "0.0.0-test";
 const CLIENT_ORIGIN = "http://localhost:5173";
 
 // The version handshake a compatible client supplies as Colyseus join options.
-const validHandshake = { protocolVersion: PROTOCOL_VERSION, buildVersion: BUILD_VERSION };
+// `contentVersion` became required in protocol version 2 (`docs/DECISIONS.md` D34).
+const validHandshake = {
+  protocolVersion: PROTOCOL_VERSION,
+  contentVersion: CONTENT_VERSION,
+  buildVersion: BUILD_VERSION,
+};
 
 // The server logs verbosely; silence it so test output stays readable.
 const silentLogger: Logger = {
@@ -146,8 +153,8 @@ describe("foundation room integration", () => {
     // accepted and later desynced — and must carry the refresh/update message.
     await expect(
       client.joinOrCreate(FOUNDATION_ROOM, {
+        ...validHandshake,
         protocolVersion: PROTOCOL_VERSION + 1,
-        buildVersion: BUILD_VERSION,
       }),
     ).rejects.toMatchObject({
       message: INCOMPATIBLE_CLIENT_MESSAGE,
@@ -167,5 +174,47 @@ describe("foundation room integration", () => {
       message: INCOMPATIBLE_CLIENT_MESSAGE,
       code: PROTOCOL_MISMATCH_CODE,
     });
+  });
+
+  it("refuses a client whose content version is incompatible (docs/DECISIONS.md D34)", async () => {
+    const client = new Client(wsBaseUrl);
+
+    await expect(
+      client.joinOrCreate(FOUNDATION_ROOM, {
+        ...validHandshake,
+        contentVersion: CONTENT_VERSION + 1,
+      }),
+    ).rejects.toMatchObject({
+      message: INCOMPATIBLE_CLIENT_MESSAGE,
+      code: PROTOCOL_MISMATCH_CODE,
+    });
+  });
+
+  it("refuses a pre-M4 client, which sends no content version at all", async () => {
+    // The exact shape a browser tab loaded before this milestone would send.
+    // It is stopped at the join boundary rather than admitted and desynced.
+    const client = new Client(wsBaseUrl);
+
+    await expect(
+      client.joinOrCreate(FOUNDATION_ROOM, {
+        protocolVersion: PROTOCOL_VERSION,
+        buildVersion: BUILD_VERSION,
+      }),
+    ).rejects.toMatchObject({
+      message: INCOMPATIBLE_CLIENT_MESSAGE,
+      code: PROTOCOL_MISMATCH_CODE,
+    });
+  });
+
+  it("keeps the probe room free of gameplay: joining it starts no match", async () => {
+    // The reason this room survived M4 (`docs/DECISIONS.md` D40): it proves the
+    // socket path works without consuming a match seat or starting a countdown.
+    const client = new Client(wsBaseUrl);
+    const room = await client.joinOrCreate<FoundationRoomState>(FOUNDATION_ROOM, validHandshake);
+    await waitFor(() => room.state.connectedPlayers === 1);
+
+    expect(await matchMaker.query({ name: MATCH_ROOM })).toHaveLength(0);
+
+    await room.leave(true);
   });
 });

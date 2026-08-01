@@ -9,6 +9,13 @@
 import type { Vec2 } from "../vec2";
 
 export interface HitEvent {
+  /**
+   * The player whose attack landed this hit (M4). With two to eight players
+   * attacking the same enemies in one world, "who hit it" is no longer implied
+   * by there being only one candidate — and shield-on-hit (M3.5) has to reward
+   * the player who actually landed the hit.
+   */
+  readonly ownerId: string;
   readonly targetId: string;
   readonly damage: number;
   readonly position: Vec2;

@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Data-driven game content definitions. Ships the M1 weapons (basic_sword, basic_bow), the chaser enemy definition, M2 loot, and M3 skills; armor and bosses are deferred to later milestones per the concept document.",
+  "description": "Data-driven game content definitions: the M1 weapons, the chaser enemy, M2 loot, M3 skills, the M4 arena, and CONTENT_VERSION (the version both ends exchange at join). Armor and bosses are deferred to later milestones per the concept document.",
   "types": "./src/index.ts",
   "exports": {
     ".": {

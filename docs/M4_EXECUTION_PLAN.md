@@ -40,7 +40,7 @@ shape §3's file list:
 8. **Disconnect: stationary and vulnerable, short reconnect window, then abandonment with loot
    dropped and nothing settled** (technical plan §34.1; no persistence until M5).
 
-Each of these is also recorded in `docs/DECISIONS.md` (D34–D40 this milestone).
+Each of these is also recorded in `docs/DECISIONS.md` (D34-D41 this milestone).
 
 ## 2. Architecture
 
@@ -113,8 +113,14 @@ encoding transmits changes rather than the whole world (§10.1: "prefer compact 
 ### 2.5 One-shot events stay one-shot
 
 Hit events (technical plan §10.4, §13.1's last pipeline stage) are not stored in synchronized state.
-`stepSimulation` already returns them per step; the room broadcasts them as a transient message and
-forgets them. Nothing short-lived accrues in room state (`docs/PROTOCOL.md` §8).
+`stepSimulation` returns them per step and the room **discards** them.
+
+*Revised during implementation:* the plan originally said the room would broadcast them as a
+transient message. Nothing renders them — the client had no hit-effect layer through M3 either — so
+broadcasting would have added a channel with no consumer, which `DEVELOPMENT_RULES.md` forbids as an
+empty layer. The invariant §10.4 exists to protect is unaffected: no short-lived effect enters
+synchronized state either way. When a client grows a use for them (damage numbers, hit flashes), they
+become a transient message then.
 
 ### 2.6 Validation is a boundary, not a sprinkle
 
@@ -135,6 +141,13 @@ carried on the world, advanced only inside the fixed step. The seed is logged wi
 carried on `MatchState` for diagnostics (it is not secret: it selects spawn placement the players can
 already see, and technical plan §9.4 explicitly records the seed with match results).
 
+*Added during implementation:* an optional `MATCH_SEED` environment variable pins that seed instead
+of drawing a random one, and the browser suite sets it. Without it, a browser test that walks to "the
+first extraction point" sometimes gets one across the map behind three chasers and fails for a reason
+unrelated to what it is testing — the layout it happened to draw. §9.4 asks for reproducible seeded
+tests in as many words; this is the knob that provides them. Unset (the default, and the case in
+production) each match still draws its own random seed.
+
 ## 3. Files to change (§26.3)
 
 ### 3.1 `packages/protocol`
@@ -142,8 +155,9 @@ already see, and technical plan §9.4 explicitly records the seed with match res
 | File | Change |
 | --- | --- |
 | `src/version.ts` | `PROTOCOL_VERSION` 1 → 2; add `isContentCompatible(peerVersion, localVersion)`; add `INVALID_MESSAGE_DISCONNECT_CODE`. |
+| — | *Revised during implementation:* `MeleeSwingView` was dropped in favour of flat `swing*` fields on `PlayerView`, so the read model is exactly the shape of the synchronized schema and no lossy conversion sits between them. |
 | `src/rooms.ts` | Add `MATCH_ROOM`; widen `RoomName`. |
-| `src/messages.ts` | `MatchJoinOptions`; `InputMessage.secondaryAttackPressed`; `SecureItemMessage`/`DiscardItemMessage` + type constants; `PRIVATE_STATE_MESSAGE_TYPE`, `HIT_EVENTS_MESSAGE_TYPE`; the `MatchView` read model and `LocalPlayerState`; `MatchPhase`. |
+| `src/messages.ts` | `MatchJoinOptions`; `InputMessage.secondaryAttackPressed`; `SecureItemMessage`/`DiscardItemMessage` + type constants; `PRIVATE_STATE_MESSAGE_TYPE`; `MatchPhase` + `isMatchPhase`; `MatchRoomState`/`SyncedCollection` (the mirror of the server schema) and the `MatchView` snapshot; `LocalPlayerState`. |
 | `src/validation.ts` | `validateMatchJoinOptions`, `validateInputMessage`, `validateSecureItemMessage`, `validateDiscardItemMessage`; shared numeric guards. |
 | `src/validation.test.ts` | Rejection/acceptance tests for each new validator. |
 | `src/version.test.ts` | Content-compatibility tests. |
@@ -179,7 +193,7 @@ already see, and technical plan §9.4 explicitly records the seed with match res
 | `src/rooms/private-state.ts` (new) | `World` → `LocalPlayerState`, plus the change signature that decides when to resend. |
 | `src/rooms/input-guard.ts` (new) | Per-client rate limit, sequence ordering, invalid-message counter. |
 | `src/rooms/MatchRoom.ts` (new) | Lifecycle, tick loop, message handlers, disconnect/reconnect. |
-| `src/server.ts` | Define `match_room` alongside `foundation_room`; accept match-room tuning (lobby duration, match duration) so tests can shorten them. |
+| `src/server.ts` | Define `match_room` alongside `foundation_room`; accept match-room tuning (lobby duration, match duration, reconnect window, seed, and — added during implementation — the arena) so tests can shorten timings and isolate a rule from the chasers. The arena override is also the seam a second real map would arrive through. |
 | `package.json` | Add the `@carry-or-fall/game-content` and `@carry-or-fall/simulation-core` workspace dependencies. |
 | `esbuild.config.mjs` | Nothing to change: both new workspace packages are source-only and get bundled exactly as `protocol` already is. |
 | `test/match-room.test.ts` (new) | Room integration tests (§7.3). |
@@ -195,12 +209,14 @@ already see, and technical plan §9.4 explicitly records the seed with match res
 | `src/render/world-view.ts` | Renders a `MatchView`: all players, local one distinguished. |
 | `src/hud/combat-hud.ts` | Reads the local `PlayerView` + `LocalPlayerState`; adds phase/countdown and player-count readouts. |
 | `src/hud/inventory-hud.ts` | Reads `LocalPlayerState`. |
+| `src/render/interpolate.ts` (new) | Blend the two most recent authoritative snapshots; positions only. |
 | `src/debug/debug-hook.ts` | Exposes snapshot, local player id, private state, connection status. |
 | `src/main.ts` | Wire the new hook accessors. |
-| `playwright.config.ts` | Second `webServer` entry for the game server. |
+| `playwright.config.ts` | Second `webServer` entry for the game server, with a pinned `MATCH_SEED` (added during implementation, see below). |
 | `e2e/helpers.ts` | Read the authoritative snapshot instead of a local `World`; add multi-context helpers. |
 | `e2e/*.spec.ts` | Updated to the networked flow; `multiplayer.spec.ts` added. |
 | `test/architecture.test.ts` (new) | The client source contains no simulation stepping. |
+| `test/interpolate.test.ts` (new) | Interpolation blends motion, never overshoots the latest authoritative position, and leaves authoritative facts alone. |
 
 ### 3.6 Documentation
 
@@ -305,6 +321,19 @@ agree across both; loot picked up by A is gone for B; A extracts independently w
 Existing single-client specs are updated to the networked flow and keep asserting what they already
 asserted (loadout carried into the run, arena shape, skill behavior) — now through the authoritative
 snapshot.
+
+*Revised during implementation:* three M3-era browser assertions read fields that M4 deliberately
+does not publish, because they have no rendering purpose (technical plan §10.3): the effective
+weapon's `recoveryMs` and `stunChance`, and a projectile's `postBounceDamageMultiplier`.
+`swift_strikes`'s recovery reduction is left to the unit and caps-under-load tests that already
+drive it through the real pipeline; `stunning_blows` is now asserted **better** — the browser test
+lands hits until an enemy is actually stunned, rather than checking that a probability was written
+into a weapon copy.
+
+The room integration suite is split in two: the default arena, where the chasers are part of the
+subject, and a chaser-free fixture arena for the rules that are about a player and the world
+(pickup, secure, discard, extraction). A chaser interrupting an extraction channel is *correct*
+behavior that would have made those cases fail for the wrong reason.
 
 ## 8. Issue → plan mapping (`docs/M4_ISSUES.md`)
 

@@ -29,11 +29,38 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  webServer: {
-    command: "pnpm run dev",
-    url: "http://localhost:5173",
-    reuseExistingServer: !process.env.CI,
-    timeout: 30_000,
-  },
+  // Both halves now, because from M4 the client cannot play without the
+  // authoritative server: the game server first (the client's join would fail
+  // without it), then the Vite dev server.
+  webServer: [
+    {
+      command: "pnpm --filter @carry-or-fall/server run dev",
+      // The server's HTTP health endpoint, which is exactly the "is it up"
+      // signal it exists to provide (technical plan §38 M0).
+      url: "http://localhost:2567/health",
+      cwd: "../..",
+      // A fixed match seed, so every spec sees the same enemy, loot, chip, and
+      // extraction placement (technical plan §9.4 asks for reproducible seeded
+      // tests for exactly this reason). Without it, a test that walks to "the
+      // first extraction point" sometimes draws one across the map behind three
+      // chasers and fails for a reason unrelated to what it is testing.
+      //
+      // 76 specifically: both active extraction points open on the players' side
+      // of the divider, and all three chasers spawn in the far or lower half, so
+      // a test walking to the near loot is not racing a chaser down the same
+      // lane. The chasers are still fully present — they cross the map and kill
+      // a player who stands still, which the death tests depend on — they are
+      // just not sitting on top of the thing every other test has to reach.
+      env: { MATCH_SEED: "76" },
+      reuseExistingServer: !process.env.CI,
+      timeout: 60_000,
+    },
+    {
+      command: "pnpm run dev",
+      url: "http://localhost:5173",
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000,
+    },
+  ],
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
 });

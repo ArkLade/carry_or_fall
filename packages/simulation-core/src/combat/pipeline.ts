@@ -40,8 +40,14 @@ import { applyBuildEffectsToWeapon, type BuildEffects, NO_BUILD_EFFECTS } from "
 import { NO_SKILL_EFFECTS, type SkillEffects } from "../skill-effects";
 import type { Vec2 } from "../vec2";
 
-/** The minimal actor shape the pipeline needs: where it is and which way it faces. */
+/**
+ * The minimal actor shape the pipeline needs: who it is, where it is, and which
+ * way it faces. `id` (M4) travels onto the swing state and onto every spawned
+ * projectile, so an attack can be attributed to its owner in a world holding
+ * more than one attacker.
+ */
 export interface AttackActor {
+  readonly id: string;
   readonly position: Vec2;
   readonly facing: number;
   readonly radius: number;
@@ -86,6 +92,7 @@ export type AttackPreparation =
  */
 export function isValidActor(actor: AttackActor): boolean {
   return (
+    actor.id.length > 0 &&
     Number.isFinite(actor.position.x) &&
     Number.isFinite(actor.position.y) &&
     Number.isFinite(actor.facing) &&

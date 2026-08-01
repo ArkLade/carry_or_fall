@@ -3,14 +3,16 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Authoritative Colyseus game server (Node 24). M0 hosts a single foundation_room with a health endpoint and graceful shutdown; no gameplay.",
+  "description": "Authoritative Colyseus game server (Node 24). Hosts the match room: one room per match, two to eight players, the shared fixed-step simulation, and per-player private state. Also hosts the connection-only foundation_room probe and the health endpoint.",
   "scripts": {
     "dev": "tsx watch --env-file-if-exists=../../.env src/index.ts",
     "build": "node esbuild.config.mjs",
     "start": "node --env-file-if-exists=../../.env dist/index.js"
   },
   "dependencies": {
+    "@carry-or-fall/game-content": "workspace:*",
     "@carry-or-fall/protocol": "workspace:*",
+    "@carry-or-fall/simulation-core": "workspace:*",
     "@colyseus/core": "0.17.45",
     "@colyseus/schema": "4.0.30",
     "@colyseus/ws-transport": "0.17.13",

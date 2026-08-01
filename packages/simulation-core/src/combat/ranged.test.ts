@@ -21,7 +21,7 @@ import {
   stepProjectiles,
 } from "./ranged";
 
-const ACTOR: AttackActor = { position: { x: 0, y: 0 }, facing: 0, radius: 16 };
+const ACTOR: AttackActor = { id: "player-1", position: { x: 0, y: 0 }, facing: 0, radius: 16 };
 const NO_WALLS = buildWallGrid([]);
 
 /** A bow with generous bounce/pierce limits, so a skill's effect isn't hidden by the weapon's own ceiling. */
@@ -235,6 +235,7 @@ describe("cap 2 (bounces): ricochet-style skill behavior end-to-end (M3.4)", () 
     const grid = buildWallGrid([wall]);
     const exhausted: Projectile = {
       id: "p-exhausted",
+      ownerId: "player-1",
       position: { x: 0, y: 0 },
       velocity: { x: 600, y: 0 },
       radius: PROJECTILE_RADIUS_PX,
@@ -312,6 +313,7 @@ describe("cap 4 (returns): returning-shot-style skill behavior end-to-end (M3.4)
   it("is removed on its second lifespan expiry (no more than MAX_RETURNS_PER_PROJECTILE returns)", () => {
     const alreadyReturned: Projectile = {
       id: "p-returned",
+      ownerId: "player-1",
       position: { x: 0, y: 0 },
       velocity: { x: -600, y: 0 },
       radius: PROJECTILE_RADIUS_PX,

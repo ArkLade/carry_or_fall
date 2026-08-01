@@ -1,10 +1,14 @@
 /**
- * `@carry-or-fall/simulation-core` — the headless, fixed-step local simulation
- * (`docs/M1_EXECUTION_PLAN.md` §2.1). This is the single seam the client calls
- * into (`createSimulation`/`stepSimulation`); no game rule runs in Phaser scene
- * code. M1 is complete: movement, map collision, aim, the shared attack
- * pipeline (sword + bow, with hard caps), the chaser enemy, player health and
- * death, and the dash.
+ * `@carry-or-fall/simulation-core` — the headless, fixed-step simulation
+ * (`docs/M1_EXECUTION_PLAN.md` §2.1). It is the single seam a host calls into
+ * (`createSimulation`/`stepSimulation`); no game rule runs in Phaser scene code.
+ *
+ * Through M3 that host was the browser client, running a local single-player
+ * world. From M4 the host is the **authoritative Colyseus room**
+ * (`apps/server/src/rooms/MatchRoom.ts`): the server steps one world holding two
+ * to eight players from their validated inputs, and the client renders the
+ * result without stepping anything. Nothing in this package knows about the
+ * network — it gained a player collection, not a transport.
  */
 export * from "./version";
 export * from "./prng";

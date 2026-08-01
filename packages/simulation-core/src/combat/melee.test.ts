@@ -19,7 +19,7 @@ const NEVER_ROLLS: Pick<ReturnType<typeof createRng>, "next"> = { next: () => 0.
 /** Rolls "always succeeds" — for tests that force a stun roll to land. */
 const ALWAYS_ROLLS: Pick<ReturnType<typeof createRng>, "next"> = { next: () => 0 };
 
-const ACTOR: AttackActor = { position: { x: 100, y: 100 }, facing: 0, radius: 16 };
+const ACTOR: AttackActor = { id: "player-1", position: { x: 100, y: 100 }, facing: 0, radius: 16 };
 
 describe("startMeleeAttack", () => {
   it("refuses to start while the sword's cooldown has not elapsed", () => {
@@ -32,6 +32,7 @@ describe("startMeleeAttack", () => {
     expect(result.started).toBe(true);
     if (!result.started) throw new Error("expected started");
     expect(result.state).toEqual({
+      ownerId: ACTOR.id,
       weapon: basicSword,
       origin: ACTOR.position,
       facing: ACTOR.facing,
@@ -117,7 +118,12 @@ describe("resolveMeleeHits (stages 8-9: resolve hits, apply damage/status)", () 
     // Knocked directly away from the origin (which is to the left of the target).
     expect(updatedTargets[0]!.position.x).toBeGreaterThan(target.position.x);
     expect(hitEvents).toEqual([
-      { targetId: "enemy-1", damage: basicSword.damage, position: target.position },
+      {
+        ownerId: ACTOR.id,
+        targetId: "enemy-1",
+        damage: basicSword.damage,
+        position: target.position,
+      },
     ]);
     // basic_sword's base stunChance is 0, so no roll should ever land regardless of rng.
     expect(stunnedTargetIds).toEqual([]);
