@@ -889,3 +889,19 @@ milestone, not implemented yet).
   anonymous users in a real project. The real schema's evidence is `pnpm test:supabase`, which is
   the suite that *should* need credentials.
 - **Status:** Approved.
+
+
+## D52. Anonymous sign-in rate limit raised to 100/hour for the test suite
+
+- **Decision:** The dashboard's anonymous sign-in rate limit was raised from the
+  default 30/hour per IP to 100/hour so the 27-test Supabase suite can complete in
+  one run. This is a production setting changed for a test convenience.
+- **Reason:** Each test creates one or two anonymous accounts, exhausting the
+  default limit at test 23. The proper fix is in the suite — reuse accounts where a
+  fresh one is not needed, and delete the users a test creates — not in the limit.
+- **Consequences:** Rate limiting is currently the only defense against anonymous
+  sign-in abuse, since no CAPTCHA is configured. Before M8 opens the game to the
+  internet, the suite must be fixed, this limit returned to 30 or lower, and CAPTCHA
+  or Turnstile added per D50. Supabase never cleans up anonymous users, so test
+  accounts accumulate against the 500 MB free tier until then.
+- **Status:** Approved, to be reverted before M8.
