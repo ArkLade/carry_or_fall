@@ -28,6 +28,7 @@ export * from "./skill-loadout";
 export * from "./skill-effects";
 export * from "./skill-chip";
 export * from "./run-result";
+export * from "./settlement";
 export * from "./simulation";
 export * from "./combat/caps";
 export * from "./combat/events";

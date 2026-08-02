@@ -8,9 +8,13 @@
  *   inventory slot drops on the ground instead (dropped, not converted).
  * - **Extraction:** both the secure slot and every inventory item convert.
  *
- * The result is never persisted (`docs/DECISIONS.md` D27) — the caller
- * (`simulation.ts`) only ever stores it on `World.runResult` for the client
- * to display once.
+ * The result is still computed with no knowledge of storage: the caller
+ * (`simulation.ts`) stores it on `Player.runResult`, and that is all this module
+ * knows about. What changed in M5 is what the *host* does with it — the room
+ * observes a non-null `runResult` and settles it through the progression store
+ * (`settlement.ts`, `docs/DATA_MODEL.md` §4.3), superseding D27's "the
+ * run-result screen is the only place it is ever shown". No database call
+ * happens here, or anywhere on the fixed step.
  */
 import type { Inventory, SecureSlot } from "./inventory";
 import { addPointTotals, pointsFromLoot, sumInventoryPoints, ZERO_POINTS } from "./points";

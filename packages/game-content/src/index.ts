@@ -13,7 +13,8 @@
  */
 
 /** Categories of content that will become data-driven definitions later. */
-export type ContentKind = "weapon" | "armor" | "skill" | "loot" | "enemy" | "boss" | "arena";
+export type ContentKind =
+  "weapon" | "armor" | "skill" | "loot" | "enemy" | "boss" | "arena" | "unlock";
 
 /**
  * Shared shape every content definition will carry. Per-kind fields (damage,
@@ -32,3 +33,4 @@ export * from "./enemies";
 export * from "./loot";
 export * from "./skills";
 export * from "./arena";
+export * from "./unlocks";

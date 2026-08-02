@@ -17,5 +17,12 @@
  *
  * Version 1 is M4's content: two weapons, one enemy, the loot table, ten
  * skills, and one arena.
+ *
+ * Version 2 is M5's: the same, plus the unlock table (`unlocks.ts`). It is a
+ * bump rather than an addition-in-place because both ends now read that table
+ * for different purposes — the server gates the join on it (technical plan §19),
+ * the client marks skills locked from its own copy — so a stale client would
+ * offer a selection the server will refuse, or hide one it would accept. That is
+ * exactly the silent disagreement about game rules §35 exists to prevent.
  */
-export const CONTENT_VERSION = 1;
+export const CONTENT_VERSION = 2;
