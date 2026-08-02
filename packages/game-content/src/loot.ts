@@ -121,6 +121,16 @@ export const warlordsSeal: LootDefinition = {
   buildEffects: { damageAdd: 5, attackSpeedBonus: 0.05 },
 } as const;
 
+/**
+ * Look up one loot item by id. Added in M5 for crash recovery: a
+ * `secure_reservations` row stores the item **id**, because the database holds
+ * no copy of this table (`docs/DATA_MODEL.md` §3.3), so finalizing a reservation
+ * after a server crash means resolving that id back to its point values here.
+ */
+export function findLoot(lootId: string): LootDefinition | null {
+  return ALL_LOOT.find((item) => item.id === lootId) ?? null;
+}
+
 /** Every loot definition M2 ships, in a fixed order used for the loot table (`loot-drop.ts`). */
 export const ALL_LOOT: readonly LootDefinition[] = [
   honingStone,

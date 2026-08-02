@@ -52,9 +52,18 @@ naming here because they guard an M4 invariant:
 ### 2.2 Room integration tests (Vitest) — `pnpm test:integration`
 
 Exercise the authoritative Colyseus server end to end against a real listening server. Glob:
-`apps/*/test/**/*.test.ts` (the Vitest `integration` project). Scope per technical plan §30.2:
-create a room, join simulated clients, send messages, verify synchronized state, test disconnects,
-room disposal, extraction, and death/dropped loot.
+`apps/*/test/**/*.test.ts`. Scope per technical plan §30.2: create a room, join simulated clients,
+send messages, verify synchronized state, test disconnects, room disposal, extraction, and
+death/dropped loot.
+
+**One gate, two Vitest projects** (`docs/DECISIONS.md` D54). `pnpm test:integration` runs
+`--project integration --project integration-server`. The six files that bind a real TCP port and
+run a real Colyseus server are the `integration-server` project and run **one file at a time**
+(`fileParallelism: false`); everything else stays parallel. Run together on a loaded machine they
+oversubscribe it, and on Windows an oversubscribed fork intermittently dies natively — the worker
+exits with `0xC0000409` and no JavaScript error, so its whole file silently vanishes from the
+counts. Serialising them is the mitigation; the `vitest.incomplete-run.ts` reporter is the
+guarantee, because it fails loudly whenever any file did not report.
 
 **Exists today (6 files, 71 tests):**
 
@@ -270,7 +279,14 @@ Each milestone's exit criteria (technical plan §38) imply its tests:
   authority suite as integration tests, and two real browser contexts against one server
   (`apps/client/e2e/multiplayer.spec.ts`) for "two real browsers can play".
 - **M5 (accounts/progression):** extracted points persist, secure-slot progress persists after
-  death, and duplicate settlement does not double-award (idempotency).
+  death, and duplicate settlement does not double-award (idempotency). The third needs
+  **adversarial** evidence, not a happy path: the same run settled twice, concurrent settlement of
+  one run, a retry after a failure the caller cannot distinguish from success, a client replaying a
+  settlement message, and a crash between the simulation ending and the write landing — plus the
+  same crash on either side of a secure-slot reservation. Delivered as a **contract suite written
+  once and run against two backends** (`apps/server/test/progression-contract.ts`): the in-memory
+  store in CI, and real PostgreSQL under `pnpm test:supabase`. Those are different claims and are
+  reported separately — see §5.
 - **M6–M9:** party/matchmaking, boss-core decisions, deployment smoke, and load/soak/perf per the
   layers above.
 
@@ -283,7 +299,28 @@ Each milestone's exit criteria (technical plan §38) imply its tests:
 | `pnpm test:integration`   | Room integration + build | Yes        |
 | `pnpm build`              | Production build         | Yes        |
 | `pnpm test:e2e`           | Browser (Playwright)     | Yes, as a separate job (D32) |
+| `pnpm test:supabase`      | Real Supabase project    | **No** — needs credentials (D46) |
 
 The required CI workflow runs all of the above on every push and pull request (technical plan §31;
 `.github/workflows/ci.yml`). Browser, load, and soak layers are scheduled or on-demand jobs added
 when those layers exist. CI never deploys.
+
+### What needs a real Supabase project, and why the split is stated rather than blurred
+
+`pnpm test:supabase` (`apps/server/test-supabase/`) is the only suite that talks to a real project.
+It runs with `SUPABASE_URL` and `SUPABASE_SECRET_KEY` from the environment and **skips** when they
+are absent, so a fresh clone and a CI runner pass without it (D42's rule, D46's application).
+
+The division of evidence is exact, and any report of M5 says which claim rests on which run:
+
+- The in-memory run proves **the server calls the persistence contract correctly** — the ordering
+  around a secure reservation, the retry that reuses one key and one payload, the recovery path.
+- Only the PostgreSQL run proves **the SQL implementing that contract is correct** — that
+  `settle_match_reward` is genuinely atomic, that its `on conflict` guard holds under real
+  concurrent transactions rather than under a single-threaded event loop, and that every
+  row-level-security policy denies what it should (`docs/DATA_MODEL.md` §5.4's eight properties,
+  including a user failing to update their own balance and the `is_anonymous` claim tested in both
+  directions).
+
+An in-process fake cannot demonstrate the second set. Running the same test bodies against both is
+what keeps the first from being mistaken for it.

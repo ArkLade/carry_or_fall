@@ -17,7 +17,8 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc -p apps/client/tsconfig.json --noEmit && tsc -p apps/server/tsconfig.json --noEmit && tsc -p packages/protocol/tsconfig.json --noEmit && tsc -p packages/game-content/tsconfig.json --noEmit && tsc -p packages/simulation-core/tsconfig.json --noEmit",
     "test": "vitest run --project unit",
-    "test:integration": "vitest run --project integration",
+    "test:integration": "vitest run --project integration --project integration-server",
+    "test:supabase": "node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run --project supabase",
     "test:e2e": "pnpm --filter @carry-or-fall/client run test:e2e"
   },
   "devDependencies": {

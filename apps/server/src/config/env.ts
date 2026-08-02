@@ -38,6 +38,28 @@ export interface ServerEnv {
    * bundle at all.
    */
   readonly matchLobbyMs: number | null;
+  /**
+   * Supabase project URL and secret key (technical plan §20.2), or `null` when
+   * persistence is not configured.
+   *
+   * **The secret key bypasses row-level security.** It is deliberately not
+   * `VITE_`-prefixed, never reaches the client build (asserted by
+   * `apps/client/test/build.test.ts`), and is never included in a log line, an
+   * error message, or a metrics field — including the "invalid configuration"
+   * error this module throws, which names variables and never quotes their
+   * values for these two.
+   *
+   * Both or neither: a URL with no key, or a key with no URL, is a
+   * misconfiguration rather than a partial setup, and a server that started
+   * half-configured would fail later, at a join, with a much worse error.
+   *
+   * Absent is legal in development and test, where `select-store.ts` falls back
+   * to the in-memory store so a fresh clone with no `.env` still runs
+   * (`docs/DECISIONS.md` D46). Absent in **production** is a startup failure —
+   * see `assertPersistenceConfigured`.
+   */
+  readonly supabaseUrl: string | null;
+  readonly supabaseSecretKey: string | null;
 }
 
 /** Subset of `process.env` this module reads; injectable so it is unit-testable. */
@@ -64,7 +86,26 @@ const DEFAULTS: ServerEnv = {
   logLevel: "info",
   matchSeed: null,
   matchLobbyMs: null,
+  supabaseUrl: null,
+  supabaseSecretKey: null,
 };
+
+/**
+ * Guard against pasting a publishable key into the secret slot — a mistake that
+ * would leave the server unable to write anything while looking configured. It
+ * checks the documented prefix only; it never logs, echoes, or measures the rest
+ * of the value.
+ */
+const SECRET_KEY_PREFIX = "sb_secret_";
+
+/** Whether a string is an absolute http(s) URL. The value itself is never echoed. */
+function isHttpUrl(value: string): boolean {
+  if (!URL.canParse(value)) {
+    return false;
+  }
+  const { protocol } = new URL(value);
+  return protocol === "http:" || protocol === "https:";
+}
 
 /**
  * Parse and validate the server environment. Throws an `Error` listing every
@@ -156,6 +197,40 @@ export function loadServerEnv(source: EnvSource = process.env): ServerEnv {
     }
   }
 
+  // Supabase (technical plan §20.2). Note what is absent from every message
+  // below: the value. A malformed secret key produces "SUPABASE_SECRET_KEY must
+  // start with …", never the key itself — an invalid-configuration error is
+  // exactly the kind of thing that ends up in a log aggregator or a screenshot.
+  let supabaseUrl = DEFAULTS.supabaseUrl;
+  let supabaseSecretKey = DEFAULTS.supabaseSecretKey;
+  const urlRaw = source["SUPABASE_URL"]?.trim();
+  const secretRaw = source["SUPABASE_SECRET_KEY"]?.trim();
+  const hasUrl = urlRaw !== undefined && urlRaw !== "";
+  const hasSecret = secretRaw !== undefined && secretRaw !== "";
+
+  if (hasUrl !== hasSecret) {
+    errors.push("SUPABASE_URL and SUPABASE_SECRET_KEY must be set together (set both, or neither)");
+  } else if (hasUrl && hasSecret) {
+    // http/https specifically, not merely "parseable". `URL.canParse` accepts
+    // any scheme, so a typo like `hhttps://…` parses cleanly here and then fails
+    // several layers down inside the Supabase client with a message that names
+    // neither the variable nor the file it came from. Checking the scheme turns
+    // that into one line at startup. (Found exactly this way: a stray character
+    // in a local `.env` took down the browser suite with a stack trace through
+    // `supabase-js`.)
+    if (!isHttpUrl(urlRaw)) {
+      errors.push("SUPABASE_URL must be an http(s) URL (e.g. https://<project-ref>.supabase.co)");
+    } else if (!secretRaw.startsWith(SECRET_KEY_PREFIX)) {
+      errors.push(
+        `SUPABASE_SECRET_KEY must be a secret key (it starts with "${SECRET_KEY_PREFIX}"); ` +
+          "the publishable key belongs in VITE_SUPABASE_PUBLISHABLE_KEY",
+      );
+    } else {
+      supabaseUrl = urlRaw;
+      supabaseSecretKey = secretRaw;
+    }
+  }
+
   if (errors.length > 0) {
     throw new Error(`Invalid server environment configuration:\n- ${errors.join("\n- ")}`);
   }
@@ -168,5 +243,34 @@ export function loadServerEnv(source: EnvSource = process.env): ServerEnv {
     logLevel,
     matchSeed,
     matchLobbyMs,
+    supabaseUrl,
+    supabaseSecretKey,
   });
+}
+
+/** Whether this configuration can reach a real Supabase project. */
+export function hasSupabaseConfig(
+  env: ServerEnv,
+): env is ServerEnv & { supabaseUrl: string; supabaseSecretKey: string } {
+  return env.supabaseUrl !== null && env.supabaseSecretKey !== null;
+}
+
+/**
+ * Refuse to start a production server with no persistence.
+ *
+ * The in-memory fallback exists so a fresh clone, CI, and the browser suite can
+ * run with no credentials (`docs/DECISIONS.md` D46). The danger of a fallback is
+ * that a real deployment silently gets it and loses every player's progression
+ * without erroring once. This closes that off at the only place it can be closed
+ * — startup — so the fallback is reachable in development and test and nowhere
+ * else.
+ */
+export function assertPersistenceConfigured(env: ServerEnv): void {
+  if (env.nodeEnv === "production" && !hasSupabaseConfig(env)) {
+    throw new Error(
+      "Refusing to start: NODE_ENV=production requires SUPABASE_URL and SUPABASE_SECRET_KEY. " +
+        "Without them the server would run on in-memory progression and silently discard " +
+        "every account's points, unlocks, and secure-slot rewards.",
+    );
+  }
 }

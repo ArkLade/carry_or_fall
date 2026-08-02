@@ -76,3 +76,10 @@ export const basicBow: WeaponDefinition = {
   spreadDegrees: 0,
   limits: { maxProjectilesPerAttack: 8, maxBounces: 3, maxPierces: 3 },
 } as const;
+
+/**
+ * Every weapon definition the game ships, mirroring `ALL_SKILLS`/`ALL_LOOT`.
+ * Added in M5 so `unlocks.ts` can assert that a weapon unlock names a weapon
+ * that exists, rather than repeating the list a third time.
+ */
+export const ALL_WEAPONS: readonly WeaponDefinition[] = [basicSword, basicBow] as const;

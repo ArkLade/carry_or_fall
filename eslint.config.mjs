@@ -12,7 +12,12 @@ export default tseslint.config(
   {
     languageOptions: {
       parserOptions: {
-        projectService: true,
+        projectService: {
+          // Root test tooling belongs to no package tsconfig, so the project
+          // service has nothing to resolve it against. Naming it here keeps it
+          // linted rather than ignored (`docs/DECISIONS.md` D54).
+          allowDefaultProject: ["vitest.incomplete-run.ts"],
+        },
         tsconfigRootDir: import.meta.dirname,
       },
     },

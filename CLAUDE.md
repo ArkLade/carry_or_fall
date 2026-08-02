@@ -26,6 +26,7 @@ packages/protocol/    Shared IDs, versions, message schemas, runtime validators
 packages/game-content/  Data-driven content type placeholders (no gameplay content yet)
 packages/simulation-core/  Deterministic helpers (no movement/combat yet)
 packages/config/      Shared TypeScript / tooling config
+supabase/             SQL migrations for the account/progression schema (M5)
 docs/                 Authoritative docs, rules, decisions, execution plans
 .github/workflows/    GitHub Actions CI
 ```
@@ -41,6 +42,9 @@ pnpm workspace monorepo. Run pnpm through Corepack (`corepack pnpm ...`).
 - `pnpm typecheck` — strict TypeScript type checking
 - `pnpm test` — unit tests (Vitest)
 - `pnpm test:integration` — Colyseus room integration / smoke tests
+- `pnpm test:e2e` — Playwright browser suite (separate CI job)
+- `pnpm test:supabase` — schema contract + RLS against a real Supabase project
+  (skips without credentials; **not** part of CI — see `docs/DECISIONS.md` D46)
 
 ## Architecture boundaries (summary — see DEVELOPMENT_RULES.md)
 

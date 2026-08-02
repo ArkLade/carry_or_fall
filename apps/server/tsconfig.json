@@ -5,5 +5,9 @@
   "compilerOptions": {
     "types": ["node"]
   },
-  "include": ["src", "test"]
+  // `test-supabase` is the only suite that talks to a real Supabase project
+  // (`pnpm test:supabase`). It is typechecked and linted like everything else,
+  // but is excluded from `pnpm test`/`pnpm test:integration` by the vitest
+  // project split, because CI has no credentials (`docs/DECISIONS.md` D46).
+  "include": ["src", "test", "test-supabase"]
 }

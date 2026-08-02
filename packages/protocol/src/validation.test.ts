@@ -8,6 +8,7 @@ import {
   validateInputMessage,
   validateMatchJoinOptions,
   validateSecureItemMessage,
+  validateSettlementMessage,
 } from "./validation";
 
 const CONTENT_VERSION = 1;
@@ -319,5 +320,94 @@ describe("validateHealthResponse", () => {
     expect(validateHealthResponse({ ...base, uptime: -1 }).ok).toBe(false);
     expect(validateHealthResponse({ ...base, uptime: Number.NaN }).ok).toBe(false);
     expect(validateHealthResponse({ ...base, uptime: "1" }).ok).toBe(false);
+  });
+});
+
+describe("validateMatchJoinOptions: accessToken (M5)", () => {
+  const base = {
+    protocolVersion: PROTOCOL_VERSION,
+    contentVersion: 2,
+    buildVersion: "0.0.0-m5",
+    skillLoadoutIds: [],
+  };
+
+  it("accepts a token, and treats absent or null as no session", () => {
+    // "No session" is legal on the wire. Whether it is *acceptable* depends on
+    // whether the server has a Supabase project to verify against, which this
+    // package cannot know — so it bounds the shape and leaves the policy to the
+    // room (`docs/DATA_MODEL.md` §6).
+    expect(validateMatchJoinOptions({ ...base, accessToken: "abc.def.ghi" }, 3)).toEqual({
+      ok: true,
+      value: { ...base, skillLoadoutIds: [], accessToken: "abc.def.ghi" },
+    });
+    const absent = validateMatchJoinOptions(base, 3);
+    expect(absent.ok && absent.value.accessToken).toBeNull();
+    const explicitNull = validateMatchJoinOptions({ ...base, accessToken: null }, 3);
+    expect(explicitNull.ok && explicitNull.value.accessToken).toBeNull();
+  });
+
+  it("rejects a non-string token rather than coercing it", () => {
+    for (const bad of [42, true, {}, [], { toString: () => "x" }]) {
+      expect(validateMatchJoinOptions({ ...base, accessToken: bad }, 3).ok).toBe(false);
+    }
+  });
+
+  it("rejects an empty token and one past the length cap", () => {
+    // The cap keeps a client from making the server allocate — and then forward
+    // to Supabase Auth — an arbitrarily large string at the join boundary.
+    expect(validateMatchJoinOptions({ ...base, accessToken: "" }, 3).ok).toBe(false);
+    expect(validateMatchJoinOptions({ ...base, accessToken: "a".repeat(4097) }, 3).ok).toBe(false);
+    expect(validateMatchJoinOptions({ ...base, accessToken: "a".repeat(4096) }, 3).ok).toBe(true);
+  });
+});
+
+describe("validateSettlementMessage (M5)", () => {
+  const balances = { force: 1, precision: 2, motion: 3, guard: 4, signal: 5 };
+  const base = {
+    alreadySettled: false,
+    balances,
+    unlockIds: ["ricochet"],
+    newUnlockIds: [],
+    isAnonymous: true,
+  };
+
+  it("accepts a well-formed settlement", () => {
+    const result = validateSettlementMessage(base);
+    expect(result.ok && result.value.balances).toEqual(balances);
+  });
+
+  it("rejects a balance that is negative, non-finite, or not a number", () => {
+    // These are rendered to the player as their account. A NaN or a negative
+    // would be a visibly broken account rather than a caught error.
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -1, "3", null]) {
+      expect(validateSettlementMessage({ ...base, balances: { ...balances, force: bad } }).ok).toBe(
+        false,
+      );
+    }
+  });
+
+  it("rejects a missing category rather than defaulting it to zero", () => {
+    const { force: _dropped, ...incomplete } = balances;
+    expect(validateSettlementMessage({ ...base, balances: incomplete }).ok).toBe(false);
+  });
+
+  it("rejects malformed unlock id lists", () => {
+    for (const bad of ["ricochet", [42], [""], [null], ["x".repeat(65)]]) {
+      expect(validateSettlementMessage({ ...base, unlockIds: bad }).ok).toBe(false);
+    }
+    expect(
+      validateSettlementMessage({ ...base, unlockIds: Array.from({ length: 257 }, () => "a") }).ok,
+    ).toBe(false);
+  });
+
+  it("rejects non-boolean flags", () => {
+    expect(validateSettlementMessage({ ...base, alreadySettled: "yes" }).ok).toBe(false);
+    expect(validateSettlementMessage({ ...base, isAnonymous: 1 }).ok).toBe(false);
+  });
+
+  it("rejects a non-object payload", () => {
+    for (const bad of [null, undefined, 5, "settled", []]) {
+      expect(validateSettlementMessage(bad).ok).toBe(false);
+    }
   });
 });

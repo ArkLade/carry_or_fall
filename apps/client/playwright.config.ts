@@ -66,6 +66,23 @@ const gameServerEnv = {
   // clients really did land together, so if this is ever too tight again the
   // failure says so immediately instead of looking like a slow test.
   MATCH_LOBBY_MS: "5000",
+
+  // **No Supabase, deliberately** (M5). Blanked rather than merely unset,
+  // because the server's `dev` script loads the repository-root `.env` through
+  // `--env-file-if-exists` (`docs/DECISIONS.md` D20) and Node does not override
+  // an already-set variable — so leaving these out means a developer *with*
+  // credentials runs a different suite than CI does, which is the exact
+  // divergence D42 exists to prevent. Found the hard way: the first M5 run of
+  // this suite failed on the developer's machine and would have passed on CI.
+  //
+  // The consequences are all wanted. The suite runs on the in-memory
+  // progression store, so it tests the game rather than a network round trip to
+  // a hosted database; it cannot spend the anonymous sign-in rate limit (30 per
+  // hour per IP, `docs/DECISIONS.md` D50) on thirty test runs; and it leaves no
+  // junk anonymous users in a real project. The real schema's evidence is
+  // `pnpm test:supabase`, which is the suite that *should* need credentials.
+  SUPABASE_URL: "",
+  SUPABASE_SECRET_KEY: "",
 } as const;
 
 /**
@@ -77,6 +94,15 @@ const gameServerEnv = {
 const clientEnv = {
   VITE_GAME_SERVER_URL: `ws://localhost:${SERVER_PORT}`,
   VITE_BUILD_VERSION: "0.0.0-e2e",
+
+  // Blanked for the same reason as the server's pair above, and one more: a
+  // browser that found real credentials here would sign in anonymously against
+  // the live project on every one of the thirty specs, creating thirty
+  // unrecoverable users a run and burning the §17.4 sign-in rate limit. The
+  // client treats absent configuration as "this build has no accounts" and stays
+  // fully playable, which is what these tests exercise.
+  VITE_SUPABASE_URL: "",
+  VITE_SUPABASE_PUBLISHABLE_KEY: "",
 } as const;
 
 export default defineConfig({

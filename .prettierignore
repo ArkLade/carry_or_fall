@@ -22,6 +22,14 @@ apps/client/blob-report/
 # Vite / caches
 .vite/
 
+# Supabase CLI local state (docs/DECISIONS.md D53). Prettier does not read
+# .gitignore, so an ignored file is still a `format:check` failure until it is
+# named here too — which is how supabase/.temp/linked-project.json failed the
+# gate. supabase/migrations/*.sql is not Prettier's to format either: Prettier
+# has no SQL parser, so it never opens those files.
+supabase/.temp/
+supabase/.branches/
+
 # Environment files
 .env
 .env.*

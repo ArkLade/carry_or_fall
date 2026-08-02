@@ -81,8 +81,34 @@ Copy-Item .env.example .env
 ```
 
 `.env.example` documents every variable (client `VITE_*` vars, server `PORT`,
-`ALLOWED_ORIGINS`, `GAME_BUILD_VERSION`, `LOG_LEVEL`). It contains **no
-secrets**; the real `.env` is git-ignored.
+`ALLOWED_ORIGINS`, `GAME_BUILD_VERSION`, `LOG_LEVEL`, and the Supabase pairs). It
+contains **no secrets**; the real `.env` is git-ignored, and it is the only place
+a credential ever lives.
+
+### Accounts and progression (optional locally)
+
+From M5 the game can store permanent progression in Supabase. All four Supabase
+variables are **optional for local development**: with none of them set, the
+server runs on an in-memory store and the client plays as a guest, so a fresh
+clone with no `.env` is fully playable and passes every gate. See
+[`supabase/README.md`](supabase/README.md) to point it at a real project, and
+[`docs/DATA_MODEL.md`](docs/DATA_MODEL.md) for the schema.
+
+Two rules, both enforced by tests rather than by intention:
+
+- The **publishable key** (`sb_publishable_…`) is designed to be in the browser
+  bundle; row-level security restricts every table to the signed-in user's own
+  rows.
+- The **secret key** (`sb_secret_…`) bypasses row-level security and exists only
+  in the server process. It is never `VITE_`-prefixed and never committed — this
+  repository is public. `apps/client/test/build.test.ts` asserts no secret value
+  or server-only variable name reaches the production bundle, and
+  `apps/client/test/architecture.test.ts` asserts no client source file can even
+  name one.
+
+`NODE_ENV=production` without the server pair is a **startup failure**, so a real
+deployment can never quietly fall back to in-memory storage and lose every
+account's progress.
 
 Both sides read this single root `.env`:
 
@@ -143,9 +169,22 @@ pnpm run typecheck      # tsc --noEmit for every project
 pnpm run test           # Vitest unit tests (packages)
 pnpm run test:integration  # Vitest integration tests (server room + builds)
 pnpm run build          # Production builds for client and server
+pnpm run test:e2e       # Playwright browser suite (separate CI job)
 ```
 
 Use `pnpm run format` to auto-fix formatting.
+
+One suite is **not** part of CI and needs credentials:
+
+```powershell
+pnpm run test:supabase  # Contract + row-level-security suite, against a real project
+```
+
+It reads `SUPABASE_URL` and `SUPABASE_SECRET_KEY` from the environment and skips
+when they are absent, which is what lets CI — which has no credentials — pass on
+a fresh clone. It is the only evidence that the SQL in `supabase/migrations/` is
+correct; everything else runs against an in-memory store that implements the same
+contract. `docs/TEST_PLAN.md` §5 states which claim rests on which run.
 
 ## Repository structure
 
@@ -159,6 +198,7 @@ Carry_or_Fall/
 │  ├─ game-content/     Data-driven content definitions (type placeholders in M0)
 │  ├─ simulation-core/  Deterministic simulation utilities (seeded PRNG in M0)
 │  └─ config/           Shared TypeScript + ESLint base config (no runtime code)
+├─ supabase/      SQL migrations for the account/progression schema (M5)
 ├─ docs/          Authoritative + control documents
 ├─ .github/
 │  ├─ workflows/ci.yml      Format, lint, typecheck, test, build (no deploy)
@@ -195,8 +235,9 @@ Carry_or_Fall/
 
 - All gameplay (movement, combat, enemies, loot, inventory, extraction, skills,
   bosses).
-- Persistence / accounts (Supabase), deployment (Cloudflare Pages, Railway),
-  horizontal scaling (Redis / multi-process presence), and mobile support.
+- Persistence / accounts (Supabase — **shipped in M5**), deployment (Cloudflare
+  Pages, Railway), horizontal scaling (Redis / multi-process presence), and
+  mobile support.
 
 ## Troubleshooting
 
@@ -223,6 +264,22 @@ Carry_or_Fall/
 - **Port already in use** — the client uses a strict port (`5173`) and will
   fail rather than pick another. Free the port or change `PORT` /
   `VITE_GAME_SERVER_URL` and the Vite port together.
+- **Server refuses to start naming `SUPABASE_URL` or `SUPABASE_SECRET_KEY`** —
+  the two must be set together, the URL must be the project's `https://…` URL,
+  and the secret key must start with `sb_secret_` (a publishable key in that slot
+  is refused, because the server would look configured and be unable to write).
+  The error names the variable and never quotes its value. Unset both to run
+  without accounts.
+- **`Your session could not be verified` on join** — the server has a Supabase
+  project configured and the client's session did not check out (expired,
+  missing, or from a different project). Reload the page to sign in again. If the
+  client has no Supabase configuration but the server does, they disagree about
+  whether accounts exist: set the `VITE_SUPABASE_*` pair, or unset the server's.
+- **`Your account has not unlocked: …`** — the selected loadout names a skill
+  this account has not earned (technical plan §19). Pick an unlocked skill; the
+  loadout screen marks locked ones and shows what each costs. A server running
+  without Supabase grants everything, because nothing accumulates there
+  (`docs/DECISIONS.md` D49).
 - **Install fails on a build script** — pnpm 11 disables dependency build
   scripts by default. Approved ones are listed under `allowBuilds` in
   `pnpm-workspace.yaml`.

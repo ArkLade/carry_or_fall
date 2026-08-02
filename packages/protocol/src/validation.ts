@@ -16,7 +16,9 @@ import {
   DiscardItemMessage,
   InputMessage,
   MatchJoinOptions,
+  PointTotalsPayload,
   SecureItemMessage,
+  SettlementMessage,
 } from "./messages";
 import { isBuildVersion } from "./version";
 
@@ -66,6 +68,20 @@ const MAX_AIM_ANGLE_RAD = Math.PI * 2;
 
 /** Longest accepted content id. Ids in `@carry-or-fall/game-content` are short snake_case strings. */
 const MAX_CONTENT_ID_LENGTH = 64;
+
+/**
+ * Longest accepted access token. A Supabase JWT is well under this; the cap
+ * exists so a client cannot make the server allocate — and then forward to
+ * Supabase Auth — an arbitrarily large string at the join boundary.
+ */
+const MAX_ACCESS_TOKEN_LENGTH = 4096;
+
+/**
+ * Upper bound on an id list arriving from the server (the account's unlock set).
+ * Generous relative to the content table, tight enough that a malformed or
+ * hostile payload cannot make the client allocate without limit.
+ */
+const MAX_CONTENT_ID_COUNT = 256;
 
 function isMoveAxis(value: unknown): value is -1 | 0 | 1 {
   return value === -1 || value === 0 || value === 1;
@@ -153,7 +169,30 @@ export function validateMatchJoinOptions(
     skillLoadoutIds.push(id);
   }
 
-  return ok({ ...handshake.value, skillLoadoutIds });
+  // The access token (M5). Bounded here; *authenticated* only by Supabase Auth,
+  // in the server's `onAuth`. Two separate checks because neither can do the
+  // other's job: this one cannot tell a forged token from a real one, and
+  // Supabase should never be handed a megabyte of attacker-chosen string.
+  //
+  // `undefined` and `null` both mean "no session", which is legal on the wire —
+  // the server decides whether a session is required, because that depends on
+  // whether *it* has a Supabase project to verify against, which is not
+  // something the protocol package can know.
+  const rawToken: unknown = input["accessToken"];
+  let accessToken: string | null = null;
+  if (rawToken !== undefined && rawToken !== null) {
+    if (typeof rawToken !== "string") {
+      return fail("match join options accessToken must be a string when present");
+    }
+    if (rawToken.length === 0 || rawToken.length > MAX_ACCESS_TOKEN_LENGTH) {
+      return fail(
+        `match join options accessToken must be 1..${String(MAX_ACCESS_TOKEN_LENGTH)} characters`,
+      );
+    }
+    accessToken = rawToken;
+  }
+
+  return ok({ ...handshake.value, skillLoadoutIds, accessToken });
 }
 
 /**
@@ -251,6 +290,89 @@ export function validateDiscardItemMessage(
     return fail(`discard_item sourceSlot must be an integer in [0, ${String(slotCount)})`);
   }
   return ok({ sourceSlot: input["sourceSlot"] });
+}
+
+/**
+ * Validate a {@link SettlementMessage} arriving at the **client** (M5).
+ *
+ * The server wrote it, but it still crosses a socket, so the client checks it
+ * before rendering — the same treatment {@link validateHealthResponse} gives the
+ * health body. A client that trusted this blindly would render whatever a
+ * man-in-the-middle or a version-skewed server sent it as its account balance.
+ *
+ * Balances are bounded below at zero and required to be finite: they are
+ * displayed as progression, and a `NaN` or a negative would be a visibly broken
+ * account rather than a caught error.
+ */
+export function validateSettlementMessage(input: unknown): ValidationResult<SettlementMessage> {
+  if (!isRecord(input)) {
+    return fail("settlement message must be an object");
+  }
+  if (!isBooleanValue(input["alreadySettled"]) || !isBooleanValue(input["isAnonymous"])) {
+    return fail("settlement message alreadySettled/isAnonymous must be booleans");
+  }
+
+  const balances = validatePointTotals(input["balances"]);
+  if (!balances.ok) {
+    return fail(balances.error);
+  }
+
+  const unlockIds = validateContentIdArray(input["unlockIds"], "unlockIds");
+  if (!unlockIds.ok) {
+    return fail(unlockIds.error);
+  }
+  const newUnlockIds = validateContentIdArray(input["newUnlockIds"], "newUnlockIds");
+  if (!newUnlockIds.ok) {
+    return fail(newUnlockIds.error);
+  }
+
+  return ok({
+    alreadySettled: input["alreadySettled"],
+    isAnonymous: input["isAnonymous"],
+    balances: balances.value,
+    unlockIds: unlockIds.value,
+    newUnlockIds: newUnlockIds.value,
+  });
+}
+
+/** The five point categories (concept §6), each a finite non-negative number. */
+function validatePointTotals(input: unknown): ValidationResult<PointTotalsPayload> {
+  if (!isRecord(input)) {
+    return fail("point totals must be an object");
+  }
+  const categories = ["force", "precision", "motion", "guard", "signal"] as const;
+  const totals: Record<string, number> = {};
+  for (const category of categories) {
+    const value = input[category];
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+      return fail(`point totals ${category} must be a finite non-negative number`);
+    }
+    totals[category] = value;
+  }
+  return ok(totals as unknown as PointTotalsPayload);
+}
+
+/** A bounded array of short content ids, with no cap on count beyond the content table's size. */
+function validateContentIdArray(
+  input: unknown,
+  field: string,
+): ValidationResult<readonly string[]> {
+  if (!Array.isArray(input)) {
+    return fail(`settlement message ${field} must be an array`);
+  }
+  if (input.length > MAX_CONTENT_ID_COUNT) {
+    return fail(
+      `settlement message ${field} must hold at most ${String(MAX_CONTENT_ID_COUNT)} ids`,
+    );
+  }
+  const ids: string[] = [];
+  for (const id of input) {
+    if (typeof id !== "string" || id.length === 0 || id.length > MAX_CONTENT_ID_LENGTH) {
+      return fail(`settlement message ${field} must hold short non-empty strings`);
+    }
+    ids.push(id);
+  }
+  return ok(ids);
 }
 
 /**

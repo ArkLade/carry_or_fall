@@ -73,3 +73,99 @@ describe("the client runs no simulation (docs/M4_EXECUTION_PLAN.md §5.1)", () =
     expect(sources.some((source) => source.includes("@carry-or-fall/simulation-core"))).toBe(true);
   });
 });
+
+/**
+ * The M5 invariant, enforced the same way: **no secret is reachable from client
+ * source.**
+ *
+ * `build.test.ts` checks the built bundle, which is the outcome that matters.
+ * This checks the *source*, which is where a leak is introduced — so a mistake
+ * fails in a second rather than after a two-minute Vite build, and names the
+ * file.
+ */
+describe("no server-only configuration is reachable from client source (M5)", () => {
+  /**
+   * The only variables client code may read. Anything else — including
+   * `SUPABASE_SECRET_KEY` — is server configuration, and reading it here would
+   * put it in a browser bundle.
+   */
+  const ALLOWED_ENV_KEYS = [
+    "VITE_GAME_SERVER_URL",
+    "VITE_BUILD_VERSION",
+    "VITE_SUPABASE_URL",
+    "VITE_SUPABASE_PUBLISHABLE_KEY",
+    "DEV",
+    "PROD",
+    "MODE",
+    "BASE_URL",
+    "SSR",
+  ];
+
+  it("reads only allowlisted import.meta.env keys", async () => {
+    const files = await sourceFiles(clientSrc);
+    const violations: string[] = [];
+
+    for (const file of files) {
+      const source = withoutComments(await readFile(file, "utf8"));
+      for (const match of source.matchAll(/import\.meta\.env\.([A-Za-z_$][\w$]*)/g)) {
+        const key = match[1] ?? "";
+        if (!ALLOWED_ENV_KEYS.includes(key)) {
+          violations.push(`${path.relative(clientSrc, file)}: import.meta.env.${key}`);
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  it("names no server-only variable and no secret-key prefix", async () => {
+    // A leak does not have to go through `import.meta.env`: a hard-coded key, or
+    // a `process.env` read that some bundler inlines, would be just as fatal.
+    // The bare `sb_secret_` prefix *is* forbidden here, unlike in
+    // `build.test.ts`: this scans first-party source only, where the library
+    // literal that forced the looser match there cannot appear.
+    const forbidden = [
+      "SUPABASE_SECRET_KEY",
+      "sb_secret_",
+      "service_role",
+      "ALLOWED_ORIGINS",
+      "MATCH_SEED",
+      "MATCH_LOBBY_MS",
+    ];
+    const files = await sourceFiles(clientSrc);
+    const violations: string[] = [];
+
+    for (const file of files) {
+      const source = withoutComments(await readFile(file, "utf8"));
+      for (const token of forbidden) {
+        if (source.includes(token)) {
+          violations.push(`${path.relative(clientSrc, file)}: ${token}`);
+        }
+      }
+      // A bare `SUPABASE_URL` (the server's variable) as opposed to the
+      // `VITE_`-prefixed one the browser is allowed.
+      if (/(?<!VITE_)SUPABASE_URL/.test(source)) {
+        violations.push(`${path.relative(clientSrc, file)}: SUPABASE_URL (server-only)`);
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  it("imports nothing from the server's progression modules", async () => {
+    // The secret-key client lives in `apps/server/src/progression`. Importing any
+    // of it from the browser would drag `SupabaseStore` — and the shape of the
+    // trusted write path — into the bundle.
+    const files = await sourceFiles(clientSrc);
+    const violations: string[] = [];
+
+    for (const file of files) {
+      const source = withoutComments(await readFile(file, "utf8"));
+      if (source.includes("apps/server") || /from\s+["'].*\/progression\//.test(source)) {
+        violations.push(path.relative(clientSrc, file));
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+});
