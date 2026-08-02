@@ -17,6 +17,42 @@ const url = process.env["SUPABASE_URL"];
 const secretKey = process.env["SUPABASE_SECRET_KEY"];
 const publishableKey = process.env["VITE_SUPABASE_PUBLISHABLE_KEY"];
 
+/**
+ * Whether `SUPABASE_URL` is an absolute http(s) URL — the same check
+ * `apps/server/src/config/env.ts` applies, for the same reason: a stray
+ * character (`hhttps://…`) parses as a URL, so it survives every naive
+ * validation and then fails several layers down inside `supabase-js` with a
+ * message naming neither the variable nor the file it came from.
+ *
+ * A malformed value is deliberately **not** treated as "no credentials". Someone
+ * who set the variable meant to run against a project, and silently skipping the
+ * only suite that tests the SQL would hide the misconfiguration behind a green
+ * run — which is exactly the failure mode this suite exists to prevent.
+ */
+function describeUrlProblem(value: string | undefined): string | null {
+  if (value === undefined || value.length === 0) {
+    return null;
+  }
+  if (!URL.canParse(value)) {
+    return "SUPABASE_URL is not a URL";
+  }
+  const { protocol } = new URL(value);
+  if (protocol !== "http:" && protocol !== "https:") {
+    // The scheme is echoed because it is the whole diagnosis and is not secret;
+    // the rest of the value never is.
+    return `SUPABASE_URL has scheme "${protocol.replace(":", "")}", expected http or https`;
+  }
+  return null;
+}
+
+const urlProblem = describeUrlProblem(url);
+if (urlProblem !== null) {
+  throw new Error(
+    `${urlProblem}. Fix it in the repository-root .env (see .env.example), or unset ` +
+      "SUPABASE_URL and SUPABASE_SECRET_KEY to skip this suite.",
+  );
+}
+
 /** Whether a real project is reachable. Drives `describe.skipIf` in every file. */
 export const hasCredentials =
   typeof url === "string" &&
