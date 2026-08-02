@@ -52,9 +52,18 @@ naming here because they guard an M4 invariant:
 ### 2.2 Room integration tests (Vitest) — `pnpm test:integration`
 
 Exercise the authoritative Colyseus server end to end against a real listening server. Glob:
-`apps/*/test/**/*.test.ts` (the Vitest `integration` project). Scope per technical plan §30.2:
-create a room, join simulated clients, send messages, verify synchronized state, test disconnects,
-room disposal, extraction, and death/dropped loot.
+`apps/*/test/**/*.test.ts`. Scope per technical plan §30.2: create a room, join simulated clients,
+send messages, verify synchronized state, test disconnects, room disposal, extraction, and
+death/dropped loot.
+
+**One gate, two Vitest projects** (`docs/DECISIONS.md` D54). `pnpm test:integration` runs
+`--project integration --project integration-server`. The six files that bind a real TCP port and
+run a real Colyseus server are the `integration-server` project and run **one file at a time**
+(`fileParallelism: false`); everything else stays parallel. Run together on a loaded machine they
+oversubscribe it, and on Windows an oversubscribed fork intermittently dies natively — the worker
+exits with `0xC0000409` and no JavaScript error, so its whole file silently vanishes from the
+counts. Serialising them is the mitigation; the `vitest.incomplete-run.ts` reporter is the
+guarantee, because it fails loudly whenever any file did not report.
 
 **Exists today (6 files, 71 tests):**
 

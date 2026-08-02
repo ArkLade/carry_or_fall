@@ -905,3 +905,85 @@ milestone, not implemented yet).
   or Turnstile added per D50. Supabase never cleans up anonymous users, so test
   accounts accumulate against the 500 MB free tier until then.
 - **Status:** Approved, to be reverted before M8.
+
+## D53. The Supabase CLI is the tool that applies migrations; the dashboard verifies nothing
+
+- **Date:** 2026-08-02.
+- **Decision:** The Supabase CLI (`supabase`, installed per-developer, not a workspace dependency)
+  is the approved way to apply `supabase/migrations/` to a real project. The sequence is
+  `supabase link --project-ref <ref>` once, then `supabase db push` for every migration that has
+  not been applied. The CLI's local state — `supabase/.temp/`, and `supabase/.branches/` if branches
+  are ever used — is git-ignored **and** Prettier-ignored. The Supabase GitHub integration is
+  **not** adopted.
+- **Reason:** M5 shipped `supabase/migrations/` and was reported complete while the SQL had never
+  been executed anywhere. Nothing in the repository's tooling applies a migration: `pnpm build`,
+  `pnpm test`, and `pnpm test:integration` all run against the in-memory store, and
+  `pnpm test:supabase` skips without credentials (D46). The gap was found by opening the dashboard
+  and noticing the tables were absent — which is not a check, it is a coincidence. A named command
+  that a person runs, recorded here, is the smallest thing that closes it.
+  The GitHub integration would apply migrations on push, but that is deployment work and belongs to
+  M8 (`docs/DEVELOPMENT_RULES.md`: no deployment during local milestones); its preview-branch
+  feature also requires a paid plan, so adopting it now would buy a subscription for a milestone
+  that does not need one.
+- **Consequences:**
+  - **Applying and verifying are two steps, and only the second is evidence.** `supabase db push`
+    reports what it sent; `pnpm test:supabase` is what proves the schema is right, because it runs
+    the contract and row-level-security suite against the live project (`docs/DATA_MODEL.md` §9).
+    A milestone that touches `supabase/migrations/` is not complete until that suite has been run
+    against a project the migrations were pushed to, and the run is reported with its counts.
+  - This is deliberately outside CI. CI has no credentials and cannot reach a project (D46), so it
+    can neither push nor verify; the obligation is on the person closing the milestone.
+  - `supabase/.temp/linked-project.json` holds the project ref. It is per-developer state naming
+    one project, never source, and must not be committed. It is listed in `.gitignore` *and*
+    `.prettierignore` because Prettier does not read `.gitignore` — the file failed `format:check`
+    before both entries existed.
+  - `supabase init` has not been run and `supabase/config.toml` does not exist. `link` plus
+    `db push` do not need one, and a config file describing a *local* Supabase stack would imply a
+    Docker-based local database this project has not approved.
+- **Status:** Approved.
+
+## D54. A lost worker fails loudly; the real-server tests run one at a time
+
+- **Date:** 2026-08-02.
+- **Decision:** Two changes to how `pnpm test:integration` runs.
+  1. `vitest.incomplete-run.ts` is a reporter registered for every Vitest run. If any test file
+     finished the run without reporting a result, or any unhandled error escaped, it prints a
+     block naming the missing files and sets a non-zero exit code.
+  2. The six files that bind a real TCP port and run a real Colyseus server —
+     `foundation-room`, `join-gate`, `match-authority`, `match-lifecycle`, `match-room`,
+     `settlement-adversarial` — are a separate Vitest project, `integration-server`, with
+     `fileParallelism: false`. `pnpm test:integration` runs both projects, so the gate and its
+     name are unchanged.
+- **Reason:** On Windows, a fork running `apps/server/test/match-room.test.ts` intermittently dies
+  with exit code `3221226505` (`0xC0000409`, `STATUS_STACK_BUFFER_OVERRUN` — a Windows fail-fast).
+  Measured, not assumed: no JavaScript exception, no unhandled rejection, no stderr byte, and no
+  Node diagnostic report even with `--report-on-fatalerror`, so it is below Node's fatal handlers.
+  It is not Vitest killing the worker either — a killed fork reports `signal=SIGTERM`, this one
+  reports `code=3221226505, signal=null`.
+  It is **load-sensitive**, which is the whole story: on an idle machine the suite passed 12 runs
+  out of 12, and with 14 CPU-bound processes competing it crashed 2 runs out of 4. Thirteen files
+  run in parallel, two of which spawn full production builds, so the suite oversubscribes the box
+  on its own the moment anything else is running.
+  What it produced was worse than a failure. Vitest's summary read `Test Files 12 passed (13)` and
+  `Tests 148 passed (151)` — every visible word said "passed", and the file that vanished was
+  invisible. `match-authority.test.ts` and `settlement-adversarial.test.ts` hold M4's and M5's
+  adversarial exit criteria (technical plan §38), so that shape can report success while proving
+  nothing about the claims the milestone rests on.
+- **Consequences:**
+  - The gate costs more wall time: about **198 s** where it was about **72 s**, because the six
+    real-server files no longer overlap. That is the price of the mitigation and it is worth
+    re-measuring if it becomes a burden — `maxWorkers` on the `integration-server` project is the
+    dial, not removing the split.
+  - Serialised, the suite passed 3 runs out of 3 under the same load that crashed it 2 out of 4.
+    Three runs is not proof the crash is gone. The reporter is what makes that acceptable: the
+    failure mode this decision actually eliminates is *not noticing*.
+  - The root cause is still unattributed. It is below the JavaScript runtime, and identifying it
+    would need a native debugger on the fork. If it recurs, the reporter names the file.
+  - Related, found while investigating and **not** changed: `@colyseus/sdk` performs automatic
+    reconnection on its own timers (enabled by default, `minUptime` 5 s, 15 retries with
+    exponential back-off). After a test calls `room.leave(false)`, those timers can outlive the
+    test and reconnect into whatever is listening next. It currently declines in every one of our
+    tests because no room reaches 5 s of uptime before its unconsented leave, but a test that got
+    slower would silently start reconnecting. A test that needs an unconsented drop to *stay*
+    dropped should set `room.reconnection.enabled = false`.
+- **Status:** Approved.

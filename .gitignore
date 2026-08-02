@@ -33,6 +33,14 @@ apps/client/blob-report/
 # Vite / caches
 .vite/
 
+# Supabase CLI local state (docs/DECISIONS.md D53). `supabase link` writes the
+# linked project ref and a version cache under supabase/.temp/, and branch state
+# under supabase/.branches/. Both are per-developer state naming one project, not
+# source. supabase/migrations/ and supabase/README.md stay tracked — they are the
+# schema itself.
+supabase/.temp/
+supabase/.branches/
+
 # Editor / OS
 .DS_Store
 Thumbs.db
