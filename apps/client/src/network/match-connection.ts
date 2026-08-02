@@ -32,7 +32,10 @@ import {
   PRIVATE_STATE_MESSAGE_TYPE,
   PROTOCOL_VERSION,
   SECURE_ITEM_MESSAGE_TYPE,
+  SETTLEMENT_MESSAGE_TYPE,
+  type SettlementMessage,
   type SyncedCollection,
+  validateSettlementMessage,
 } from "@carry-or-fall/protocol";
 import { Client, type Room } from "@colyseus/sdk";
 
@@ -55,6 +58,12 @@ export interface MatchConnectionOptions {
   readonly buildVersion: string;
   /** The pre-run skill selection, validated locally and re-validated by the server at join. */
   readonly skillLoadoutIds: readonly string[];
+  /**
+   * The Supabase access token, or `null` when this build has no project (M5).
+   * The client sends the token and nothing else about its identity — the user id
+   * comes back out of the token, on the server.
+   */
+  readonly accessToken: string | null;
 }
 
 export interface MatchConnectionCallbacks {
@@ -119,6 +128,7 @@ export class MatchConnection {
   private previous: MatchView | null = null;
   private latestReceivedAt = 0;
   private privateState: LocalPlayerState | null = null;
+  private settlement: SettlementMessage | null = null;
   private lastInputSentAt = 0;
   private lastInputSent: string | null = null;
   private sequence = 0;
@@ -148,6 +158,7 @@ export class MatchConnection {
       contentVersion: CONTENT_VERSION,
       buildVersion: options.buildVersion,
       skillLoadoutIds: [...options.skillLoadoutIds],
+      accessToken: options.accessToken,
     };
 
     try {
@@ -175,6 +186,15 @@ export class MatchConnection {
       // Addressed to this client alone; no other player's inventory is ever in
       // the synchronized state to begin with (technical plan §10.3).
       this.privateState = message;
+    });
+
+    room.onMessage(SETTLEMENT_MESSAGE_TYPE, (message: unknown) => {
+      // The server wrote it, but it still crossed a socket, so it is validated
+      // before it is rendered as this player's account balance (M5).
+      const result = validateSettlementMessage(message);
+      if (result.ok) {
+        this.settlement = result.value;
+      }
     });
 
     room.onError((code, message) => {
@@ -248,6 +268,15 @@ export class MatchConnection {
   /** This player's private state (inventory, secure slot, skills, run result), or `null` before it arrives. */
   getPrivateState(): LocalPlayerState | null {
     return this.privateState;
+  }
+
+  /**
+   * The account state after this player's run was settled, or `null` before the
+   * write has landed. Its arrival — not the run ending — is what means the
+   * points are in the account (M5).
+   */
+  getSettlement(): SettlementMessage | null {
+    return this.settlement;
   }
 
   /**

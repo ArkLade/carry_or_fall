@@ -15,6 +15,7 @@
     "@carry-or-fall/protocol": "workspace:*",
     "@carry-or-fall/simulation-core": "workspace:*",
     "@colyseus/sdk": "0.17.43",
+    "@supabase/supabase-js": "2.111.0",
     "phaser": "4.2.1"
   },
   "devDependencies": {

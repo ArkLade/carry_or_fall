@@ -16,6 +16,7 @@
     "@colyseus/core": "0.17.45",
     "@colyseus/schema": "4.0.30",
     "@colyseus/ws-transport": "0.17.13",
+    "@supabase/supabase-js": "2.111.0",
     "express": "5.2.1"
   },
   "devDependencies": {

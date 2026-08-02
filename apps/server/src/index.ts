@@ -7,9 +7,10 @@ import { PROTOCOL_VERSION } from "@carry-or-fall/protocol";
 
 import { matchMaker } from "@colyseus/core";
 
-import { loadServerEnv } from "./config/env";
+import { assertPersistenceConfigured, loadServerEnv } from "./config/env";
 import { createLogger } from "./logger";
 import { startMetricsReporter } from "./metrics";
+import { selectProgressionStore } from "./progression/select-store";
 import { createGameServer } from "./server";
 
 function toMessage(error: unknown): string {
@@ -19,10 +20,17 @@ function toMessage(error: unknown): string {
 async function main(): Promise<void> {
   const env = loadServerEnv();
   const logger = createLogger({ level: env.logLevel, buildVersion: env.buildVersion });
-  const { gameServer } = createGameServer({
+
+  // Refuse to start a production server that would silently discard every
+  // account's progression (M5, `config/env.ts`).
+  assertPersistenceConfigured(env);
+  const progression = selectProgressionStore(env, logger);
+
+  const { gameServer, store } = createGameServer({
     buildVersion: env.buildVersion,
     logger,
     allowedOrigins: env.allowedOrigins,
+    progression,
     // Each key is omitted entirely when unset, so the room falls back to its
     // own gameplay defaults rather than being handed a null.
     match: {
@@ -40,6 +48,7 @@ async function main(): Promise<void> {
     logger.info("shutdown requested", { signal });
     try {
       await gameServer.gracefullyShutdown(false);
+      await store.close();
       logger.info("shutdown complete", { signal });
       process.exit(0);
     } catch (error) {

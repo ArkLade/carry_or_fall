@@ -44,6 +44,22 @@ export interface ClientHandshake {
  */
 export interface MatchJoinOptions extends ClientHandshake {
   readonly skillLoadoutIds: readonly string[];
+  /**
+   * The Supabase access token from the client's anonymous (or linked) session
+   * (M5, technical plan §17.1). **This is the only thing the server accepts as
+   * identity** — a client never sends a user id, because an id it could send is
+   * an id it could choose.
+   *
+   * `null` when the client has no session, which happens only where no Supabase
+   * project is configured (a fresh clone, CI, the browser suite). A server that
+   * *is* configured refuses a null or unverifiable token at the join boundary
+   * (`docs/DECISIONS.md` D45).
+   *
+   * Validation splits in two by necessity: this package bounds the *shape* (a
+   * non-empty string under a length cap), and only Supabase Auth can judge
+   * *authenticity*. Neither check is sufficient alone, and the server runs both.
+   */
+  readonly accessToken: string | null;
 }
 
 /**
@@ -327,6 +343,36 @@ export interface RunResultPayload {
   readonly pointsGained: PointTotalsPayload;
   readonly itemsConverted: number;
   readonly itemsLost: number;
+}
+
+/**
+ * Message-type identifier for the per-owner settlement result (M5). Sent to one
+ * client after their finished run has been **written**, so receiving it means
+ * the points are in the account, not that the server intends to put them there.
+ */
+export const SETTLEMENT_MESSAGE_TYPE = "settlement";
+
+/**
+ * What a player's account looks like after their run was settled (M5,
+ * `docs/DATA_MODEL.md` §4.3). Server → client only; there is no client → server
+ * counterpart, and that absence is the point — no message a client can send
+ * carries a point value, an unlock, or an outcome, so there is no reward claim
+ * for the server to check (`docs/DATA_MODEL.md` §6).
+ *
+ * `alreadySettled` is honest rather than cosmetic: a retry or a recovery that
+ * found the run already settled awards nothing, and the client says "already
+ * recorded" instead of animating a second payout for points it did not just
+ * earn.
+ */
+export interface SettlementMessage {
+  readonly alreadySettled: boolean;
+  readonly balances: PointTotalsPayload;
+  /** Every unlock id the account holds after this settlement. */
+  readonly unlockIds: readonly string[];
+  /** Only the ids this settlement newly granted; empty on a repeat. */
+  readonly newUnlockIds: readonly string[];
+  /** Whether this account is anonymous, and therefore unrecoverable (technical plan §17.3). */
+  readonly isAnonymous: boolean;
 }
 
 /**

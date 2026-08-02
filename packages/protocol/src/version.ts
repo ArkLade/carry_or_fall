@@ -5,7 +5,7 @@
  * understand. The client sends its value at join time (see `ClientHandshake`)
  * so the server can refuse a stale client instead of letting it silently desync.
  */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /**
  * Whether a peer reporting `peerVersion` speaks a compatible protocol. M0 uses
@@ -46,6 +46,18 @@ export const PROTOCOL_MISMATCH_CODE = 4001;
  * from "you were dropped", and so tests can assert which one happened.
  */
 export const INVALID_MESSAGE_DISCONNECT_CODE = 4002;
+
+/**
+ * Application-defined code the server refuses a join with when the client's
+ * identity or entitlements do not hold up (M5): an unverifiable access token, or
+ * a loadout naming a skill the account has not unlocked (technical plan §19).
+ *
+ * Distinct from {@link PROTOCOL_MISMATCH_CODE} and
+ * {@link INVALID_MESSAGE_DISCONNECT_CODE} because the remedy is different and
+ * the client should say so: refreshing does not fix a locked skill, and
+ * re-selecting a loadout does not fix an expired session.
+ */
+export const UNAUTHORIZED_JOIN_CODE = 4003;
 
 /**
  * Message the server returns with {@link PROTOCOL_MISMATCH_CODE} when it refuses

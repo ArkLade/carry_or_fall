@@ -25,12 +25,18 @@
  * Server configuration is injected through a closure rather than read from room
  * options, because Colyseus merges a client's join options into the room's
  * create options — anything read from options could be spoofed by a client.
+ *
+ * **M5 adds persistence, and only at two moments** (`docs/DATA_MODEL.md` §1):
+ * one write when a player secures an item, and one when a player's run ends.
+ * The 50 ms step performs no database call and never has. Both persistence paths
+ * are `async` and live outside `stepSimulation`, which is unchanged.
  */
 import {
   type ArenaDefinition,
   basicBow,
   basicSword,
   chaser,
+  lockedContentIds,
   testArena,
 } from "@carry-or-fall/game-content";
 import {
@@ -42,6 +48,9 @@ import {
   type MatchPhase,
   PRIVATE_STATE_MESSAGE_TYPE,
   SECURE_ITEM_MESSAGE_TYPE,
+  SETTLEMENT_MESSAGE_TYPE,
+  type SettlementMessage,
+  UNAUTHORIZED_JOIN_CODE,
   validateDiscardItemMessage,
   validateInputMessage,
   validateMatchJoinOptions,
@@ -56,16 +65,22 @@ import {
   MAX_SKILL_SLOTS,
   NEUTRAL_INPUT,
   removePlayerFromWorld,
+  reservationKey,
   SIMULATION_DT_MS,
   stepSimulation,
   type InputState,
+  type Player,
   type SkillLoadout,
   type World,
 } from "@carry-or-fall/simulation-core";
+import { randomUUID } from "node:crypto";
 import { type Client, CloseCode, Room, type Server, ServerError } from "@colyseus/core";
 
 import type { Logger } from "../logger";
 import { matchMetrics } from "../metrics";
+import type { TokenVerifier } from "../progression/auth";
+import { DEFAULT_UNLOCK_GRANTS, type SettlementService } from "../progression/settlement-service";
+import type { AccountSnapshot, ProgressionStore, UnlockGrant } from "../progression/store";
 import { authorizeHandshake } from "./authorize";
 import { InputGuard } from "./input-guard";
 import { syncMatchState } from "./match-sync";
@@ -117,7 +132,31 @@ export interface MatchRoomDeps {
    * chasers that would otherwise interrupt it.
    */
   readonly arena?: ArenaDefinition;
+  /** Permanent account storage (M5). */
+  readonly store: ProgressionStore;
+  readonly settlement: SettlementService;
+  /**
+   * How an access token becomes an identity. Which implementation arrives here
+   * is `server.ts`'s decision: Supabase Auth when a project is configured, and
+   * otherwise a local verifier that mints a per-join identity, because there is
+   * nothing to verify a token against (`docs/DECISIONS.md` D45). The room does
+   * not branch on the difference — it asks, and refuses whatever is refused.
+   */
+  readonly tokenVerifier: TokenVerifier;
+  /**
+   * What a new account is provisioned with. Defaults to concept §5.4's set; a
+   * development server may be configured to provision everything instead
+   * (`DEV_UNLOCK_ALL`, `config/env.ts`), which is what lets the browser suite
+   * test skills a fresh account has not earned.
+   */
+  readonly unlockGrants?: readonly UnlockGrant[];
 }
+
+/** The dependencies `server.ts` owns, rather than a caller configuring a match. */
+export type MatchRoomTuning = Omit<
+  MatchRoomDeps,
+  "buildVersion" | "logger" | "store" | "settlement" | "tokenVerifier"
+>;
 
 /** What the room tracks per connected client, alongside their simulated `Player`. */
 interface Connection {
@@ -129,6 +168,39 @@ interface Connection {
   pendingDiscardSlot: number | null;
   connected: boolean;
   lastPrivateSignature: string | null;
+  /** The verified account behind this seat (M5). */
+  readonly userId: string;
+  readonly isAnonymous: boolean;
+  account: AccountSnapshot;
+  /**
+   * Technical plan §14.2's fifth check: "player is not already processing
+   * another inventory action". True from the moment a secure request is accepted
+   * until its reservation write has landed (or failed), so a client hammering
+   * the key cannot open several reservations.
+   */
+  inventoryActionInFlight: boolean;
+  /**
+   * The item id a reservation was written for, held until the simulation has
+   * actually moved it — see `confirmSecureActions`. Cleared on confirmation or
+   * cancellation.
+   */
+  reservedItemId: string | null;
+  /** True from the tick the secure intent is handed to the simulation until its outcome is known. */
+  awaitingSecureConfirmation: boolean;
+  /** Set once this player's run has been settled, so a settlement never runs twice from here. */
+  settlementStarted: boolean;
+}
+
+/**
+ * What `onAuth` establishes and hands to `onJoin`: the validated join options,
+ * the identity Supabase Auth vouched for, and that account's progression. The
+ * user id in here came from the *token*, not from the payload — a client never
+ * gets to name itself.
+ */
+interface AuthContext {
+  readonly options: MatchJoinOptions;
+  readonly identity: { readonly userId: string; readonly isAnonymous: boolean };
+  readonly account: AccountSnapshot;
 }
 
 /**
@@ -137,13 +209,14 @@ interface Connection {
  * matching `defineFoundationRoom`.
  */
 export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
-  const { buildVersion, logger } = deps;
+  const { buildVersion, logger, store, settlement, tokenVerifier } = deps;
+  const unlockGrants = deps.unlockGrants ?? DEFAULT_UNLOCK_GRANTS;
   const lobbyDurationMs = deps.lobbyDurationMs ?? DEFAULT_LOBBY_MS;
   const matchDurationMs = deps.matchDurationMs ?? DEFAULT_MATCH_MS;
   const reconnectWindowMs = deps.reconnectWindowMs ?? DEFAULT_RECONNECT_MS;
   const endingDurationMs = deps.endingDurationMs ?? DEFAULT_ENDING_MS;
 
-  class MatchRoom extends Room<{ state: MatchStateType; auth: MatchJoinOptions }> {
+  class MatchRoom extends Room<{ state: MatchStateType; auth: AuthContext }> {
     override maxClients = MATCH_MAX_CLIENTS;
     override autoDispose = true;
 
@@ -151,18 +224,36 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
     private readonly connections = new Map<string, Connection>();
     private readonly arena: ArenaDefinition = deps.arena ?? testArena;
     private endingElapsedMs = 0;
+    /**
+     * A server-generated UUID identifying this match in storage. Deliberately
+     * **not** `roomId`: that is a short, human-typable Colyseus identifier with
+     * no uniqueness guarantee across process restarts, and it is the primary key
+     * half of every settlement — a collision would make two different matches
+     * share one ledger row.
+     */
+    private readonly matchId = randomUUID();
+    private readonly startedAt = new Date();
 
     /**
      * Join gate. Runs before `onJoin` and before the client occupies a seat, so
-     * an incompatible or illegal client never takes one of the eight.
+     * an incompatible, unauthenticated, or under-unlocked client never takes one
+     * of the eight.
      *
-     * Two checks, both refusing rather than correcting: the shared version gate
-     * (protocol + content, `authorize.ts`), and the pre-run skill loadout. The
-     * loadout is validated through `createSkillLoadout` — the very same function
-     * the client's picker calls — which is the point: the client's copy is a
-     * convenience for showing a legal choice, and this one is the authority.
+     * Four checks now, all refusing rather than correcting:
+     *
+     * 1. the shared version gate (protocol + content, `authorize.ts`);
+     * 2. the payload's shape, including the access token's bounds;
+     * 3. **identity** — the token is verified against Supabase Auth, and the
+     *    user id comes back from *that*, never from the client (M5);
+     * 4. the pre-run skill loadout: `createSkillLoadout` for shape and slot
+     *    budget (D38), then the account's unlock set for entitlement (technical
+     *    plan §19, "server rejects locked or incompatible combinations").
+     *
+     * Check 4's second half is what makes an unlock mean something. Without it,
+     * a client could name any skill in the content table regardless of what its
+     * account has earned, and the `unlocks` table would be decoration.
      */
-    override onAuth(client: Client, options: unknown): MatchJoinOptions {
+    override async onAuth(client: Client, options: unknown): Promise<AuthContext> {
       authorizeHandshake(options, client.sessionId, logger);
 
       const joinOptions = validateMatchJoinOptions(options, MAX_SKILL_SLOTS);
@@ -173,6 +264,20 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
         });
         throw new ServerError(INVALID_MESSAGE_DISCONNECT_CODE, "Invalid join options.");
       }
+
+      const verification = await tokenVerifier.verify(joinOptions.value.accessToken);
+      if (!verification.ok) {
+        logger.warn("refused join with an unverifiable access token", {
+          sessionId: client.sessionId,
+          reason: verification.reason,
+          // The token itself is never logged.
+        });
+        throw new ServerError(
+          UNAUTHORIZED_JOIN_CODE,
+          "Your session could not be verified. Please reload the page to sign in again.",
+        );
+      }
+      const { identity } = verification;
 
       const loadout = createSkillLoadout(joinOptions.value.skillLoadoutIds);
       if (!loadout.ok) {
@@ -186,7 +291,36 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
         );
       }
 
-      return joinOptions.value;
+      // Provision on first sight, then finish any reward a crashed server left
+      // pending (technical plan §14.3). Recovery runs *before* the player enters
+      // a new match so a protected item is never owed across two of them.
+      const account = await store.ensureAccount(
+        identity.userId,
+        identity.displayName,
+        unlockGrants,
+      );
+      await settlement.recoverPending(identity.userId, this.matchId);
+
+      const locked = lockedContentIds(joinOptions.value.skillLoadoutIds, account.unlockIds);
+      if (locked.length > 0) {
+        logger.warn("refused join naming locked skills", {
+          sessionId: client.sessionId,
+          userId: identity.userId,
+          locked: locked.join(","),
+        });
+        throw new ServerError(
+          UNAUTHORIZED_JOIN_CODE,
+          `Your account has not unlocked: ${locked.join(", ")}.`,
+        );
+      }
+
+      // Re-read: recovery may have granted points that crossed a threshold, so
+      // the account the player joins with is the post-recovery one.
+      return {
+        options: joinOptions.value,
+        identity,
+        account: (await store.loadAccount(identity.userId)) ?? account,
+      };
     }
 
     override onCreate(): void {
@@ -224,13 +358,18 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
         this.tick();
       }, SIMULATION_DT_MS);
 
-      logger.info("match room created", { roomId: this.roomId, seed, arenaId: this.arena.id });
+      logger.info("match room created", {
+        roomId: this.roomId,
+        matchId: this.matchId,
+        seed,
+        arenaId: this.arena.id,
+      });
     }
 
-    override onJoin(client: Client, _options: unknown, auth: MatchJoinOptions): void {
+    override onJoin(client: Client, _options: unknown, auth: AuthContext): void {
       // Already validated in onAuth; this cannot fail, and re-running it is how
       // the room gets the typed loadout rather than trusting a cached value.
-      const loadout = createSkillLoadout(auth.skillLoadoutIds);
+      const loadout = createSkillLoadout(auth.options.skillLoadoutIds);
       const skillLoadout: SkillLoadout = loadout.ok ? loadout.loadout : [];
 
       this.world = addPlayerToWorld(this.world, {
@@ -247,6 +386,13 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
         pendingDiscardSlot: null,
         connected: true,
         lastPrivateSignature: null,
+        userId: auth.identity.userId,
+        isAnonymous: auth.identity.isAnonymous,
+        account: auth.account,
+        inventoryActionInFlight: false,
+        reservedItemId: null,
+        awaitingSecureConfirmation: false,
+        settlementStarted: false,
       });
 
       if (this.state.phase === "waiting") {
@@ -326,8 +472,16 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
     }
 
     private removePlayer(sessionId: string, reason: "left" | "abandoned"): void {
-      if (!this.connections.delete(sessionId)) {
+      const connection = this.connections.get(sessionId);
+      if (connection === undefined || !this.connections.delete(sessionId)) {
         return;
+      }
+      // A reservation whose item never reached the secure slot is withdrawn
+      // rather than left for recovery: the player leaving mid-write did not
+      // secure anything, so awarding them for it would be a reward for an action
+      // that did not complete.
+      if (connection.awaitingSecureConfirmation || connection.inventoryActionInFlight) {
+        this.withdrawReservation(sessionId, connection.userId);
       }
       this.world = removePlayerFromWorld(this.world, sessionId);
       this.publishState();
@@ -395,8 +549,8 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
         }
         // The client names a slot, never an item. Whether that slot holds
         // anything, and whether the secure slot is free, is the simulation's
-        // call (technical plan §14.2).
-        connection.pendingSecureSlot = result.value.sourceSlot;
+        // call (technical plan §14.2) — made below, before anything is written.
+        void this.beginSecureAction(client.sessionId, connection, result.value.sourceSlot);
       });
 
       this.onMessage<unknown>(DISCARD_ITEM_MESSAGE_TYPE, (client, message) => {
@@ -427,6 +581,133 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
         }
         this.recordInvalid(client, connection, `unknown message type: ${String(type)}`);
       });
+    }
+
+    /**
+     * The secure-slot action, in the one order technical plan §14.3 permits
+     * (`docs/DATA_MODEL.md` §4.2). This is the milestone's load-bearing method,
+     * so the ordering is spelled out rather than implied:
+     *
+     * 1. Validate against **live simulation state** — alive, run not over, slot
+     *    holds an item, secure slot empty, no other inventory action in flight.
+     * 2. Write the reservation, and *await* it.
+     * 3. Only then hand the intent to the simulation, which is what moves the
+     *    item and therefore what the owning client observes as success.
+     *
+     * The guarantee `docs/DEVELOPMENT_RULES.md` demands — "insertion must be
+     * persisted before it is reported successful" — is structural here, not a
+     * convention: the only channel that tells a client its secure slot is full
+     * is the private-state message derived from simulation state, and the
+     * simulation is not given the intent until step 2 resolves. **There is no
+     * code path that reports success and then writes**, so a crash has no window
+     * to fall into.
+     *
+     * Step 3 re-checks that the slot still holds the reserved item. Ticks
+     * continue during the await: the player may have discarded it or died. A
+     * stale reservation is cancelled rather than honored, so recovery cannot
+     * later award an item that never actually reached the secure slot.
+     */
+    private async beginSecureAction(
+      sessionId: string,
+      connection: Connection,
+      sourceSlot: number,
+    ): Promise<void> {
+      if (connection.inventoryActionInFlight) {
+        // Technical plan §14.2's fifth check. Without it, a client hammering the
+        // key could open several reservations for one secure slot.
+        return;
+      }
+
+      const player = findPlayer(this.world, sessionId);
+      const item = player?.inventory[sourceSlot];
+      if (
+        player === null ||
+        player === undefined ||
+        !player.alive ||
+        player.runResult !== null ||
+        player.secureSlot !== null ||
+        item === undefined ||
+        item === null
+      ) {
+        return;
+      }
+
+      connection.inventoryActionInFlight = true;
+      connection.reservedItemId = item.id;
+      const key = reservationKey(this.matchId, connection.userId);
+
+      try {
+        await store.reserveSecureItem(key, this.matchId, connection.userId, item.id);
+      } catch (error) {
+        // The write did not land, so the item stays in normal inventory and the
+        // player is told nothing. That is the truthful outcome: they may still
+        // try again, and they will lose the item on death — which is exactly
+        // what "not secured" means.
+        logger.warn("secure reservation failed; item stays in normal inventory", {
+          roomId: this.roomId,
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        connection.inventoryActionInFlight = false;
+        connection.reservedItemId = null;
+        return;
+      }
+
+      // The write landed: now, and only now, the simulation may move the item.
+      // Whether it *does* is settled by `confirmSecureActions` after the next
+      // step — not by re-checking the slot here.
+      connection.pendingSecureSlot = sourceSlot;
+      connection.awaitingSecureConfirmation = true;
+    }
+
+    /**
+     * Reconcile each in-flight reservation against what the simulation actually
+     * did, once the tick that consumed the intent has run.
+     *
+     * This exists because an earlier version re-checked the slot *before* handing
+     * the intent over, and that was wrong in a way a test caught: a `discard_item`
+     * arriving in the same tick is applied first (`stepPlayerAttacks` handles
+     * discard before secure), so the item left the inventory, `secureItem`
+     * refused, and the reservation stayed `pending` — leaving recovery ready to
+     * award points for an item the player had thrown away. Confirming against the
+     * outcome closes that off: the reservation survives only if the item is
+     * genuinely in the secure slot.
+     */
+    private confirmSecureActions(): void {
+      for (const [sessionId, connection] of this.connections) {
+        if (!connection.awaitingSecureConfirmation || connection.pendingSecureSlot !== null) {
+          continue;
+        }
+        const player = findPlayer(this.world, sessionId);
+        const secured = player?.secureSlot ?? null;
+        const reservedItemId = connection.reservedItemId;
+
+        connection.awaitingSecureConfirmation = false;
+        connection.inventoryActionInFlight = false;
+        connection.reservedItemId = null;
+
+        if (secured !== null && secured.id === reservedItemId) {
+          continue;
+        }
+        this.withdrawReservation(sessionId, connection.userId);
+      }
+    }
+
+    /** Move a reservation to `cancelled`, so recovery cannot later honor it. */
+    private withdrawReservation(sessionId: string, userId: string): void {
+      void store
+        .cancelSecureReservation(reservationKey(this.matchId, userId))
+        .catch((error: unknown) => {
+          // Left `pending`. Recovery would award it, which is the wrong outcome
+          // — so it is logged loudly rather than swallowed.
+          logger.error("could not withdraw an unconfirmed secure reservation", {
+            roomId: this.roomId,
+            sessionId,
+            userId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return false;
+        });
     }
 
     /** Whether this player may act right now: the match is running and their run is not over. */
@@ -523,10 +804,17 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
       this.world = stepSimulation(this.world, inputs).world;
       this.state.matchRemainingMs = Math.max(0, this.state.matchRemainingMs - SIMULATION_DT_MS);
 
+      // A secure intent handed over above has now either taken effect or not.
+      this.confirmSecureActions();
+
       this.publishState();
       for (const sessionId of this.connections.keys()) {
         this.sendPrivateState(sessionId, false);
       }
+
+      // A run that just ended is settled here, outside the step. `stepSimulation`
+      // itself is untouched and still performs no I/O (`docs/DATA_MODEL.md` §1).
+      this.settleFinishedRuns();
 
       if (this.isMatchOver()) {
         this.state.phase = "ending" satisfies MatchPhase;
@@ -536,6 +824,88 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
           remainingMs: this.state.matchRemainingMs,
         });
       }
+    }
+
+    /**
+     * Settle every run that ended on this tick (technical plan §15.3).
+     *
+     * Triggered by the server observing `runResult` becoming non-null — never by
+     * a client message, because no client → server message can express an
+     * outcome or a reward (`docs/DATA_MODEL.md` §6). `settlementStarted` is set
+     * *before* the await, so a later tick observing the same finished player
+     * cannot start a second settlement; the store's idempotency is the second
+     * line of defence, not the first.
+     */
+    private settleFinishedRuns(): void {
+      for (const [sessionId, connection] of this.connections) {
+        if (connection.settlementStarted) {
+          continue;
+        }
+        const player = findPlayer(this.world, sessionId);
+        if (player === null || player.runResult === null) {
+          continue;
+        }
+        connection.settlementStarted = true;
+        void this.settlePlayer(sessionId, connection, player);
+      }
+    }
+
+    private async settlePlayer(
+      sessionId: string,
+      connection: Connection,
+      player: Player,
+    ): Promise<void> {
+      const runResult = player.runResult;
+      if (runResult === null) {
+        return;
+      }
+
+      const outcome = await settlement.settle({
+        matchId: this.matchId,
+        userId: connection.userId,
+        runResult,
+        account: connection.account,
+        startedAt: this.startedAt,
+        endedAt: new Date(),
+      });
+
+      if (outcome === null) {
+        // Retries were exhausted. The reservation (if any) stays `pending` and
+        // the next join finishes it under the same key, so nothing is lost and
+        // nothing is awarded twice.
+        logger.warn("run settlement deferred to recovery", {
+          roomId: this.roomId,
+          matchId: this.matchId,
+          userId: connection.userId,
+        });
+        return;
+      }
+
+      connection.account = {
+        userId: connection.userId,
+        balances: outcome.balances,
+        unlockIds: outcome.unlockIds,
+      };
+
+      const message: SettlementMessage = {
+        alreadySettled: outcome.alreadySettled,
+        balances: outcome.balances,
+        unlockIds: outcome.unlockIds,
+        newUnlockIds: outcome.newUnlockIds,
+        isAnonymous: connection.isAnonymous,
+      };
+      // Sent after the write, so receiving it means the points are in the
+      // account — not that the server intends to put them there.
+      this.clients.getById(sessionId)?.send(SETTLEMENT_MESSAGE_TYPE, message);
+
+      logger.info("run settled", {
+        roomId: this.roomId,
+        matchId: this.matchId,
+        userId: connection.userId,
+        outcome: runResult.outcome,
+        alreadySettled: outcome.alreadySettled,
+        newUnlocks: outcome.newUnlockIds.length,
+      });
     }
 
     /** Concept §22.3: a match ends when the time limit expires or everyone has extracted or died. */

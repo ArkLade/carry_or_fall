@@ -20,6 +20,7 @@ import { findArena, testArena, type ArenaDefinition } from "@carry-or-fall/game-
 import type { InputMessage, MatchView, PlayerView } from "@carry-or-fall/protocol";
 import Phaser from "phaser";
 
+import { UNCONFIGURED_ACCOUNT, type AccountState } from "../account/account";
 import { loadClientEnv } from "../config/env";
 import { CombatHud } from "../hud/combat-hud";
 import { InventoryHud } from "../hud/inventory-hud";
@@ -33,6 +34,12 @@ import { DEFAULT_SKILL_LOADOUT_IDS } from "./LoadoutScene";
 /** Scene data passed from `LoadoutScene` (`docs/M3_ISSUES.md` M3.8). */
 export interface PlaySceneData {
   readonly skillLoadoutIds?: readonly string[];
+  /**
+   * The account `LoadoutScene` signed in (M5). Only the access token travels to
+   * the server; the balances and unlocks here are for display, and the server
+   * re-reads its own copy of both.
+   */
+  readonly account?: AccountState;
 }
 
 export class PlayScene extends Phaser.Scene {
@@ -45,6 +52,7 @@ export class PlayScene extends Phaser.Scene {
   private status: MatchStatus = "connecting";
   private statusDetail: string | null = null;
   private arena: ArenaDefinition = testArena;
+  private account: AccountState = UNCONFIGURED_ACCOUNT;
 
   constructor() {
     super("play");
@@ -83,6 +91,7 @@ export class PlayScene extends Phaser.Scene {
     this.status = "connecting";
     this.statusDetail = null;
 
+    this.account = data.account ?? UNCONFIGURED_ACCOUNT;
     void this.connect(data.skillLoadoutIds ?? DEFAULT_SKILL_LOADOUT_IDS);
   }
 
@@ -97,7 +106,7 @@ export class PlayScene extends Phaser.Scene {
       // is right; failing silently is not.
       const env = loadClientEnv();
       this.connection = await MatchConnection.join(
-        { ...env, skillLoadoutIds },
+        { ...env, skillLoadoutIds, accessToken: this.account.accessToken },
         {
           onStatusChange: (status, detail) => {
             this.status = status;
@@ -165,7 +174,13 @@ export class PlayScene extends Phaser.Scene {
     const view = interpolateMatchView(connection.getPreviousSnapshot(), snapshot, alpha);
 
     this.worldView.render(view, this.arenaFor(snapshot), localPlayerId);
-    this.combatHud.render(snapshot, localPlayer, privateState, this.status);
+    this.combatHud.render(
+      snapshot,
+      localPlayer,
+      privateState,
+      this.status,
+      connection.getSettlement(),
+    );
     this.inventoryHud.render(privateState, localPlayer);
   }
 
@@ -227,9 +242,14 @@ export class PlayScene extends Phaser.Scene {
 
   private async returnToLoadout(): Promise<void> {
     const connection = this.connection;
+    const settlement = connection?.getSettlement() ?? null;
     this.connection = null;
     await connection?.leave();
-    this.scene.start("loadout");
+    // Hand the settled balances forward so the loadout screen shows the account
+    // as it now stands without a second round trip — and so the §17.3 warning,
+    // once triggered, follows the player out of the match (`docs/DATA_MODEL.md`
+    // §7).
+    this.scene.start("loadout", { settlement });
   }
 
   /** The failure detail the server reported, if any — surfaced for diagnostics and tests. */

@@ -24,6 +24,22 @@ export default defineConfig({
           hookTimeout: 60_000,
         },
       },
+      {
+        test: {
+          // The only suite that talks to a real Supabase project (M5,
+          // `docs/DATA_MODEL.md` §9). Deliberately its own project rather than a
+          // fourth gate: CI has no credentials and cannot reach a project
+          // (`docs/DECISIONS.md` D46), so it is never part of `pnpm test` or
+          // `pnpm test:integration`. Run it with `pnpm test:supabase` against a
+          // project built from `supabase/migrations/`; without credentials every
+          // file in it skips rather than fails.
+          name: "supabase",
+          environment: "node",
+          include: ["apps/server/test-supabase/**/*.test.ts"],
+          testTimeout: 60_000,
+          hookTimeout: 60_000,
+        },
+      },
     ],
   },
 });

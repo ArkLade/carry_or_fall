@@ -21,8 +21,13 @@ import type {
   MatchView,
   PlayerView,
   RunResultPayload,
+  SettlementMessage,
 } from "@carry-or-fall/protocol";
 
+import {
+  ANONYMOUS_ACCOUNT_WARNING,
+  shouldWarnAboutAnonymousAccount,
+} from "../account/linking-warning";
 import type { MatchStatus } from "../network/match-connection";
 
 const TEXT_COLOR = "#e6edf3";
@@ -117,6 +122,13 @@ export class CombatHud {
     localPlayer: PlayerView | null,
     privateState: LocalPlayerState | null,
     status: MatchStatus,
+    /**
+     * The settled account, once the write has landed (M5). `null` while the run
+     * result is on screen but the settlement has not returned — which is a state
+     * worth showing honestly rather than pretending the points are already
+     * banked.
+     */
+    settlement: SettlementMessage | null = null,
   ): void {
     if (localPlayer === null) {
       this.healthText.setText("HP: —");
@@ -141,9 +153,43 @@ export class CombatHud {
     if (result === null) {
       this.runResultText.setVisible(false);
     } else {
-      this.runResultText.setText(formatRunResult(result));
+      this.runResultText.setText(`${formatRunResult(result)}\n${formatSettlement(settlement)}`);
       this.runResultText.setColor(result.outcome === "extracted" ? EXTRACTED_COLOR : DEATH_COLOR);
       this.runResultText.setVisible(true);
     }
   }
+}
+
+/**
+ * What the account looks like after the run (M5). The three cases are
+ * deliberately distinguishable rather than collapsed into one cheerful line:
+ *
+ * - not yet settled — the write has not landed, so nothing is claimed;
+ * - already settled — a retry or recovery found this run settled, so no second
+ *   payout is animated for points that were not just earned;
+ * - settled now — the balances, plus any unlock this run opened.
+ */
+function formatSettlement(settlement: SettlementMessage | null): string {
+  if (settlement === null) {
+    return "Saving progress…";
+  }
+  const { balances } = settlement;
+  const totals =
+    `Force ${String(balances.force)} · Precision ${String(balances.precision)} · ` +
+    `Motion ${String(balances.motion)} · Guard ${String(balances.guard)} · ` +
+    `Signal ${String(balances.signal)}`;
+
+  if (settlement.alreadySettled) {
+    return `Already recorded\n${totals}`;
+  }
+  const unlocked =
+    settlement.newUnlockIds.length > 0 ? `\nUnlocked: ${settlement.newUnlockIds.join(", ")}` : "";
+  const warning = shouldWarnAboutAnonymousAccount({
+    isAnonymous: settlement.isAnonymous,
+    balances,
+    unconfigured: false,
+  })
+    ? `\n\n${ANONYMOUS_ACCOUNT_WARNING}`
+    : "";
+  return `${totals}${unlocked}${warning}`;
 }

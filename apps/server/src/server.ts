@@ -10,8 +10,17 @@ import { WebSocketTransport } from "@colyseus/ws-transport";
 import { HEALTH_PATH, type HealthResponse, PROTOCOL_VERSION } from "@carry-or-fall/protocol";
 
 import type { Logger } from "./logger";
+import { LocalTokenVerifier, SupabaseTokenVerifier, type TokenVerifier } from "./progression/auth";
+import { MemoryStore } from "./progression/memory-store";
+import {
+  ALL_UNLOCK_GRANTS,
+  DEFAULT_UNLOCK_GRANTS,
+  SettlementService,
+} from "./progression/settlement-service";
+import type { ProgressionStore } from "./progression/store";
+import { SupabaseStore } from "./progression/supabase-store";
 import { defineFoundationRoom } from "./rooms/FoundationRoom";
-import { defineMatchRoom, type MatchRoomDeps } from "./rooms/MatchRoom";
+import { defineMatchRoom, type MatchRoomTuning } from "./rooms/MatchRoom";
 
 const DEFAULT_MAX_CLIENTS = 64;
 
@@ -19,6 +28,19 @@ export interface GameServerDeps {
   readonly buildVersion: string;
   readonly logger: Logger;
   readonly allowedOrigins: readonly string[];
+  /**
+   * Permanent account storage (M5). Optional so an integration test can supply
+   * a `MemoryStore` it also holds a reference to — which is how the adversarial
+   * tests inject a database failure. When omitted, a fresh `MemoryStore` is
+   * created, so a server with no Supabase configuration still boots and plays
+   * (`docs/DECISIONS.md` D46).
+   */
+  readonly progression?: {
+    readonly store: ProgressionStore;
+    readonly tokenVerifier?: TokenVerifier;
+    /** Overridable so a test does not sit through real retry back-off. */
+    readonly settlement?: SettlementService;
+  };
   /** Per-room client cap for the connection-only probe room. Overridable in tests. */
   readonly maxClients?: number;
   /**
@@ -28,13 +50,15 @@ export interface GameServerDeps {
    * own client cap is fixed at eight (technical plan §8.1) and is deliberately
    * not configurable.
    */
-  readonly match?: Omit<MatchRoomDeps, "buildVersion" | "logger">;
+  readonly match?: MatchRoomTuning;
 }
 
 export interface GameServerHandle {
   readonly gameServer: Server;
   /** The HTTP server the transport is bound to; exposed so tests can read the bound port. */
   readonly httpServer: http.Server;
+  /** The progression store this server is running on; closed at shutdown. */
+  readonly store: ProgressionStore;
 }
 
 /**
@@ -44,6 +68,34 @@ export interface GameServerHandle {
  */
 export function createGameServer(deps: GameServerDeps): GameServerHandle {
   const { buildVersion, logger, allowedOrigins } = deps;
+
+  const store = deps.progression?.store ?? new MemoryStore();
+  const settlement = deps.progression?.settlement ?? new SettlementService(store, logger);
+  // With a real project, identity is whatever Supabase Auth vouches for. Without
+  // one there is nothing to verify a token *against*, so the local verifier
+  // mints a per-join identity instead — unreachable in production, where a
+  // server with no Supabase configuration refuses to start (`config/env.ts`).
+  //
+  // The store is what decides, rather than a separate "persistent" flag, so
+  // there is only one source of the truth "can this process reach Supabase".
+  const persistent = store instanceof SupabaseStore;
+  const tokenVerifier: TokenVerifier =
+    deps.progression?.tokenVerifier ??
+    (persistent ? new SupabaseTokenVerifier(store.authClient) : new LocalTokenVerifier());
+
+  // What a new account starts with, decided by the same fact.
+  //
+  // **With no persistence there is no progression**, so a gate on accumulated
+  // points has nothing to gate: nothing accumulates across runs, and five of the
+  // ten skills would be permanently unreachable in local play and in the browser
+  // suite rather than merely un-earned. "No accounts here" therefore means "no
+  // entitlements here", and every unlock is provisioned.
+  //
+  // The gate itself is untouched — `onAuth` still refuses anything the account
+  // does not hold. This changes what the set starts as, and it cannot apply to a
+  // deployment, because production without Supabase refuses to start
+  // (`config/env.ts`).
+  const unlockGrants = persistent ? DEFAULT_UNLOCK_GRANTS : ALL_UNLOCK_GRANTS;
 
   const httpServer = http.createServer();
   const transport = new WebSocketTransport({ server: httpServer });
@@ -94,7 +146,15 @@ export function createGameServer(deps: GameServerDeps): GameServerHandle {
 
   // One room per match (docs/DECISIONS.md D7), alongside the connection-only
   // probe room above (D40).
-  defineMatchRoom(gameServer, { buildVersion, logger, ...deps.match });
+  defineMatchRoom(gameServer, {
+    buildVersion,
+    logger,
+    store,
+    settlement,
+    tokenVerifier,
+    unlockGrants,
+    ...deps.match,
+  });
 
-  return { gameServer, httpServer };
+  return { gameServer, httpServer, store };
 }
