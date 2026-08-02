@@ -288,6 +288,67 @@ milestone, not implemented yet).
 - **Status:** Approved.
 
 
+## D26. Projectile and dash collision defects moved to M2 — SUPERSEDED
+
+- **Original decision:** D-1 (projectiles pass through walls) and D-2 (dash
+  tunnels through thin walls) are not fixed in M1. Both are moved into M2 and
+  must be fixed before M2 loot and extraction work is declared done.
+- **Original reason:** M1's three §38 exit criteria are met without them. Both
+  share one root cause — `resolveAxisMovement` is a discrete landing-position
+  check rather than a swept path check — so they are one fix, not two, and are
+  better done together.
+- **Original consequences:** Ranged combat has no line of sight to break until
+  this is fixed; combat balance must not be judged before then. The §13.4
+  bounce cap may be exercising an unreachable code path.
+- **Superseded:** this decision was reversed before it was ever committed. D-1
+  and D-2 were fixed directly in M1, not deferred, using exactly the shared
+  swept-collision approach this entry anticipated —
+  `sweptCircleIntersectsWall` in `packages/simulation-core/src/collision.ts`,
+  used by both `resolveAxisMovement` (actor movement and the dash) and
+  `combat/ranged.ts`'s `stepProjectiles`. See `docs/M1_ISSUES.md` D-1/D-2
+  (marked resolved) for the fix and its regression tests. The bounce-cap
+  caveat still holds as written: `MAX_BOUNCES`/`clampBounceCount` remain
+  unreachable from running gameplay, because no mechanic produces a bounce
+  yet (M3's `ricochet` skill) — this fix deliberately did not add one.
+- **Status:** Superseded (see above); no longer in force.
+- **Restored 2026-08-01:** this entry and D27 were deleted from this file by
+  commit `847fe83` ("docs: record D28"), which rewrote the tail of the file
+  rather than appending to it — the "\ No newline at end of file" markers on
+  both sides of that diff are the fingerprint. Neither deletion was intentional:
+  D27 in particular was referenced by more than twenty passages across
+  `docs/M2_ISSUES.md`, `docs/M2_EXECUTION_PLAN.md`, `docs/M3_ISSUES.md`,
+  `docs/M4_ISSUES.md`, `docs/M4_EXECUTION_PLAN.md`, `docs/CONTENT_AUTHORING.md`,
+  and D39, every one of which pointed at nothing. Both are restored verbatim
+  from `847fe83^`; D27 is then superseded by D44 below, which is what M5
+  actually changes about it.
+
+## D27. M2 secure slot protects within the local run only; no cross-run persistence
+
+- **Date:** 2026-07-31.
+- **Decision:** In M2, the secure slot's guarantee is scoped to the current local run only. An
+  item placed in the secure slot never drops on death (unlike normal inventory) and converts into
+  the run's point totals identically whether the run ends by death or by successful extraction
+  (`docs/M2_ISSUES.md`, `packages/simulation-core/src/run-result.ts`). It does **not** survive a
+  browser refresh, a process restart, or accumulate across separate runs — M2 writes the run
+  result nowhere durable; the run-result screen is the only place it is ever shown.
+- **Reason:** `docs/DEVELOPMENT_RULES.md` requires that, once the secure slot is truly
+  implemented, "insertion must be persisted before it is reported successful, so a server crash
+  cannot invalidate the protection promise." That requirement describes the real M5
+  implementation, where an authoritative server and a database both exist. M2 has neither (D9,
+  D16, D22): there is no server to crash mid-match and no account or database row for "permanent
+  progress" to be written into yet. Concept §7.2/§4.3–4.4 describe the secure slot surviving death
+  and converting to "permanent progress," but that promise is only meaningful once M5 gives
+  "permanent" somewhere durable to mean. Implementing a fake persistence layer now, or silently
+  claiming the M5 guarantee already holds, would both be worse than stating the gap plainly.
+- **Consequences:** M2's secure slot is real and testable within a single local run (it changes
+  behavior — no drop on death, uniform conversion — and is covered by tests), but the "permanent"
+  half of its promise is deferred, not delivered. M5 must implement the real persisted settlement
+  path (technical plan §18's atomic settlement function, per D22) before the secure slot's
+  protection promise is honest at the account level; M2 must not be cited as evidence that promise
+  is already met.
+- **Status:** **Superseded by D44** (M5 shipped the persisted settlement path this entry called
+  for). Kept because M1-M4 documents cite it and because it is the record of what was true then.
+
 ## D28. v0.1.0-local-combat predates the D-1/D-2 collision fix
 
 - **Decision:** The public tag `v0.1.0-local-combat` points at a commit where
@@ -643,4 +704,188 @@ milestone, not implemented yet).
   `joinSameMatch` now asserts the two clients landed together, so if the window is ever too tight
   again the failure names that cause immediately. `MATCH_LOBBY_MS` remains server configuration;
   `apps/client/test/build.test.ts` asserts it never reaches the client production bundle.
+- **Status:** Approved.
+
+## D44. The secure-slot promise is honored by ordering, not by discipline
+
+- **Date:** 2026-08-01.
+- **Decision:** Supersedes D27. A secure-slot insertion is persisted before it is reported
+  successful, as `docs/DEVELOPMENT_RULES.md` requires. The ordering is structural rather than a
+  convention someone must remember (`docs/DATA_MODEL.md` §4.2): the room validates the request
+  against live simulation state, writes an idempotent `secure_reservations` row and **awaits** it,
+  and only then hands the secure intent to the next simulation step. The one channel that tells a
+  client its secure slot is full is the private-state message derived from simulation state, and
+  the simulation is not given the intent until the write returns — so there is no code path that
+  reports success and then writes, and therefore no window for a crash to fall into.
+- **Reason:** Technical plan §14.3 states the requirement and the failure it prevents. Making it an
+  ordering rather than a check means it cannot be eroded by a later change that "optimistically"
+  updates the client, because no such update exists to erode.
+- **Consequences:** A failed or hung reservation leaves the item in normal inventory and tells the
+  player nothing, which is the truthful outcome — it drops on death, because it was not secured.
+  Building this surfaced a real defect: an earlier version re-checked the source slot *before*
+  handing over the intent, and a `discard_item` arriving in the same tick is applied first inside
+  `stepPlayerAttacks`, so the item left the inventory, `secureItem` refused, and the reservation
+  stayed `pending` — leaving recovery ready to award points for an item the player had thrown away.
+  The reservation is now confirmed against what the simulation actually did, one tick later, and
+  withdrawn otherwise (`MatchRoom.confirmSecureActions`). A player who leaves mid-write has their
+  unconfirmed reservation withdrawn for the same reason.
+- **Status:** Approved.
+
+## D45. Identity is the verified token; a server with no project mints local identities
+
+- **Date:** 2026-08-01.
+- **Decision:** The client sends a Supabase access token as a join option and **nothing else about
+  its identity**; the user id comes back out of `auth.getUser(token)`, on the server. A client never
+  sends a user id, because an id it can send is an id it can choose. Verification is a call to
+  Supabase Auth rather than a local signature check, because local verification needs a JWT/JWKS
+  library — a dependency beyond the Supabase client, which this milestone is not authorized to add.
+  Where no Supabase project is configured, a `LocalTokenVerifier` treats the presented token as an
+  opaque identity (unverified, because there is nothing to verify against) and mints a fresh one for
+  a tokenless client.
+- **Reason:** §17.1's instant guest play needs an identity from the first visit, and §33's
+  server-generated-ids rule means the client cannot supply it. Treating the token as the identity in
+  the unconfigured mode — rather than ignoring it — makes that mode structurally the same shape as
+  the real one, so returning-player behavior (crash recovery, §14.3) is exercised without
+  credentials instead of being reachable only on a machine that has them.
+- **Consequences:** One network round trip per join, at a boundary that already does network work
+  and never on the 50 ms step. The unconfigured mode is not a security fallback and is not reachable
+  in production, because a production server without Supabase refuses to start (D46). A refused join
+  carries `UNAUTHORIZED_JOIN_CODE` (4003), distinct from the version and invalid-message codes,
+  because refreshing does not fix a locked skill and re-selecting a loadout does not fix an expired
+  session.
+- **Status:** Approved.
+
+## D46. CI runs the seven gates with no credentials; only one suite needs a real project
+
+- **Date:** 2026-08-01.
+- **Decision:** All persistence is behind one `ProgressionStore` interface with two
+  implementations: `SupabaseStore` and an in-process `MemoryStore` implementing the same contract,
+  including both idempotency guarantees. The server selects Supabase when `SUPABASE_URL` and
+  `SUPABASE_SECRET_KEY` are present and the memory store otherwise, with a loud warning —
+  and **`NODE_ENV=production` without Supabase is a startup failure**, so a deployment can never
+  silently land on the fallback and discard every account's progression. The settlement assertions
+  are written once, as a contract suite parameterized over the store, and run against the memory
+  store in CI and against real PostgreSQL under a third vitest project, `pnpm test:supabase`, which
+  **skips** without credentials rather than failing.
+- **Reason:** D42's durable rule: an automated suite may not depend on a file policy forbids
+  committing. The root `.env` is gitignored, so CI and a fresh clone have no credentials at all.
+- **Consequences:** A fresh clone with no `.env` passes all seven gates — verified by renaming the
+  local `.env` aside and re-running, which is the standard check here. The split in evidence is
+  stated rather than blurred: the memory run proves the **server calls the contract correctly**;
+  only the PostgreSQL run proves the **SQL implementing it is correct**, including
+  `settle_match_reward`'s transactional and concurrency behavior and every row-level-security
+  policy, none of which an in-process fake can demonstrate. Any report of this milestone says which
+  claim rests on which run.
+- **Status:** Approved.
+
+## D47. Row-level security denies by absence; the `is_anonymous` claim gates preset slots only
+
+- **Date:** 2026-08-01.
+- **Decision:** RLS is enabled on all seven tables in the migration that creates them, never a
+  follow-up. `profiles`, `point_balances`, `unlocks`, `loadouts`, and `match_results` grant a
+  `select` policy for own rows only. `point_balances`, `unlocks`, `match_results`, `reward_ledger`,
+  and `secure_reservations` have **no insert/update/delete policy at all**, so those statements are
+  denied by absence rather than by a rule that could be written wrong; `reward_ledger` and
+  `secure_reservations` additionally have no `select` policy. `loadouts` is the one client-writable
+  table, gated on `user_id = auth.uid()` and on a slot allowance that reads the JWT's `is_anonymous`
+  claim: one preset slot for anonymous accounts, three for permanent ones.
+- **Reason:** Technical plan §18.3 lists what players may read and must not write. Anonymous users
+  hold the same `authenticated` Postgres role as permanent users, so the role cannot distinguish
+  them and only the claim can. Attaching the claim to preset slots rather than to progression is
+  deliberate: an anonymous account earns, keeps, and spends progression identically — gating points
+  or unlocks on it would punish the instant guest play §17.1 exists to protect — while presets
+  beyond the first are a convenience for a durable account, which gives §17.3's warning something
+  concrete to be about.
+- **Consequences:** A browser writing `loadouts` is safe because a preset is a *preference*, not an
+  entitlement: the server re-validates the selection at join through `createSkillLoadout` and the
+  account's unlock set (D38, technical plan §19), so a client can store a junk preset and simply be
+  refused. `coalesce((auth.jwt() ->> 'is_anonymous')::boolean, false)` fails toward "permanent",
+  because a missing claim on a linked account would otherwise restrict a paying user. All eight
+  properties are tested against a real project in
+  `apps/server/test-supabase/row-level-security.test.ts`, including a user failing to update
+  **their own** balance and the claim tested in both directions.
+- **Status:** Approved.
+
+## D48. Unlocks are point thresholds; balances are never spent
+
+- **Date:** 2026-08-01.
+- **Decision:** M5's unlocks are thresholds on accumulated point balances, defined as data in
+  `packages/game-content/src/unlocks.ts`. Balances only ever increase; there is no shop, no spend,
+  and no refund. Five skills are default (concept §5.4, including D31's default loadout so a new
+  account can legally play it) and five are earned, each mapped to the concept §6 category whose
+  description names its effect. **Guard gets no unlock**, and that gap is asserted by a test.
+- **Reason:** Technical plan §38 M5 lists "unlocks" as a deliverable, but concept §19.2–§19.4's
+  three unlock *sources* — weapon blueprints, armor blueprints, boss skill cores — do not exist as
+  content: there is no blueprint item kind, no armor system (§8.2), and no boss (M7). Inventing them
+  inside a persistence milestone would be adding gameplay. Concept §6.1–§6.5 each say the category
+  is "used to unlock or improve" specific content, which is a numeric basis that already exists.
+  Spending is described nowhere, so adding it would be inventing a second system.
+- **Consequences:** An unlock is a real gate, not a row nothing consults: `onAuth` refuses a loadout
+  naming a skill the account has not unlocked (technical plan §19), tested in both directions.
+  Guard's §6.4 unlock targets are armor types and shield skills — armor is unimplemented and the one
+  shield skill (`bulwark_strike`) must stay a default for D31's loadout to be legal on a new account
+  — so Guard points accumulate and count toward nothing until armor exists. Threshold amounts are
+  proposed and balance-deferred like every other unsourced number. When M7 adds boss cores they
+  become a second unlock source writing to the same table.
+- **Status:** Approved.
+
+## D49. With no persistence there is no progression to gate
+
+- **Date:** 2026-08-01.
+- **Decision:** A server running on the in-memory store provisions every account with **every**
+  unlock, rather than concept §5.4's default set. The choice is made in `server.ts` from the same
+  single fact that already chooses the token verifier — whether the store is Supabase-backed — and
+  the client's unconfigured account mirrors it, so the picker and the server agree.
+- **Reason:** Surfaced by the unlock gate working correctly: eight browser specs are M3's per-skill
+  evidence for `piercing_rounds`, `returning_shot`, `homing_arrows`, and `stunning_blows`, all
+  threshold unlocks, and every end-to-end run starts from a fresh account. Earning a threshold takes
+  five to eight successful extractions, so the options were to delete that regression coverage, to
+  weaken the gate for everyone, or to recognize that a threshold on an *accumulated* balance gates
+  nothing when nothing accumulates across runs. A `DEV_UNLOCK_ALL` environment switch was written
+  and then removed in favor of this: it was a second source of the same truth, and an entitlement
+  knob is a worse thing to own than a stated consequence of having no database.
+- **Consequences:** The gate itself is untouched — `onAuth` still refuses anything the account does
+  not hold, and `join-gate.test.ts` and `settlement-adversarial.test.ts` pass
+  `DEFAULT_UNLOCK_GRANTS` explicitly because they are *about* the gate and would otherwise assert
+  nothing. A deployment cannot reach this path, because production without Supabase refuses to start
+  (D46).
+- **Status:** Approved.
+
+## D50. Anonymous-user accumulation and sign-in rate limits are M8 obligations
+
+- **Date:** 2026-08-01.
+- **Decision:** Supabase does not clean up anonymous users automatically, and anonymous sign-in is
+  IP rate-limited at 30 per hour by default. Neither is addressed in M5. M8 (private internet test)
+  must decide, with measurements rather than guesses: whether CAPTCHA or Turnstile is needed
+  (technical plan §17.4 says "CAPTCHA where recommended"), what the rate limit should be for real
+  traffic, and how abandoned anonymous accounts — ones that never linked and never returned — are
+  reaped.
+- **Reason:** Neither matters while the game is unreachable from the internet: M5 is local, and D25
+  plus §38 place the private internet test two milestones away. Adding a CAPTCHA provider now would
+  also be an unapproved dependency, chosen with no traffic to size it against.
+- **Consequences:** The obligation is recorded rather than discovered at M8. Two related choices
+  already act on it: the browser suite blanks its own Supabase variables (D51), so thirty specs a
+  run never spend the sign-in limit or leave junk users in a real project; and `profiles.status`
+  exists with a checked value set, so the milestone that implements §17.4 has a place to write a
+  restriction without a migration to reach it. `account_restrictions` (technical plan §18.1) is
+  specified in `docs/DATA_MODEL.md` §3.8 but deliberately **not created**, because nothing in M5
+  reads or writes one.
+- **Status:** Reserved.
+
+## D51. The browser suite blanks the Supabase variables, not merely omits them
+
+- **Date:** 2026-08-01.
+- **Decision:** `apps/client/playwright.config.ts` sets `SUPABASE_URL`, `SUPABASE_SECRET_KEY`,
+  `VITE_SUPABASE_URL`, and `VITE_SUPABASE_PUBLISHABLE_KEY` to empty strings for the servers it
+  starts, alongside the variables D42 already had it supply.
+- **Reason:** Omitting them is not enough. The server's `dev` script loads the repository-root
+  `.env` through `--env-file-if-exists` (D20), and Node does not override an already-set variable,
+  so a developer *with* credentials ran a different suite than CI did — the exact divergence D42
+  exists to prevent. This was not theoretical: the first M5 run of the browser suite failed on the
+  developer's machine, on a `.env` value, and would have passed on a CI runner.
+- **Consequences:** The suite runs on the in-memory store whether or not a `.env` exists, so it
+  tests the game rather than a network round trip to a hosted database. It cannot spend the
+  anonymous sign-in rate limit (D50) across thirty specs a run, and leaves no unrecoverable
+  anonymous users in a real project. The real schema's evidence is `pnpm test:supabase`, which is
+  the suite that *should* need credentials.
 - **Status:** Approved.

@@ -36,9 +36,12 @@ are a deliberate design act, made on their own.
 - **Permanent progression stores unlocks and points** (weapon/armor/skill unlocks, five point
   category balances, loadout presets, cosmetics, limited mastery), not hundreds of individual items.
 - **Normal carried loot is temporary** — it powers the current run and is lost on death.
-- **Secure-slot actions require reliable persistence later.** When the secure slot is
-  implemented, insertion must be persisted before it is reported successful, so a server
-  crash cannot invalidate the protection promise. (Not implemented in M0.)
+- **Secure-slot insertion is persisted before it is reported successful**, so a server crash
+  cannot invalidate the protection promise. **Implemented in M5** (`docs/DECISIONS.md` D44,
+  `docs/DATA_MODEL.md` §4.2) as an *ordering*, not a check: the room writes the reservation and
+  awaits it, and only then hands the secure intent to the simulation — which is the only thing that
+  can tell a client its secure slot is full. There is no code path that reports success and then
+  writes, so there is no window for a crash to fall into. Do not add one.
 
 ## Content and code quality
 
@@ -55,9 +58,20 @@ are a deliberate design act, made on their own.
 ## Security
 
 - **No secrets in source control.** No credentials, API keys, or service-role keys in code,
-  tests, fixtures, or generated documentation. Real `.env` files are git-ignored.
+  tests, fixtures, or generated documentation. Real `.env` files are git-ignored. A secret must
+  also never reach a log line, an error message, or a report — including the "invalid
+  configuration" errors that name it.
 - Service-role / secret keys never appear in the browser bundle or in any `VITE_*` variable.
-- Never trust client-supplied reward or progression data.
+  **Prove it, do not intend it:** `apps/client/test/build.test.ts` asserts no secret-key value or
+  server-only variable name survives a real production build, and
+  `apps/client/test/architecture.test.ts` asserts no client source file can name one. This class of
+  leak already happened once here (`docs/DECISIONS.md` D32) and went undetected for three
+  milestones.
+- **Row-level security is enabled in the migration that creates a table**, never a follow-up. A
+  table that exists for one deployment without it was readable by every authenticated user.
+- Never trust client-supplied reward or progression data. There is deliberately no client → server
+  message capable of expressing a reward, a point value, an unlock, or an outcome, so there is no
+  claim to validate away (`docs/DATA_MODEL.md` §6). Do not add one.
 
 ## Scope discipline
 

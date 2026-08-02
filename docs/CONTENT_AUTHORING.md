@@ -228,6 +228,11 @@ mixed-category, meant as secure-slot bait). No `boss`-rarity item exists yet —
 weapon/armor blueprints require the account/persistence layer M5 adds (`docs/DECISIONS.md` D27;
 `docs/M2_ISSUES.md` §1), so M2's loot is points-plus-optional-build-effect only.
 
+**Still true after M5.** M5 shipped the persistence layer, but *not* blueprint or boss-core items:
+inventing a new item kind inside a persistence milestone would be adding gameplay. M5's unlocks are
+point thresholds instead (§6.2, `docs/DECISIONS.md` D48), and blueprints remain an unbuilt item kind
+for the milestone that adds one.
+
 Avoid item-quality randomness, random stat rolls, procedural affixes, and hidden conversion
 formulas (concept §6.6). Every item has clear, fixed values.
 
@@ -305,6 +310,45 @@ Rules when adding or changing one:
   to "reopen elsewhere".
 - **Changing arena geometry is a content-version change** (`docs/DECISIONS.md` D34): a client with
   the old walls would draw a map the server does not collide against.
+
+## 6.2 Unlocks — point thresholds (M5, shipped)
+
+`packages/game-content/src/unlocks.ts`. An unlock says which content an account may bring into a run;
+the join gate refuses anything the account does not hold (technical plan §19,
+`docs/DECISIONS.md` D48).
+
+```ts
+export interface UnlockDefinition extends ContentDefinition {
+  readonly kind: "unlock";
+  readonly unlockType: "skill" | "weapon" | "armor";
+  /** `null` = every new account starts with it (concept §5.4). */
+  readonly requires: { readonly category: PointCategory; readonly amount: number } | null;
+}
+```
+
+Rules for authoring one:
+
+- **The `id` *is* the content id it grants** (`stunning_blows`, `basic_bow`), and `unlockType` says
+  which table to look it up in. This is the same shape the `unlocks` table stores
+  (`docs/DATA_MODEL.md` §3.3): a row there means only "this account has this id", and what the id
+  grants lives here, in the repository.
+- **Every shipped skill needs exactly one unlock definition.** A skill in neither half could never
+  be selected by any account; a skill in both would be earnable after already being granted.
+  `unlocks.test.ts` asserts the partition.
+- **A threshold must trace to a concept §6 sentence.** Each category says what it is "used to unlock
+  or improve"; map the skill to the category whose description names its effect, and say which
+  sentence in the comment.
+- **Balances are never spent** (D48). A threshold is a level on an accumulating total, not a price.
+- **The defaults must keep D31's default loadout legal**, or a brand-new account is refused at its
+  first join.
+- Amounts are proposed and balance-deferred like every other unsourced number (concept §12.3).
+- Adding or removing an unlock is a **`CONTENT_VERSION` bump**: the client marks skills locked from
+  its own copy of this table while the server gates on its copy, so a stale client would offer a
+  selection the server refuses.
+
+Guard currently has no threshold unlock, and that gap is asserted by a test rather than left
+silent — §6.4's unlock targets are armor types and shield skills, armor is unimplemented, and the one
+shield skill is a default. The milestone that adds armor closes it.
 
 ## 7. How to add a content item
 

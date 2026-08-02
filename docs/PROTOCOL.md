@@ -39,7 +39,7 @@ prevent an incompatible client from joining, showing a refresh/update message in
 
 | Version          | Source                                                        | Status                                                                          |
 | ---------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Protocol version | `PROTOCOL_VERSION` (currently `2`)                            | **Implemented** — the join gate compares on it.                                  |
+| Protocol version | `PROTOCOL_VERSION` (currently `3`)                            | **Implemented** — the join gate compares on it.                                  |
 | Build version    | `GAME_BUILD_VERSION` (server) / `VITE_BUILD_VERSION` (client) | **Implemented** — exchanged, informational.                                      |
 | Content version  | `CONTENT_VERSION` in `@carry-or-fall/game-content`            | **Implemented in M4** — the join gate compares on it (`docs/DECISIONS.md` D34). |
 
@@ -73,24 +73,43 @@ export interface ClientHandshake {
   readonly buildVersion: string;
 }
 
-/** The match room's join options: the handshake plus the pre-run skill selection. */
+/**
+ * The match room's join options: the handshake, the pre-run skill selection, and
+ * (M5) the account's access token.
+ */
 export interface MatchJoinOptions extends ClientHandshake {
   readonly skillLoadoutIds: readonly string[];
+  readonly accessToken: string | null;
 }
 ```
 
+`accessToken` is the **only** thing a client says about its identity (M5,
+`docs/DECISIONS.md` D45). There is no `userId` field, and there will not be one: an id a client can
+send is an id it can choose. The server takes the user id out of the *verified token* instead.
+Validation splits by necessity — this package bounds the shape (a non-empty string under a length
+cap), and only Supabase Auth can judge authenticity. `null` means "no session", which is legal on
+the wire because whether a session is *required* depends on whether the server has a project to
+verify against, and the protocol package cannot know that.
+
 Flow:
 
-1. The client calls `joinOrCreate(MATCH_ROOM, { protocolVersion, contentVersion, buildVersion, skillLoadoutIds })`.
+1. The client calls
+   `joinOrCreate(MATCH_ROOM, { protocolVersion, contentVersion, buildVersion, skillLoadoutIds, accessToken })`.
 2. The room's `onAuth(client, options)` runs the shared `authorizeHandshake` gate
    (`apps/server/src/rooms/authorize.ts`), which both rooms use so they cannot drift apart.
 3. If the payload is malformed, or `isProtocolCompatible` / `isContentCompatible` is false, the
    server throws `new ServerError(PROTOCOL_MISMATCH_CODE, INCOMPATIBLE_CLIENT_MESSAGE)` — the join is
    refused and no `onJoin` runs.
-4. The match room then runs `validateMatchJoinOptions` and `createSkillLoadout` on
-   `skillLoadoutIds` — the same validator the client's picker uses, now on the trusted side — and
-   refuses an illegal selection with `INVALID_MESSAGE_DISCONNECT_CODE` (`docs/DECISIONS.md` D38).
-5. Otherwise the client joins and the server logs `accepted client handshake`.
+4. The match room runs `validateMatchJoinOptions`, then **verifies the access token** (M5). An
+   unverifiable token is refused with `UNAUTHORIZED_JOIN_CODE`; the identity that comes back is the
+   one every later step uses.
+5. It then runs `createSkillLoadout` on `skillLoadoutIds` — the same validator the client's picker
+   uses, now on the trusted side — and refuses an illegal selection with
+   `INVALID_MESSAGE_DISCONNECT_CODE` (`docs/DECISIONS.md` D38).
+6. It provisions the account, finalizes any secure reservation a crashed server left pending
+   (technical plan §14.3), and **checks every requested skill against the account's unlock set**
+   (technical plan §19), refusing a locked one with `UNAUTHORIZED_JOIN_CODE` (D48).
+7. Otherwise the client joins and the server logs `accepted client handshake`.
 
 The connection-only `foundation_room` runs step 2 and nothing else: it takes no loadout, allocates no
 match, and starts no simulation (`docs/DECISIONS.md` D40).
@@ -101,7 +120,11 @@ match, and starts no simulation (`docs/DECISIONS.md` D40).
 | --------------------------------- | ------------------------------------------------------------------------ |
 | `PROTOCOL_MISMATCH_CODE`          | `4001` (app-defined 4000+ range)                                         |
 | `INVALID_MESSAGE_DISCONNECT_CODE` | `4002` — an illegal join, or a connection dropped for repeated abuse      |
+| `UNAUTHORIZED_JOIN_CODE`          | `4003` (M5) — an unverifiable session, or a loadout naming a locked skill |
 | `INCOMPATIBLE_CLIENT_MESSAGE`     | `"Your game version is out of date. Please refresh the page to update."` |
+
+`4003` is distinct from the other two because the remedy is different and the client should say so:
+refreshing does not fix a locked skill, and re-selecting a loadout does not fix an expired session.
 
 On the client, the rejected `joinOrCreate` promise rejects with a `MatchMakeError` carrying that
 `code` and `message`; the scene surfaces the refresh/update text instead of connecting. This
@@ -191,6 +214,11 @@ Still not implemented, and each added only when its milestone lands (technical p
 | `replace_wildcard_skill` | later     | replace the wildcard through a UI rather than by walking over a chip |
 | `ping`                   | later     | latency measurement                              |
 
+**Nothing settlement-shaped will ever appear in this table.** M5's secure-slot write and reward
+settlement are both triggered by the server observing its own simulation state, never by a client
+message (`docs/DATA_MODEL.md` §6). `secure_item` remains the only inventory command, and it names a
+*slot*, never an item and never an outcome.
+
 ## 7. Server → client state
 
 Synchronized room state is server-owned; the client only reads it. Two rooms publish state.
@@ -251,6 +279,27 @@ export interface LocalPlayerState {
 Items and skills travel as **content ids**, resolved locally against the shared content tables. That
 keeps messages small and keeps the server from shipping content data as if it were state — and it is
 safe precisely because the join gate refuses a client whose content version differs (§3).
+
+M5 adds a second per-owner message, sent once a player's finished run has been **written**:
+
+```ts
+export const SETTLEMENT_MESSAGE_TYPE = "settlement";
+
+export interface SettlementMessage {
+  readonly alreadySettled: boolean;      // a retry or recovery found it already settled
+  readonly balances: PointTotalsPayload; // the account's five totals, after this settlement
+  readonly unlockIds: readonly string[]; // everything the account now holds
+  readonly newUnlockIds: readonly string[]; // only what this settlement granted
+  readonly isAnonymous: boolean;         // technical plan §17.3's warning condition
+}
+```
+
+Its arrival — not the run ending — is what means the points are in the account. **There is no
+client → server counterpart, and that absence is the design**: no message a client can send carries a
+point value, an unlock, or an outcome, so there is no reward claim for the server to check
+(`docs/DATA_MODEL.md` §6). A client that invents one hits the room's `"*"` handler, is counted as
+invalid behavior, and is disconnected after repeated attempts (§33). The client validates this
+message on receipt like any other network payload (`validateSettlementMessage`).
 
 The static map is not synchronized either: `arenaId` names an `ArenaDefinition` both ends already
 have, so the walls a client draws are the walls the server collides against, sent once as a string.
