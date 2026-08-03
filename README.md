@@ -158,6 +158,28 @@ pnpm --filter @carry-or-fall/server build
 pnpm --filter @carry-or-fall/server start
 ```
 
+### Playing with a party (M6)
+
+Everything happens on the loadout screen, before a run starts:
+
+| Key     | What it does                                                              |
+| ------- | ------------------------------------------------------------------------- |
+| `P`     | Create a party. The server mints an 8-character join code and shows it.    |
+| `J`     | Join a party: type the code, `Enter` to submit, `Escape` to cancel.        |
+| `L`     | Leave the party.                                                          |
+| `R`     | Mint a fresh join code (leader only). The previous one stops working.      |
+| `Enter` | Start a run. In a party, the **leader's** Enter starts the party's match.  |
+
+A party holds up to three players (concept §15.3). When the leader starts the
+match, the server reserves every member's seat in one room **before** anyone
+connects, so the party always lands together rather than racing a lobby
+countdown (`docs/DECISIONS.md` D55). Inside the match each member sees a small
+marker over their own teammates and nobody else's.
+
+Join codes expire ten minutes after they are issued, or when the party ends.
+Nothing about a party is stored: it lasts as long as its members stay connected,
+and a page reload leaves it (D57).
+
 ## Quality checks and tests
 
 Each command mirrors a step in CI:
@@ -286,6 +308,9 @@ Carry_or_Fall/
 
 ## Next milestone
 
-**M1** begins gameplay on top of this foundation. Do not add gameplay to M0;
-see [`docs/M0_EXECUTION_PLAN.md`](docs/M0_EXECUTION_PLAN.md) and the technical
-plan for the milestone roadmap.
+**M7 (boss and rare skill)** is next, followed by **M7.5 (PvP damage and group
+balance)** — a milestone added by `docs/DECISIONS.md` D59 because technical plan
+§38 assigns player-versus-player damage to no milestone at all, and then **M8
+(private internet test)**. See [`docs/M6_ISSUES.md`](docs/M6_ISSUES.md) for what
+the current milestone deliberately left out, and the technical plan §38 for the
+roadmap.

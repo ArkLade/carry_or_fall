@@ -1,6 +1,6 @@
 # M6 Issue List — Party and Matchmaking
 
-Status: **Planned** (implementation follows in the same change set as this document). The bounded
+Status: **Delivered.** The bounded
 task list for milestone **M6**, per technical plan §38 (M6) and the repository's
 per-milestone-issue-list practice established at M1–M5. M6 is implemented after M5 on branch
 `m6-party`.

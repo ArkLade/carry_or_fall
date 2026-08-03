@@ -57,7 +57,7 @@ send messages, verify synchronized state, test disconnects, room disposal, extra
 death/dropped loot.
 
 **One gate, two Vitest projects** (`docs/DECISIONS.md` D54). `pnpm test:integration` runs
-`--project integration --project integration-server`. The six files that bind a real TCP port and
+`--project integration --project integration-server`. The ten files that bind a real TCP port and
 run a real Colyseus server are the `integration-server` project and run **one file at a time**
 (`fileParallelism: false`); everything else stays parallel. Run together on a loaded machine they
 oversubscribe it, and on Windows an oversubscribed fork intermittently dies natively — the worker
@@ -84,6 +84,38 @@ guarantee, because it fails loudly whenever any file did not report.
   malformed handshake are each refused at join with the mismatch code and refresh message.
 - `apps/server/test/build.test.ts` — the esbuild server bundle builds and emits a runnable entry.
 - `apps/client/test/build.test.ts` — the Vite client production build emits `index.html`.
+
+**Added in M6:**
+
+- `apps/server/test/party-queue.test.ts` — **§38 M6 exit criterion 1.** A party of three lands in
+  one room over consecutive allocations; a party offered a room already holding six is not split and
+  takes another room, together, leaving the crowded room untouched; a party *is* seated into a room
+  that can still hold it; two parties queueing at the same instant stay intact and no room exceeds
+  its cap; the lobby is **held** while a promised seat is unconsumed, and starts once the hold
+  expires; a member who drops mid-queue is queued without rather than split off; D39's disconnect
+  policy applies unchanged to a party member mid-match; and an outstanding reservation is counted as
+  an occupied seat (which is what keeps a party from overcommitting a room).
+- `apps/server/test/party-isolation.test.ts` — **§38 M6 exit criterion 2, adversarially.** Three
+  real accounts in one match, one attacking the others: reading a teammate's inventory, securing or
+  discarding their items across every slot index, forging a message that names them as its subject,
+  sharing a pickup, settling their run, fabricating a settlement, and joining with a `partyId` in
+  the options to be marked as somebody's ally. Each is refused, and the refusal is asserted against
+  the *victim's* authoritative state.
+- `apps/server/test/party-room.test.ts` — creation, routing by code, the three-player cap, leadership
+  succession, disposal, and every way a code can fail (malformed, absent, unknown, expired,
+  replaced, full, client-chosen) — including that the refusal *message* reaches the client and that
+  the SDK exposes no way to list rooms or read their metadata.
+- `apps/server/test/sdk-reconnection.test.ts` — D54's prediction: a room held past the SDK's
+  `minUptime` and then dropped stays dropped.
+- `apps/server/test/architecture.test.ts` — `simulation-core` knows no party concept, the
+  synchronized schema has no party field, and the marker list exists on exactly two files.
+- `apps/server/test/production-persistence.test.ts` — `createGameServer` refuses a production build
+  on non-persistent progression, at the seam where the local verifier and the all-unlock grant are
+  chosen (D61).
+- `apps/server/test/decisions-integrity.test.ts` — every `D<n>` cited under `docs/` resolves, and
+  the numbering has no gap (D62).
+- `apps/server/test/join-code.test.ts` — properties of the *output* of join-code generation: full
+  alphabet coverage, no duplicates across 20 000 draws, no sequential structure.
 
 These use the `@colyseus/sdk` client against a server on an ephemeral port; there is no dependency
 on `@colyseus/testing` (see `docs/DECISIONS.md` D5).
@@ -287,8 +319,16 @@ Each milestone's exit criteria (technical plan §38) imply its tests:
   once and run against two backends** (`apps/server/test/progression-contract.ts`): the in-memory
   store in CI, and real PostgreSQL under `pnpm test:supabase`. Those are different claims and are
   reported separately — see §5.
-- **M6–M9:** party/matchmaking, boss-core decisions, deployment smoke, and load/soak/perf per the
-  layers above.
+- **M6 (party/matchmaking):** a party joins one room together, and individual inventories remain
+  separate. The first is a **timing** property and must not be probabilistic — the tests assert the
+  mechanism (atomic group seat reservation, a held lobby) rather than a lucky run, because a wider
+  window is still a race (`docs/DECISIONS.md` D55). The second is a **security** property now that
+  accounts exist, and gets M4/M5's adversarial treatment: one party member attacking another's
+  inventory, secure slot, loot, progression, and settlement (§2.6). Delivered as three layers:
+  server integration suites for the queue and the isolation attacks, and three real browser contexts
+  forming a party and landing in one room (`apps/client/e2e/party.spec.ts`).
+- **M7–M9:** boss-core decisions, deployment smoke, and load/soak/perf per the layers above. PvP
+  damage and the concept §16 solo/group balance rules are M7.5 (D59).
 
 ## 5. Commands and CI
 
@@ -300,6 +340,13 @@ Each milestone's exit criteria (technical plan §38) imply its tests:
 | `pnpm build`              | Production build         | Yes        |
 | `pnpm test:e2e`           | Browser (Playwright)     | Yes, as a separate job (D32) |
 | `pnpm test:supabase`      | Real Supabase project    | **No** — needs credentials (D46) |
+
+`pnpm test:supabase` **pools and reuses anonymous accounts** rather than creating one per test
+(`docs/DECISIONS.md` D63). Anonymous sign-in is a production rate limit and Supabase never cleans up
+anonymous users, so the suite signs in a handful of times per run instead of three dozen, wipes each
+borrowed account's rows between tests (which is the isolation the contract suite actually needs), and
+deletes every account it created in teardown. It prints its own sign-in count so the number is
+measured rather than estimated.
 
 The required CI workflow runs all of the above on every push and pull request (technical plan §31;
 `.github/workflows/ci.yml`). Browser, load, and soak layers are scheduled or on-demand jobs added

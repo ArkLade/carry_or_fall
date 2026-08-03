@@ -26,6 +26,10 @@ are a deliberate design act, made on their own.
 - **Runtime validation at network boundaries.** Every client message is validated for schema,
   numeric ranges, frequency, and allowed state before it is trusted.
 - The server must not trust arbitrary client state.
+- **Party membership is decided by the server**, never asserted by a client (technical plan §5.1
+  lists "party membership authorization" among the things a browser must not decide). There is
+  deliberately no join option or message field naming a party or another player, so there is no
+  claim to validate away (`docs/DECISIONS.md` D55, D58). Do not add one.
 
 ## Progression and inventory rules (from the concept document)
 

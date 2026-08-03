@@ -987,3 +987,291 @@ milestone, not implemented yet).
     slower would silently start reconnecting. A test that needs an unconsented drop to *stay*
     dropped should set `room.reconnection.enabled = false`.
 - **Status:** Approved.
+
+## D55. A party is seated atomically, and D8 is what makes that possible
+
+- **Date:** 2026-08-02.
+- **Decision:** A party's seats in a match room are allocated **all or nothing, in one synchronous
+  step**. `MatchRoom#reserveGroupSeats` refuses unless the match has not started and every seat fits,
+  records the party and the seat holds, and then calls `matchMaker.reserveMultipleSeatsFor` — with
+  **no `await` between the check and the reservation**. `MatchQueue` serialises every allocation
+  through one promise chain, so two parties queueing at the same instant are ordered rather than
+  raced. **D8 does not change**; it gains this consequence.
+- **Reason:** M6's exit criterion is "a party joins one room together", and the requirement is
+  *every time*. D43 already measured the alternative: a second client takes 620-930 ms to reach the
+  same match, and a lobby window sized from that measurement is still a race — under load, two
+  clients landed in different matches. A window cannot be widened into a guarantee.
+  Colyseus provides one. `Room#_reserveSeat` (`@colyseus/core@0.17.45`) evaluates
+  `hasReachedMaxClients()` and assigns `this._reservedSeats[sessionId]` in one synchronous run, with
+  no `await` between them, and it counts a reserved seat exactly like an occupied one. JavaScript is
+  single-threaded and D8 keeps every room in that one thread, so a caller that performs its own
+  capacity check and reaches `reserveMultipleSeatsFor` in the same continuation cannot be
+  interleaved — not by another party, not by a solo `joinOrCreate`, not by a timer. **The constraint
+  D8 imposes is the thing that makes group allocation atomic**, which is the opposite of the obvious
+  reading of it.
+- **Consequences:**
+  - The 620-930 ms a browser takes to arrive is now spent against a seat nobody else can take,
+    bounded by Colyseus's own 15 s seat-reservation timeout rather than by a countdown.
+  - A match room **holds its `countdown`** while it has an unconsumed group seat, so a party never
+    arrives to find the match already running (technical plan §8.3 disables late join). The hold has
+    a deadline (`DEFAULT_GROUP_SEAT_HOLD_MS`, 10 s), so an absent member delays a match rather than
+    preventing one.
+  - A party is **never split**: a room that cannot seat all of them is declined outright and the
+    queue takes the next candidate, creating one if none fits. A party of three offered a room
+    holding six goes elsewhere, together.
+  - **The cost, stated where it will be found:** `apps/server/src/party/match-queue.ts` and
+    `MatchRoom#reserveGroupSeats` are the only code whose correctness rests on there being one
+    process. A second replica breaks them and nothing else in the party subsystem; the rewrite is to
+    move seat allocation behind Colyseus presence, which is exactly the coordination D8 defers. Both
+    modules say so in their own doc comments.
+  - The capacity check reads Colyseus's own `_reservedSeats`, which is not public API.
+    `party-queue.test.ts` asserts the accessor really sees an outstanding reservation, so an upgrade
+    that renames the field fails a test instead of letting a party overcommit a room.
+- **Status:** Approved.
+
+## D56. Join codes: minted by the server, 40 bits, and bounded in time
+
+- **Date:** 2026-08-02.
+- **Decision:** A party join code is **8 characters over a 32-symbol alphabet** (Crockford base32:
+  digits and uppercase letters without `I`, `L`, `O`, `U`), drawn per character from
+  `crypto.randomInt`. It is minted **only by the server** — a client never proposes one — and it
+  **expires 10 minutes after it is issued** (`PARTY_CODE_TTL_MS`) or when the party ends, whichever
+  comes first. The leader mints a replacement with one keypress, and the previous code stops working
+  immediately. A code is a party *address*, not a single-use ticket: reuse is bounded by the party
+  cap of three (concept §15.3), so "already used" means "used until the party is full". This settles
+  concept §34's open "party invitation method".
+- **Reason:** This is a public repository (D25), so the argument is written down rather than assumed
+  from the code's shortness.
+  - **Entropy.** 32^8 is about 1.1 x 10^12 codes. Against even ten thousand simultaneously live
+    parties, a guess lands with probability under 10^-8.
+  - **Unpredictability.** `crypto.randomInt`, not `Math.random`, and nothing derived from a counter,
+    a timestamp, a room id, or a user id — so observing one code says nothing about the next.
+    `join-code.test.ts` asserts the *output*: full alphabet coverage, no duplicate across 20 000
+    draws, and no shared prefix between consecutive draws beyond chance.
+  - **Non-enumerability.** The code lives in Colyseus matchmaking metadata so `filterBy(["joinCode"])`
+    can route a member to the right party. That is safe because there is nowhere to read it from:
+    `@colyseus/core@0.17.45` exposes exactly one matchmaking route,
+    `POST /matchmake/:method/:roomName`, with `exposedMethods` limited to
+    `joinOrCreate | create | join | joinById | reconnect`, and **no room-listing route**;
+    `@colyseus/sdk@0.17.43` has no `getAvailableRooms`. `party-room.test.ts` asserts this against the
+    installed packages rather than trusting the reading.
+  - **Indistinguishable refusals.** Unknown, expired, replaced, and full all return one code and one
+    message, so a guesser learns nothing from a miss.
+  - **Never disclosed.** The code appears in the party's own synchronized state and in **no** log
+    line, metric, or error message.
+- **Consequences:**
+  - Two refusal codes exist for one refusal, and the reason is not cosmetic. Colyseus surfaces a
+    matchmaking-time refusal as an **HTTP status** and a seat-consumption-time refusal as a
+    **WebSocket close code**; a 4000-range value is not a legal HTTP status, and throwing one makes
+    Colyseus's router fail while building the response — the client then receives an internal error
+    and the message telling it what to do is lost. Found exactly that way.
+    `PARTY_JOIN_REFUSED_CODE` (4004) is the socket code; `PARTY_JOIN_REFUSED_HTTP_STATUS` (403),
+    `INVALID_JOIN_OPTIONS_HTTP_STATUS` (400), and `INCOMPATIBLE_CLIENT_HTTP_STATUS` (426) are the
+    matchmaking ones, and `authorizeHandshake` takes the code to use so one gate serves both paths.
+  - `validatePartyJoinOptions` **requires the `joinCode` property to be present**, null included.
+    Colyseus builds its matchmaking filter from the properties a client actually sent, so an omitted
+    `joinCode` would be an empty filter — which matches *any* party room. `PartyRoom#onJoin`
+    re-checks the presented code against the room's own, so this is the first of two independent
+    defences rather than the only one.
+  - **Deferred to M8:** per-IP rate limiting of `POST /matchmake/...`, alongside D50's CAPTCHA
+    decision. Entropy is the defence today; a bounded guessing rate is a deployment concern with no
+    traffic yet to size it against.
+- **Status:** Approved.
+
+## D57. A party is a live connection group, not an account relationship
+
+- **Date:** 2026-08-02.
+- **Decision:** A party is one Colyseus room holding a roster, a leader, a code, and a queue status,
+  and **nothing about it is persisted**: no Supabase table, no column, no migration, no row. It
+  exists while its members' party-room connections exist. Members keep that connection open during a
+  match, so a party survives a run and can queue again; a page reload ends the membership.
+- **Reason:** The question M6 had to answer is whether a party persists across runs now that accounts
+  exist. Per session, yes; per account, no — and the "no" is the load-bearing half. Technical plan
+  §8.4 says outright "do not build guilds, friend lists, or social graphs initially", and an
+  account-persistent party is a social graph with one edge. D31 and D38 also deliberately kept
+  pre-run selection a local, non-persistent screen and carried the loadout as join options; a party
+  that outlived the browser tab would be the lobby those decisions avoided, arriving through the side
+  door.
+  Keeping the connection open is what makes "across runs" true in the only sense M6 offers it, and it
+  costs one socket per player that runs no simulation.
+- **Consequences:**
+  - `supabase/migrations/` is untouched by this milestone, so D53's "applying is not verifying"
+    obligation does not attach to it. (`pnpm test:supabase` is still run, because M6 changes that
+    suite — see D63.)
+  - Party formation fits D31's screen rather than replacing it: the same local picker gains
+    create/join/leave/queue, and the loadout chosen there is what the member carries into the match —
+    validated at the party door, one step earlier than D38 put it, by the same `createSkillLoadout`
+    and unlock checks.
+  - A refresh loses your party. That is the honest cost of persisting nothing, and it is cheap to
+    undo: the leader shares the code again.
+  - What a member sees about another member is a display name and a connection light. No access
+    token, account id, balance, unlock list, or inventory enters party state — the same "not in the
+    document at all" treatment `MatchState` already gives private data.
+- **Status:** Approved.
+
+## D58. Party markers are private rendering, and grant no authority
+
+- **Date:** 2026-08-02.
+- **Decision:** The "shared visual identifiers" of concept §8.4 are delivered as `partyMemberIds` on
+  the **per-owner `player_private` message** — the session ids of the recipient's own teammates who
+  are in this match. The synchronized `MatchState` schema gains **no party field**. The client draws
+  a marker over those ids and nothing else.
+- **Reason:** Technical plan §10.3 requires private player data to be filtered, and this
+  repository's way of filtering it is to keep it out of the document every client receives, so there
+  is no rule to misconfigure (M4). A public party field would be the opposite: a broadcast of who is
+  grouped with whom, to everyone in the room, and a filtering rule to get wrong later.
+- **Consequences:**
+  - A non-party player is told **nothing** — not a party id, not a colour, not a count.
+  - A party member learns nothing it did not already have: the ids are of players already in the
+    public snapshot, and they are the ids from its own party roster.
+  - The marker grants **no authority**. It is drawn from a list the server sent; no message becomes
+    valid or invalid because of it; deleting the rendering would change what is on screen and nothing
+    else. `apps/server/test/architecture.test.ts` pins the two files that may mention
+    `partyMemberIds` and asserts neither is the reconciler nor the schema.
+  - Publishing party membership to *everyone* — so opponents can see a group coming, which concept
+    §15.1's ambush decisions would find meaningful — is a gameplay choice neither authoritative
+    document makes. It is not taken, because private is the choice that cannot leak.
+- **Status:** Approved.
+
+## D59. Player-versus-player damage is assigned to M7.5, between the boss and the internet test
+
+- **Date:** 2026-08-02.
+- **Decision:** PvP damage — players resolving attacks against players — is scheduled as **M7.5,
+  "Player Combat and Group Balance"**, between technical plan §38's M7 (Boss and Rare Skill) and M8
+  (Private Internet Test). It is **not** implemented in M6. Its scope: letting the existing shared
+  attack pipeline treat players as `AttackTarget`s, spawn protection (concept §21.4), and the concept
+  §16 solo/group balance rules that only mean something once a direct fight exists. Exit criteria: a
+  player can kill a player and loot the drop; spawn protection cannot be exploited; a solo player's
+  §16.1 advantages are measurable against a party's §16.2 ones.
+- **Reason:** The two authoritative documents disagree by omission, and the gap is where work gets
+  lost. Concept §15 is a full PvP system and §15.1 says PvP "is allowed and meaningful"; §33 lists
+  "PvE and PvP coexist" as approved baseline. Technical plan §38 assigns it to **no milestone at
+  all**, and D41 deferred it out of M4 without naming where it lands. Left alone, the most central
+  tension in the concept document would arrive by accident or not at all.
+  M7.5 specifically: it must come **after** M7, because the boss and its skill cores change what a
+  player can bring to a fight and balancing against a moving target is wasted work; and **before**
+  M8, because M8 is the first time strangers meet, concept §35's criteria 8 and 9 can only be
+  *measured* with real players, and shipping the first external test with the game's central tension
+  absent would make that measurement meaningless.
+- **Consequences:** M6 ships no friendly fire, because it ships no fire between players at all. The
+  shape is already right — `AttackTarget` is a minimal damageable-circle interface — so the work is
+  the balance decisions §15/§16 imply rather than the plumbing. Numbering it 7.5 rather than
+  renumbering M8/M9 keeps every existing reference to §38's milestones valid.
+- **Status:** Reserved.
+
+## D60. A party gets presence, not power; the §35 balance work is deferred with PvP
+
+- **Date:** 2026-08-02.
+- **Decision:** Being in a party grants **no mechanical advantage in M6**: no shared loot, inventory,
+  points, or rewards; no revive; no party-only extraction behavior; no reduced enemy aggression; no
+  friendly-fire exemption. The only in-match difference between a partied and a solo player is a
+  marker drawn on the party member's own screen (D58). Concept §16.1's solo compensations — lower
+  visibility, smaller PvE aggro radius, faster extraction, easier routes — are **not** implemented
+  here and are deferred to D59's milestone.
+- **Reason:** Concept §35's success criteria 8 ("solo players can survive without joining a party")
+  and 9 ("parties are useful but not unbeatable") are the two this milestone could most easily
+  break, so what M6 does about them is recorded rather than assumed.
+  - *What could break them, and what is done:* a party could take a disproportionate share of a room
+    (three of eight seats), and M6 does not cap parties per room — neither document asks for one, and
+    a cap would be a guessed number. What M6 does instead is refuse to **split** a party, so a party
+    that does not fit takes a new room rather than displacing solos from a full one. Queueing as a
+    party is not faster than queueing solo: both create a room on demand.
+  - *Why the compensations are deferred:* each is a simulation rule with a magnitude that appears in
+    neither document, and §16.3's actual claim — "the game should not pretend one solo player and
+    three coordinated players are equal in a **direct fight**" — is about a fight that does not exist
+    until D59's milestone. Inventing those numbers inside a matchmaking milestone would be adding
+    gameplay rules that could not be judged.
+- **Consequences:** Concept §16.2's real group advantages — coordinated combat, protecting a carrier,
+  controlling a contested extraction — are all emergent from three humans cooperating, which is what
+  §16.3 wants, and none of them is coded. The balance question stays open and is now owned by a named
+  milestone rather than by nobody.
+- **Status:** Approved.
+
+## D61. The production-persistence refusal moves to the seam that decides
+
+- **Date:** 2026-08-02.
+- **Decision:** `createGameServer` refuses to build a server when `NODE_ENV=production` and the store
+  it was given is not Supabase-backed (`assertPersistenceSelected`). `index.ts` keeps
+  `assertPersistenceConfigured` (D46), which fails earlier and more cheaply.
+- **Reason:** Verified first, rather than assumed: `index.ts` **already** refused, and running
+  `NODE_ENV=production` with no credentials exits non-zero with that message. What was genuinely
+  missing is where the check lives. The two behaviors it exists to prevent — minting a fresh local
+  identity per join (D45) and provisioning every unlock (D49) — are chosen inside `createGameServer`,
+  from one fact: whether the store is Supabase-backed. An invariant enforced only in the process
+  bootstrap is one that a second entry point walks past, and `createGameServer` is a public seam
+  every integration test already uses.
+- **Consequences:** Two guards for one rule, at two different distances from the consequence, which
+  is the point. `production-persistence.test.ts` asserts the **named behaviors** rather than the
+  guard's existence: no `LocalTokenVerifier` and no all-unlock provisioning can be selected under
+  `NODE_ENV=production`. Development, test, and an unset `NODE_ENV` are untouched, so CI and a fresh
+  clone are unaffected.
+- **Status:** Approved.
+
+## D62. Decision numbers are checked; the file is append-only
+
+- **Date:** 2026-08-02.
+- **Decision:** `apps/server/test/decisions-integrity.test.ts` asserts that every `D<n>` cited
+  anywhere under `docs/` resolves to a `## D<n>.` heading in this file, that no number is duplicated,
+  and that the headings run `1..N` in ascending order with no gap. **Entries are append-only:**
+  superseding one is done *in place*, by marking it superseded (D26, D27), never by deleting it.
+- **Reason:** This already went wrong. Commit `847fe83` ("docs: record D28") rewrote the tail of this
+  file instead of appending to it and silently removed D26 and D27, while more than twenty passages
+  across seven documents went on citing D27 — every one of them pointing at nothing. It survived two
+  milestones and was found by reading, not by tooling; every gate passed the whole time. A gap in the
+  numbering is the fingerprint of exactly that mistake.
+- **Consequences:** The test passes the day it is written, and its value is entirely prospective —
+  which its own module doc says plainly, so a green run is not mistaken for evidence that anything
+  was checked this time. Adding a decision now means appending a heading with the next number; a
+  renumbering or a deletion fails the gate. The citation pattern deliberately ignores `D-1`/`D-2`,
+  which are M1's defect ids rather than decisions.
+- **Status:** Approved.
+
+## D63. The Supabase suite pools accounts and deletes them; D52 can be reverted
+
+- **Date:** 2026-08-02.
+- **Decision:** `apps/server/test-supabase/helpers.ts` gains a per-file pool of anonymous accounts.
+  `acquireAccounts(n)` signs in only when the pool must grow and hands back accounts whose
+  progression rows have been deleted; `releaseAccounts()` deletes every pooled auth user in the
+  file's teardown; `reportSignIns()` prints the measured count. The row-level-security file keeps
+  **fresh** sign-ins and says why.
+- **Reason:** D52 raised a **production** rate limit — anonymous sign-ins, from 30 per hour to 100 —
+  so a test suite could finish, and recorded in the same breath that the real fix was in the suite.
+  Rate limiting is currently the only defence against anonymous sign-in abuse, since no CAPTCHA is
+  configured (D50), so the limit is not a knob to spend on convenience. Supabase also never cleans up
+  anonymous users, so every run left permanent rows behind.
+  Isolation is preserved because of what the contract suite actually needs: *a user with no rows*,
+  not *a user that did not exist a moment ago*. Wiping all seven tables gives exactly the starting
+  state a fresh sign-in gives. The one thing reuse cannot survive is a test that changes the
+  **account** rather than its rows — row-level-security property 7 links an anonymous account to a
+  permanent one, which flips the `is_anonymous` claim for good — and that test asks for a fresh
+  sign-in explicitly.
+- **Consequences:** The suite's anonymous sign-ins drop from roughly three dozen per run to a handful
+  (the measured count is reported with the milestone). The dashboard limit can return to 30, which
+  closes D52. `PROGRESSION_TABLES` in the helper must list every table a test can write to: a table
+  missing from it would let one test see the previous test's rows, which is the isolation this
+  depends on.
+- **Status:** Approved; D52 is discharged once the limit is lowered.
+
+## D64. One reconnection policy per connection, stated rather than inherited
+
+- **Date:** 2026-08-02.
+- **Decision:** D54's recorded hazard is closed rather than avoided.
+  - Server integration tests that need an unconsented drop to **stay** dropped go through one shared
+    helper, `withoutAutoReconnect`, rather than each remembering to set the flag.
+  - The client's **match** connection sets `room.reconnection.enabled = false`, because it already
+    has an explicit single reconnect attempt written for technical plan §34.1's window.
+  - The client's **party** connection leaves the SDK's reconnection **on**, knowingly: a party
+    outliving a network blip is what a player wants. The panel shows the connection state, so a party
+    that is quietly retrying does not look like a party that is fine.
+- **Reason:** D54 found that `@colyseus/sdk` reconnects on its own timers — enabled by default, 15
+  retries with exponential back-off — and declines only while a room has been up for less than
+  `minUptime` (5 s). It recorded that our tests escaped it *only* because no room reached five
+  seconds before its unconsented leave, and predicted that "a test that got slower would silently
+  start reconnecting". M6 is where that stops being hypothetical: party rooms live for whole matches
+  and the queue tests hold match rooms through a lobby, a hold, and a run.
+- **Consequences:** `sdk-reconnection.test.ts` holds a room past `minUptime`, drops a client, and
+  asserts the abandoned room really goes away — a room that came back would be the SDK dialling
+  again. It also reads the SDK's own defaults, so an upgrade that changes them fails there instead of
+  as a flake somewhere else. The client now has exactly one reconnection policy in force per
+  connection rather than two racing.
+- **Status:** Approved.
