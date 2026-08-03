@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { ALL_BOSS_CORES } from "./loot";
 import { ALL_SKILLS, type SkillDefinition, type SkillEffects } from "./skills";
 
 const RECOGNIZED_EFFECT_KEYS: readonly (keyof SkillEffects)[] = [
@@ -14,14 +15,24 @@ const RECOGNIZED_EFFECT_KEYS: readonly (keyof SkillEffects)[] = [
   "recoveryReductionAdd",
   "stunChanceAdd",
   "shieldOnHitAdd",
+  "splitCountAdd",
 ];
 
 const KNOWN_TAGS = ["melee", "projectile", "attack"];
 
 describe("ALL_SKILLS", () => {
-  it("has between 8 and 10 skills (technical plan §38 M3)", () => {
-    expect(ALL_SKILLS.length).toBeGreaterThanOrEqual(8);
-    expect(ALL_SKILLS.length).toBeLessThanOrEqual(10);
+  it("ships M3's eight-to-ten ordinary skills, plus one boss skill per milestone", () => {
+    // Technical plan §38 M3's "8 to 10" scoped *that* milestone, not the game's
+    // total skill count (`docs/DECISIONS.md` D33), and §38 M7 sets no count at
+    // all. So the invariant worth asserting is the one that still means
+    // something: every skill beyond M3's ten arrived with a boss core, and there
+    // is exactly one boss core per boss.
+    const bossSkillIds = new Set(ALL_BOSS_CORES.map((core) => core.bossCore!.temporarySkillId));
+    const ordinary = ALL_SKILLS.filter((skill) => !bossSkillIds.has(skill.id));
+
+    expect(ordinary.length).toBeGreaterThanOrEqual(8);
+    expect(ordinary.length).toBeLessThanOrEqual(10);
+    expect(ALL_SKILLS.length).toBe(ordinary.length + bossSkillIds.size);
   });
 
   it("every skill satisfies the shared skill shape", () => {
@@ -55,10 +66,14 @@ describe("ALL_SKILLS", () => {
     }
   });
 
-  it("exactly one skill costs two slots (the one rare skill, docs/M3_ISSUES.md §1)", () => {
-    const twoSlotSkills = ALL_SKILLS.filter((skill) => skill.slotCost === 2);
-    expect(twoSlotSkills).toHaveLength(1);
-    expect(twoSlotSkills[0]!.id).toBe("returning_shot");
+  it("costs two slots only for skills strong enough to have earned it", () => {
+    // M3 shipped exactly one (`docs/DECISIONS.md` D29). M7 adds the second, and
+    // it is the boss skill: concept §11 says "strong boss skills may require two
+    // permanent skill slots", and §34 listed that as open until D65 answered it.
+    // The assertion is the *set*, not the count, so a third two-slot skill has to
+    // be a deliberate edit here rather than a number quietly ticking up.
+    const twoSlotIds = ALL_SKILLS.filter((skill) => skill.slotCost === 2).map((skill) => skill.id);
+    expect([...twoSlotIds].sort()).toEqual(["returning_shot", "split_return"]);
   });
 
   it("has at least one skill requiring each known tag", () => {

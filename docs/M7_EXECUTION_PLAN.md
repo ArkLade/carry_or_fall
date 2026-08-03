@@ -162,7 +162,7 @@ The new server file binds a real port, so it joins `vitest.config.ts`'s `integra
 
 ## 11. Step 9 — documents and the margin audit
 
-`docs/DECISIONS.md` D65–D68 (D48 superseded in place by D66); `docs/PROTOCOL.md`;
+`docs/DECISIONS.md` D65–D69 (D48 superseded in place by D67); `docs/PROTOCOL.md`;
 `docs/TEST_PLAN.md` (§13.4 caps table, new suites, margins); `docs/CONTENT_AUTHORING.md`;
 `README.md`.
 

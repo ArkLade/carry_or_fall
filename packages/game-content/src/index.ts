@@ -33,4 +33,5 @@ export * from "./enemies";
 export * from "./loot";
 export * from "./skills";
 export * from "./arena";
+export * from "./boss";
 export * from "./unlocks";

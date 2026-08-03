@@ -39,6 +39,16 @@ export interface SkillEffects {
   readonly pierceCountAdd?: number;
   /** Whether an equipped skill grants a projectile one return after expiry. */
   readonly returnEnabled?: boolean;
+  /**
+   * How many children a projectile bursts into when a target consumes it (M7).
+   *
+   * The one primitive concept §11 reserves for boss skill cores, and the reason
+   * technical plan §13.4's caps 5 and 6 existed with nothing reaching them until
+   * now: a child may not split again, and a child may not return. Both are
+   * enforced in `combat/ranged.ts` against `combat/caps.ts`, never here — a
+   * content table cannot raise a cap (`docs/DEVELOPMENT_RULES.md`).
+   */
+  readonly splitCountAdd?: number;
   /** Fractional per-step homing steering strength added. */
   readonly homingStrengthAdd?: number;
   /** Fractional bonus to a melee weapon's range. */
@@ -60,6 +70,30 @@ export interface SkillDefinition extends ContentDefinition {
   readonly effects: SkillEffects;
   readonly limits: Readonly<Record<string, number>>;
 }
+
+/**
+ * The rare boss skill (M7, concept §11 and §29.4's `split_return`).
+ *
+ * Two slots, because concept §11 says in as many words that "strong boss skills
+ * may require two permanent skill slots when equipped before a future run", and
+ * §34 lists that as an open question. It is answered here rather than left open
+ * (`docs/DECISIONS.md` D65): this is the strongest projectile skill in the game
+ * — it splits *and* returns — and D29 already built the two-slot path for
+ * `returning_shot`, so the cost is expressible and already validated at the
+ * loadout boundary.
+ *
+ * Available two ways, which is the whole point of a core: temporarily, as the
+ * wildcard, by activating a core mid-run (concept §11 option 1); or permanently,
+ * by extracting one and unlocking it (option 3).
+ */
+export const splitReturn: SkillDefinition = {
+  id: "split_return",
+  kind: "skill",
+  slotCost: 2,
+  requiresTags: ["projectile"],
+  effects: { splitCountAdd: 2, returnEnabled: true },
+  limits: { maximumChildrenPerSplit: 2, maximumTotalReturns: 1 },
+} as const;
 
 /** Ranged, matches concept §29.2's worked example exactly. */
 export const ricochet: SkillDefinition = {
@@ -177,4 +211,5 @@ export const ALL_SKILLS: readonly SkillDefinition[] = [
   stunningBlows,
   wideArc,
   bulwarkStrike,
+  splitReturn,
 ] as const;

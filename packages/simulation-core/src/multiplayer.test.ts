@@ -307,6 +307,8 @@ describe("the per-player active-projectile cap (§13.4 cap 7) counts per owner",
       homingStrength: 0,
       postBounceDamageMultiplier: 1,
       hitTargetIds: [],
+      splitCount: 0,
+      isSplitChild: false,
     };
   }
 

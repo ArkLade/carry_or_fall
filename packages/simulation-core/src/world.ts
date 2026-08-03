@@ -146,6 +146,24 @@ export interface Projectile {
   readonly homingStrength: number;
   readonly postBounceDamageMultiplier: number;
   readonly hitTargetIds: readonly string[];
+  /**
+   * How many children this projectile bursts into when a target consumes it
+   * (M7, the `split_return` boss skill). Zero for every projectile fired
+   * without it, which is every projectile in the game before a boss core is
+   * activated or its unlock equipped.
+   */
+  readonly splitCount: number;
+  /**
+   * Whether this projectile *is* one of those children.
+   *
+   * The field technical plan §13.4's caps 5 and 6 were written for, and the
+   * reason they sat unreachable from M1 to M6: a split child may not split
+   * again, and may not return — return being the parent effect concept §9.5
+   * forbids a child from creating. `combat/ranged.ts` gates both on this flag
+   * through `combat/caps.ts`, so a hostile or mistaken projectile that claimed
+   * `canReturn: true` while being a child is still refused.
+   */
+  readonly isSplitChild: boolean;
 }
 
 /**

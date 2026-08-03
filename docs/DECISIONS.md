@@ -481,7 +481,8 @@ milestone, not implemented yet).
 - **Consequences:** Three of four §9.4 combinations are fully playable. Adding
   knockback later requires a new primitive in simulation-core plus a content
   definition, and serves as a live check that the data-driven claim holds.
-- **Status:** Approved.
+- **Status:** **Superseded by D69**, which schedules knockback into M7.5 rather than leaving it to
+  "a later content milestone". Kept as the record of M3's reasoning.
 ## D34. The content version activates in the join handshake
 
 - **Date:** 2026-07-31.
@@ -827,7 +828,9 @@ milestone, not implemented yet).
   — so Guard points accumulate and count toward nothing until armor exists. Threshold amounts are
   proposed and balance-deferred like every other unsourced number. When M7 adds boss cores they
   become a second unlock source writing to the same table.
-- **Status:** Approved.
+- **Status:** **Superseded by D67** (M7 created the boss-core source this entry anticipated). Kept
+  because it is the record of what was true from M5 to M6, and because the threshold half of it is
+  still in force.
 
 ## D49. With no persistence there is no progression to gate
 
@@ -1277,3 +1280,135 @@ milestone, not implemented yet).
   as a flake somewhere else. The client now has exactly one reconnection policy in force per
   connection rather than two racing.
 - **Status:** Approved.
+
+## D65. A boss core is loot carrying a core record, and its skill costs two slots
+
+- **Date:** 2026-08-03.
+- **Decision:** A boss skill core is a `LootDefinition` with `rarity: "boss"` carrying an optional
+  `bossCore` record — concept §29.4's `temporarySkillId`, `permanentUnlockId`, `secureSlotAllowed`,
+  `duplicateConversion` — rather than a new content kind with its own inventory type. Its own
+  `points` are **zero**. The skill it grants, `split_return`, costs **two permanent skill slots**,
+  which answers the question concept §34 lists as open and §11 raises as a possibility.
+- **Reason:** A core is picked up, carried, dropped on death, looted off a body, secured, and
+  converted on extraction — six behaviours that already exist and that a core must share exactly. A
+  separate kind would have meant widening `Inventory`, `pointsFromLoot`, `run-result.ts`, the
+  private-state message, and every pickup path, to arrive back at the behaviour loot already has.
+  Concept §15.2's "another player can take it off your body" then needs no code at all, which is the
+  strongest form of implementing it.
+  Zero points is what keeps the milestone's first exit criterion demonstrable. If a core also
+  carried ordinary points, a first core would award an unlock *and* points and a duplicate would
+  award points, and the two branches would differ only in degree. With zero points the branches are
+  categorically different: first → unlock, duplicate → `duplicateConversion`.
+  Two slots follows D29's existing path rather than inventing one: `createSkillLoadout` already sums
+  `slotCost` against `MAX_SKILL_SLOTS` and refuses, and `returning_shot` already proved it. The boss
+  skill splits *and* returns — it is the strongest projectile skill in the game — so if anything is
+  to cost two, this is.
+- **Consequences:**
+  - `ALL_BOSS_CORES` is deliberately not part of `ALL_LOOT`, because `ALL_LOOT` is the random drop
+    table `chooseLootDrop` picks from and a core must only ever come from a boss. `boss.test.ts`
+    asserts the two do not intersect; `findLoot` searches both, because crash recovery holds only an
+    item id (`docs/DATA_MODEL.md` §3.3) and a secured core has to be resolvable from it.
+  - A carried (not activated, not secured) core provides **no** passive power. Concept §11 option 2
+    says a core "may provide passive temporary power" — permission, not a requirement — and
+    inventing a number for it would have made the carry branch quietly the strongest of the three.
+    What option 2 actually promises, that it stays lootable and can be extracted for the unlock, is
+    real and tested.
+  - Two two-slot skills now exist, so `skills.test.ts` asserts the *set* rather than the count: a
+    third has to be a deliberate edit rather than a number ticking up.
+- **Status:** Approved.
+
+## D66. The first boss is leashed to a lair, and has no projectiles
+
+- **Date:** 2026-08-03.
+- **Decision:** `warden` occupies one fixed arena position and never travels beyond
+  `leashRadiusPx` of it. It wakes when a player comes inside `aggroRadiusPx` and returns to its lair
+  when they leave. All three of its attacks (concept §14.3's two normal plus one area) are melee
+  arcs or radial bursts centred on the boss; **it fires no projectiles**.
+- **Reason:** Concept §14.3 asks for a boss that attracts nearby players *and* creates optional PvPvE
+  conflict. PvP damage is M7.5 (D59), so the second half cannot exist yet, and building it here
+  would be doing that milestone's work under this one's name. A leash gives the first half without
+  the second: the rare drop is worth walking to, and the threat is one a player chooses to enter
+  rather than one that comes to them.
+  Projectiles are the same boundary. A projectile that damages a *player* is exactly the plumbing
+  M7.5 owns — widening `AttackTarget` to include players — and M7 stops short of it deliberately.
+  §14.3's "support melee and ranged interaction" is about how a player engages the boss, and both
+  weapons do.
+  The leash is also a **testing** decision, and that is not a side effect. M6 measured the browser
+  suite's timing margins and made them depend on server time rather than machine time; a roaming
+  boss would have put them back on a moving target. A leashed boss cannot reach any route the suite
+  walks, which is a by-construction bound rather than a budget a slower machine invalidates. The lair
+  at `(1500, 250)` was chosen against those routes, not for flavour (`docs/M7_ISSUES.md` §1.8).
+- **Consequences:** A ranged player can kite a boss that cannot shoot back. The area attack's reach
+  (260 px, the longest of the three) and the boss's move speed are what make kiting cost real
+  movement; both are proposed and balance-deferred like every other unsourced number here. When M7.5
+  widens `AttackTarget`, giving this boss a projectile attack is a content edit — a fourth entry in
+  `attacks` with a new `kind` — and the fixed-triple type is the place that forces someone to
+  re-read §14.3's "do not build a complex raid boss" before doing it.
+- **Status:** Approved.
+
+## D67. Boss cores are the second unlock source; D48 is superseded
+
+- **Date:** 2026-08-03.
+- **Decision:** Supersedes D48. Unlocks now have an explicit `source`: `"default"`, `"threshold"`,
+  or `"boss_core"`. `split_return` is a boss-core unlock, granted by surviving a run with the core
+  that names it — securing it, or extracting with it — and **granted by no balance, however large**.
+  Point thresholds continue exactly as D48 described them for the five skills that use them.
+- **Reason:** D48 recorded thresholds as the unlock mechanism *because* concept §19.2–§19.4's other
+  two sources did not exist as content, and it named M7 as the milestone that would create one. That
+  is now true, so the record is updated in place rather than left to disagree with the code (D62).
+  The `source` field is explicit rather than inferred: through M6 a null `requires` meant "default"
+  and a non-null one meant "threshold", and inferring three states from one nullable field is how a
+  fourth source becomes a bug.
+  A boss unlock being unreachable by any balance is the load-bearing half. If patience could buy it,
+  concept §11's risk decision would be a shortcut to something a player was going to get anyway, and
+  the three-way choice it describes would be about timing rather than risk.
+- **Consequences:** Weapon and armor blueprints (§19.2–§19.3) remain unimplemented — there is still
+  no blueprint item kind and no armor system (§8.2) — so D48's Guard gap is unchanged and closes with
+  armor, exactly as it said. `unlocksEarnedAt` keeps returning thresholds only; boss unlocks join the
+  grant list at settlement, from the core, and the two sources meet nowhere else.
+- **Status:** Approved. **Supersedes D48**, which is kept as the record of what was true from M5 to
+  M6.
+
+## D68. A duplicate core converts to points; mastery needs a mechanic before it needs a table
+
+- **Date:** 2026-08-03.
+- **Decision:** A boss core whose unlock the account already holds converts into progression points
+  — the core's `duplicateConversion` — and grants no second unlock and no second inventory object.
+  Concept §11's other option, mastery progress, is **not** implemented, and no mastery schema is
+  added.
+- **Reason:** Concept §11 offers "progression points **or** mastery progress"; §19.2–§19.4 repeat the
+  same either/or. Points already exist, already settle idempotently, already feed thresholds, and
+  need no migration — the conversion lands in `settle_match_reward`'s existing points path.
+  Mastery would need a per-account, per-content-id level: a table, row-level-security policies of its
+  own, an idempotency story, and a rule for what a level *does*. Concept §5.2 lists "limited mastery
+  upgrades" and §30.1 asks for "modest mastery", but neither document says what a mastery level
+  grants. Building the schema now would be inventing the mechanic in order to justify the table,
+  which is the shape `docs/DEVELOPMENT_RULES.md` means by "do not create empty over-engineered
+  service layers for future features that do not exist yet".
+- **Consequences:** M7 touches no migration, so D53's "applying is not verifying" obligation does not
+  attach to this milestone. The milestone that defines what mastery *grants* owns the schema, and a
+  duplicate core is a natural first writer for it. Which branch a settlement takes — unlock or
+  conversion — is decided once, from the account snapshot the room already holds, before the first
+  write; a retry never recomputes it, and the store's idempotency means a recomputed classification
+  could not be applied even if one happened.
+- **Status:** Approved.
+
+## D69. Knockback is scheduled to M7.5, not deferred again
+
+- **Date:** 2026-08-03.
+- **Decision:** Supersedes D33's open-ended deferral. Knockback — concept §9.2's displacement-on-hit
+  primitive, and the missing third of §9.4's Defensive Melee Combination — is scheduled into **M7.5**
+  (D59), alongside the PvP damage and concept §16 balance work.
+- **Reason:** D33's stated reason has expired. It deferred knockback because covering §9.4's four
+  example combinations needs eleven skills and technical plan §38 M3 scoped that milestone to "8 to
+  10"; §38 M7 sets no skill count at all, so the range no longer binds anything.
+  The deferral still holds, for a better reason. M7's rare skill is `split_return`, a **projectile**
+  primitive; knockback is a **displacement** primitive. Landing both in one milestone means two new
+  combat primitives alongside a boss, a new intent, and a settlement change — and displacement
+  interacts with precisely what M7.5 exists to decide, since concept §16's solo-versus-group balance
+  is about who controls space in a direct fight.
+- **Consequences:** Three of §9.4's four combinations remain fully playable, unchanged from M3. The
+  fourth is now owned by a named milestone rather than by "a later content milestone". Adding it
+  remains the live check of the data-driven claim D33 described: a new primitive in
+  `simulation-core` plus a content definition, and nothing else.
+- **Status:** Approved. **Supersedes D33**, which is kept as the record of M3's reasoning.

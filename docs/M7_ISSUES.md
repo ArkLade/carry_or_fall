@@ -178,11 +178,11 @@ own row-level-security policies, its own idempotency story, and a rule for what 
 Concept §5.2 lists "limited mastery upgrades" and §30.1 asks for "modest mastery", but neither
 document says what a mastery level grants, so building the schema now would be inventing the
 mechanic to justify the table. Points already exist, already settle idempotently, and already feed
-thresholds. Recorded as D67; mastery stays available to the milestone that defines what it does.
+thresholds. Recorded as D68; mastery stays available to the milestone that defines what it does.
 
 **D48 is superseded, not contradicted.** D48 recorded unlocks as point thresholds *because* concept
 §19's other sources did not exist as content, and named boss cores as the source that would arrive
-at M7. That is now true, so D48 is superseded in place by D66 rather than left to disagree with the
+at M7. That is now true, so D48 is superseded in place by D67 rather than left to disagree with the
 code — the repository does not keep two records of the same rule (D62).
 
 Which branch a settlement takes is decided **once**, from the account snapshot the room already
@@ -198,7 +198,7 @@ and technical plan §38 M3 scoped that milestone to "8 to 10".
 
 That reason has expired: §38 M7 sets no skill count, so the range no longer binds. The deferral
 still holds for a different and better reason, and it is restated rather than left as a stale
-citation (D68): M7's rare skill is `split_return`, a **projectile** primitive, and knockback is a
+citation (D69): M7's rare skill is `split_return`, a **projectile** primitive, and knockback is a
 **displacement-on-hit** primitive. Adding both in one milestone means two new combat primitives
 landing alongside a boss, an intent, and a settlement change — and the displacement one interacts
 with exactly the thing M7.5 is for (concept §16's solo/group balance, where being pushed matters).
@@ -236,7 +236,7 @@ radius cannot reach them. §13 re-runs the margin audit and reports the table; a
 - `loot.ts` — `BossCoreRecord` (§29.4's shape) and `splitReturnCore`, the one core M7 ships:
   `rarity: "boss"`, zero `points`, `bossCore: { temporarySkillId: "split_return",
   permanentUnlockId: "split_return", secureSlotAllowed: true, duplicateConversion: {...} }`.
-- `skills.ts` — `splitReturn`, `slotCost: 2` (§1.9 / D65), `requiresTags: ["projectile"]`,
+- `skills.ts` — `splitReturn`, `slotCost: 2` (D65), `requiresTags: ["projectile"]`,
   `effects: { splitCountAdd, returnEnabled }`.
 - `unlocks.ts` — `split_return` as a **boss-core** unlock rather than a threshold: a new
   `UnlockSource` discriminator so `requires: null` no longer means "default".
@@ -321,7 +321,7 @@ a new unlock or a duplicate conversion. Debug-hook accessors for the boss and th
 
 ## §9. M7.8 — Documents and decisions
 
-`docs/DECISIONS.md` D65–D68; D48 superseded in place by D66; `docs/PROTOCOL.md`;
+`docs/DECISIONS.md` D65–D69; D48 superseded in place by D67; `docs/PROTOCOL.md`;
 `docs/TEST_PLAN.md` (the §13.4 caps table, the new suites, the margin table);
 `docs/CONTENT_AUTHORING.md` (boss and core authoring); `README.md` (the boss and the `C` key).
 

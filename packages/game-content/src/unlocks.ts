@@ -10,18 +10,22 @@
  * id", and what the id grants stays here, in the repository, versioned by
  * {@link CONTENT_VERSION}. The database holds no copy of this table.
  *
- * **Why point thresholds** (`docs/M5_ISSUES.md` §1.1): concept §19.2-§19.4 names
- * three unlock *sources* — weapon blueprints, armor blueprints, boss skill cores
- * — and none of them exists as content. There is no blueprint item kind, no
- * armor system (concept §8.2), and no boss (M7). Inventing them inside a
- * persistence milestone would be adding gameplay. What does have a numeric basis
- * is concept §6.1-§6.5, which says of each point category, in as many words,
- * that it is "used to unlock or improve" specific content. So an unlock is a
- * threshold on an accumulated balance, and each threshold below is mapped to the
- * category whose §6 description names its effect.
+ * **Three sources, not one** (`docs/DECISIONS.md` D67, superseding D48).
+ * Concept §19.2-§19.4 names three unlock *sources* — weapon blueprints, armor
+ * blueprints, and boss skill cores. M5 could implement none of them, because
+ * none existed as content, so it used the source that already had a numeric
+ * basis: concept §6.1-§6.5 says of each point category, in as many words, that
+ * it is "used to unlock or improve" specific content, so an unlock became a
+ * threshold on an accumulated balance.
  *
- * Balances are never decremented (`docs/DECISIONS.md` D48): concept §6 describes
- * no spending, shop, or refund mechanic, so these are thresholds, not purchases.
+ * **M7 creates the second source.** Boss skill cores are real content now
+ * (`boss.ts`, `loot.ts`), so {@link BOSS_CORE_UNLOCKS} is the thing D48 said it
+ * was deferring rather than denying. Blueprints stay unimplemented: there is
+ * still no blueprint item kind and no armor system (concept §8.2).
+ *
+ * Balances are never decremented: concept §6 describes no spending, shop, or
+ * refund mechanic, so thresholds are thresholds, not purchases — and a boss
+ * unlock is not purchasable at any balance at all.
  *
  * Provenance: the split between defaults and thresholds is proposed;
  * the threshold *amounts* are proposed and balance-deferred (concept §12.3),
@@ -38,6 +42,23 @@ import type { LootPoints } from "./loot";
 /** Which content table an {@link UnlockDefinition}'s id names. */
 export type UnlockType = "skill" | "weapon" | "armor";
 
+/**
+ * How an account comes to hold an unlock (M7).
+ *
+ * Through M6 this was inferred from `requires`: null meant "default", non-null
+ * meant "threshold". Boss cores are a third source (concept §19.4), and
+ * inferring three states from one nullable field is how a fourth source becomes
+ * a bug. So the discriminator is explicit, and `requires` goes back to meaning
+ * only what it says — the threshold, when there is one.
+ *
+ * - `"default"` — every new account starts with it (concept §5.4).
+ * - `"threshold"` — an accumulated point balance grants it (`docs/DECISIONS.md`
+ *   D48, superseded in place by D67).
+ * - `"boss_core"` — extracting or securing a boss core grants it (concept §11).
+ *   Balances never grant one, however large they get.
+ */
+export type UnlockSource = "default" | "threshold" | "boss_core";
+
 /** The five permanent point categories (concept §6). */
 export type PointCategory = keyof LootPoints;
 
@@ -53,15 +74,21 @@ export interface UnlockRequirement {
 export interface UnlockDefinition extends ContentDefinition {
   readonly kind: "unlock";
   readonly unlockType: UnlockType;
-  /**
-   * `null` for an unlock every new account starts with (concept §5.4's "viable
-   * default set"), otherwise the balance that grants it.
-   */
+  readonly source: UnlockSource;
+  /** The balance that grants it, and `null` for every source but `"threshold"`. */
   readonly requires: UnlockRequirement | null;
 }
 
 function defaultUnlock(id: string, unlockType: UnlockType): UnlockDefinition {
-  return { id, kind: "unlock", unlockType, requires: null };
+  return { id, kind: "unlock", unlockType, source: "default", requires: null };
+}
+
+/**
+ * An unlock no balance can ever buy: it arrives only by surviving a run with the
+ * boss core that grants it (concept §11 option 3).
+ */
+function bossCoreUnlock(id: string, unlockType: UnlockType): UnlockDefinition {
+  return { id, kind: "unlock", unlockType, source: "boss_core", requires: null };
 }
 
 function thresholdUnlock(
@@ -70,7 +97,7 @@ function thresholdUnlock(
   category: PointCategory,
   amount: number,
 ): UnlockDefinition {
-  return { id, kind: "unlock", unlockType, requires: { category, amount } };
+  return { id, kind: "unlock", unlockType, source: "threshold", requires: { category, amount } };
 }
 
 /**
@@ -119,10 +146,27 @@ export const THRESHOLD_UNLOCKS: readonly UnlockDefinition[] = [
   thresholdUnlock("returning_shot", "skill", "signal", 100),
 ] as const;
 
+/**
+ * Unlocks that arrive only from a boss core (M7, concept §11/§19.4).
+ *
+ * This is the source `docs/DECISIONS.md` D48 said did not exist yet and named
+ * M7 as the milestone that would create it. D67 supersedes D48 in place rather
+ * than leaving two records of the same rule (D62).
+ *
+ * There is exactly one, because M7 ships exactly one boss and one core. It is
+ * `split_return`, the 2-slot rare skill (D65), and no accumulated balance
+ * reaches it — which is what makes a core worth the risk decision concept §11
+ * describes rather than a shortcut to something patience would have given.
+ */
+export const BOSS_CORE_UNLOCKS: readonly UnlockDefinition[] = [
+  bossCoreUnlock("split_return", "skill"),
+] as const;
+
 /** Every unlock the game defines, defaults first. */
 export const ALL_UNLOCKS: readonly UnlockDefinition[] = [
   ...DEFAULT_UNLOCKS,
   ...THRESHOLD_UNLOCKS,
+  ...BOSS_CORE_UNLOCKS,
 ] as const;
 
 /** The ids a new account is provisioned with (`docs/DATA_MODEL.md` §4.1). */
@@ -149,6 +193,17 @@ export function unlocksEarnedAt(balances: PointBalances): readonly UnlockDefinit
     (unlock) =>
       unlock.requires !== null && balances[unlock.requires.category] >= unlock.requires.amount,
   );
+}
+
+/**
+ * The unlock a boss core grants, or `null` if this core's id names none (M7).
+ *
+ * Separate from {@link unlocksEarnedAt} on purpose: a boss unlock is not earned
+ * by a balance and must never be reachable by accumulating points, however many
+ * a player has. The two sources meet only in the settlement's grant list.
+ */
+export function unlockForBossCore(permanentUnlockId: string): UnlockDefinition | null {
+  return BOSS_CORE_UNLOCKS.find((unlock) => unlock.id === permanentUnlockId) ?? null;
 }
 
 /**
