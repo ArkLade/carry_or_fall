@@ -184,6 +184,14 @@ function formatSettlement(settlement: SettlementMessage | null): string {
   }
   const unlocked =
     settlement.newUnlockIds.length > 0 ? `\nUnlocked: ${settlement.newUnlockIds.join(", ")}` : "";
+  // Concept §11's duplicate rule, said out loud (M7). A player who carried a
+  // second core out is owed an explanation of where it went, and "converted to
+  // points" is that explanation — the alternative is a core that silently
+  // vanishes into a balance.
+  const converted =
+    settlement.duplicateCoreIds.length > 0
+      ? `\nDuplicate core converted to points: ${settlement.duplicateCoreIds.join(", ")}`
+      : "";
   const warning = shouldWarnAboutAnonymousAccount({
     isAnonymous: settlement.isAnonymous,
     balances,
@@ -191,5 +199,5 @@ function formatSettlement(settlement: SettlementMessage | null): string {
   })
     ? `\n\n${ANONYMOUS_ACCOUNT_WARNING}`
     : "";
-  return `${totals}${unlocked}${warning}`;
+  return `${totals}${unlocked}${converted}${warning}`;
 }

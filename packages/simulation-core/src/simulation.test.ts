@@ -53,6 +53,7 @@ const NO_INPUT: InputState = {
   interactPressed: false,
   discardSlotIndex: null,
   secureSlotIndex: null,
+  activateCoreSlotIndex: null,
 };
 const MOVE_RIGHT: InputState = { ...NO_INPUT, moveX: 1 };
 const ATTACK: InputState = { ...NO_INPUT, attackPressed: true };
@@ -578,6 +579,7 @@ describe("stepSimulation: death and extraction differ correctly (M2.8 exit crite
       pointsGained: honingStone.points,
       itemsConverted: 1,
       itemsLost: 0,
+      bossCoreIds: [],
     });
     expect(solo(world).inventory.every((slot) => slot === null)).toBe(true);
   });
@@ -614,6 +616,7 @@ describe("stepSimulation: death and extraction differ correctly (M2.8 exit crite
       pointsGained: { force: 0, precision: 0, motion: 0, guard: 0, signal: 0 }, // not converted
       itemsConverted: 0,
       itemsLost: 1,
+      bossCoreIds: [],
     });
     expect(solo(world).inventory.every((slot) => slot === null)).toBe(true);
     expect(world.groundLoot.some((loot) => loot.id.startsWith("loot-death-"))).toBe(true);
@@ -635,7 +638,8 @@ describe("stepSimulation: death and extraction differ correctly (M2.8 exit crite
       outcome: "died",
       pointsGained: honingStone.points, // the secure slot survives and converts
       itemsConverted: 1,
-      itemsLost: 0, // the ordinary inventory was already empty (item was secured)
+      itemsLost: 0,
+      bossCoreIds: [], // the ordinary inventory was already empty (item was secured)
     });
   });
 

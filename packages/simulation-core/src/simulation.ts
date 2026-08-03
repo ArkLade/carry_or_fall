@@ -22,10 +22,13 @@
  * without modification, because each was already a pure function over one actor
  * plus world data.
  */
-import type {
-  EnemyDefinition,
-  SkillDefinition,
-  WeaponDefinition,
+import {
+  findLoot,
+  isBossCore,
+  type BossDefinition,
+  type EnemyDefinition,
+  type SkillDefinition,
+  type WeaponDefinition,
 } from "@carry-or-fall/game-content";
 
 import { normalizeAngle } from "./angles";
@@ -42,6 +45,7 @@ import type { HitEvent } from "./combat/events";
 import type { AttackActor, AttackTarget } from "./combat/pipeline";
 import { startRangedAttack, stepProjectiles } from "./combat/ranged";
 import { computeDashDelta, DASH_COOLDOWN_MS } from "./dash";
+import { spawnBoss, stepBoss } from "./boss";
 import { canDealContactDamage, nearestLivePlayer, spawnEnemies, stepEnemyMovement } from "./enemy";
 import {
   EXTRACTION_CHANNEL_MS,
@@ -49,7 +53,12 @@ import {
   spawnExtractionPoints,
   stepExtractionPoints,
 } from "./extraction";
-import { createEmptyInventory, discardInventorySlot, secureItem } from "./inventory";
+import {
+  activateBossCore,
+  createEmptyInventory,
+  discardInventorySlot,
+  secureItem,
+} from "./inventory";
 import { attemptPickup, chooseLootDrop, isNearGroundLoot, spawnGroundLoot } from "./loot-drop";
 import { computeMovementDelta, PLAYER_SPEED } from "./movement";
 import { createRng } from "./prng";
@@ -112,6 +121,7 @@ export const NEUTRAL_INPUT: InputState = {
   interactPressed: false,
   discardSlotIndex: null,
   secureSlotIndex: null,
+  activateCoreSlotIndex: null,
 };
 
 /** How one player enters a world: their identity, where they start, and what they brought. */
@@ -162,6 +172,13 @@ export interface SimulationConfig {
    * point, mirroring `groundLootSpawnPoints`. Defaults to none.
    */
   readonly skillChipSpawnPoints?: readonly Vec2[];
+  /**
+   * The boss and where its lair is (M7, concept §14.3). Both or neither: an
+   * arena with no `bossSpawnPoint` has no boss, which is how every test arena
+   * that is about something else keeps being about something else.
+   */
+  readonly bossDefinition?: BossDefinition;
+  readonly bossSpawnPoint?: Vec2;
   /** Seeds the PRNG used for enemy spawn/loot/extraction/skill-chip selection (technical plan §9.4). */
   readonly seed: number;
 }
@@ -217,8 +234,19 @@ export function createSimulation(config: SimulationConfig): World {
   );
   const extractionPoints = spawnExtractionPoints(config.extractionCandidatePoints, rng);
 
+  const bossDefinition =
+    config.bossDefinition !== undefined && config.bossSpawnPoint !== undefined
+      ? config.bossDefinition
+      : null;
+  const boss =
+    bossDefinition !== null && config.bossSpawnPoint !== undefined
+      ? spawnBoss(bossDefinition, config.bossSpawnPoint)
+      : null;
+
   return {
     players: config.players.map(createPlayer),
+    boss,
+    bossDefinition,
     walls: config.walls,
     projectiles: [],
     enemies,
@@ -332,7 +360,22 @@ interface PlayerPass {
 export function stepSimulation(world: World, inputs: ReadonlyMap<string, InputState>): StepResult {
   const grid = buildWallGrid(world.walls);
 
-  let workingTargets: readonly AttackTarget[] = world.enemies;
+  // The boss is an ordinary damageable circle in the same target list as the
+  // enemies, which is the whole of "supports melee and ranged interaction"
+  // (concept §14.3): every weapon and every skill already works against an
+  // `AttackTarget`, so none of them needed to learn what a boss is.
+  let workingTargets: readonly AttackTarget[] =
+    world.boss === null
+      ? world.enemies
+      : [
+          ...world.enemies,
+          {
+            id: world.boss.id,
+            position: world.boss.position,
+            radius: world.boss.radius,
+            health: world.boss.health,
+          },
+        ];
   let projectiles = world.projectiles;
   let hitEvents: HitEvent[] = [];
   let stunnedTargetIds: string[] = [];
@@ -456,6 +499,60 @@ export function stepSimulation(world: World, inputs: ReadonlyMap<string, InputSt
     return { ...moved, contactCooldownMs: moved.contactDamageIntervalMs };
   });
 
+  // ---- The boss (M7), stepped with the enemies and for the same reason. ----
+  // It moves and attacks after projectiles have resolved, so a boss killed by
+  // this step's shot never gets to swing; and before pass 2's pickups, so the
+  // core it drops is on the ground for the *next* step's pickup pass rather
+  // than being takeable in the same step that created it. One ordering, stated
+  // (`docs/M7_EXECUTION_PLAN.md` §5), rather than two plausible ones.
+  let boss = world.boss;
+  if (boss !== null) {
+    const definition = world.bossDefinition;
+    if (definition !== null) {
+      const bossHealth = workingTargets.find((target) => target.id === boss!.id);
+      if (bossHealth !== undefined) {
+        boss = { ...boss, health: bossHealth.health };
+      }
+      const stepped = stepBoss(
+        boss,
+        definition,
+        passes.map((pass) => pass.player),
+        SIMULATION_DT_MS,
+        SIMULATION_DT_SECONDS,
+        grid,
+      );
+      boss = stepped.boss;
+      for (const hit of stepped.hits) {
+        const pass = passes.find((candidate) => candidate.player.id === hit.playerId);
+        if (pass === undefined || isRunOver(pass.player)) {
+          continue;
+        }
+        const damaged = applyDamageToPlayer(
+          { shieldHp: pass.player.shieldHp, health: pass.player.health },
+          hit.damage,
+        );
+        pass.player = {
+          ...pass.player,
+          shieldHp: damaged.shieldHp,
+          health: damaged.health,
+          alive: damaged.health > 0,
+        };
+        damagedThisStep.add(pass.player.id);
+      }
+
+      // Death drops the core (concept §11), through the same ground-loot path
+      // ordinary enemies use — which is what makes "another player can take it
+      // off the floor" need no new code.
+      if (boss.health <= 0) {
+        const core = findLoot(definition.coreLootId);
+        if (core !== null && isBossCore(core)) {
+          groundLoot = [...groundLoot, spawnGroundLoot(core, boss.position, `loot-${boss.id}`)];
+        }
+        boss = null;
+      }
+    }
+  }
+
   // ---- Rotating extraction points (M2.7): advance the rotation timer. ------
   const extractionPoints = stepExtractionPoints(
     world.extractionPoints,
@@ -555,6 +652,7 @@ export function stepSimulation(world: World, inputs: ReadonlyMap<string, InputSt
     world: {
       ...world,
       players,
+      boss,
       projectiles,
       enemies,
       groundLoot,
@@ -605,6 +703,25 @@ function stepPlayerAttacks(
       ...player,
       inventory: discardInventorySlot(player.inventory, input.discardSlotIndex),
     };
+  }
+  // Activation sits between discard and secure, and the order is a decision
+  // rather than an accident (`docs/M7_ISSUES.md` §1.3). A client that sends
+  // activate and secure for the same slot in one tick activates it, and the
+  // secure then finds an empty slot and refuses — one resolution, the same on
+  // every machine. The room's `confirmSecureActions` withdraws the reservation
+  // it had already opened, because it reconciles against what the simulation
+  // did rather than what was asked (D44).
+  if (input.activateCoreSlotIndex !== null) {
+    const activation = activateBossCore(player.inventory, input.activateCoreSlotIndex);
+    if (activation.activated) {
+      player = {
+        ...player,
+        inventory: activation.inventory,
+        // Concept §11 option 1: the core becomes the current wildcard, replacing
+        // whatever chip was there — the same rule a second chip already follows.
+        wildcardSkill: activation.skill,
+      };
+    }
   }
   if (input.secureSlotIndex !== null) {
     const secureResult = secureItem(player.inventory, input.secureSlotIndex, player.secureSlot);

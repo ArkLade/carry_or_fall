@@ -9,9 +9,11 @@
  *
  * Digit keys `1`-`6` discard that inventory slot; `Shift`+digit secures it
  * instead — a local-only control scheme (concept §13.1 fixes `E`/`Tab`/`I`
- * but not discard/secure), documented in `docs/M2_ISSUES.md` §1. Both are
- * edge-triggered (`JustDown`) so a held key does not repeat the action every
- * simulation step within the same rendered frame.
+ * but not discard/secure), documented in `docs/M2_ISSUES.md` §1. `C` activates a
+ * carried boss core (M7, concept §11 option 1), which is the third branch of the
+ * same decision and so sits alongside the other two. All are edge-triggered
+ * (`JustDown`) so a held key does not repeat the action every simulation step
+ * within the same rendered frame.
  */
 import Phaser from "phaser";
 
@@ -30,6 +32,12 @@ export interface KeyboardInputState {
   /** `null` means "no request this frame"; an edge-triggered keypress, not a held key. */
   readonly discardSlotIndex: number | null;
   readonly secureSlotIndex: number | null;
+  /**
+   * `C` was pressed this frame (M7). A bare flag rather than a slot index: which
+   * slot holds a core is something `PlayScene` reads from this player's own
+   * private state, and what that slot actually contains is the server's call.
+   */
+  readonly activateCorePressed: boolean;
 }
 
 export class KeyboardInput {
@@ -40,6 +48,7 @@ export class KeyboardInput {
   private readonly dash: Phaser.Input.Keyboard.Key;
   private readonly interact: Phaser.Input.Keyboard.Key;
   private readonly shift: Phaser.Input.Keyboard.Key;
+  private readonly activateCore: Phaser.Input.Keyboard.Key;
   private readonly slotKeys: readonly Phaser.Input.Keyboard.Key[];
   /** Toggles the inventory HUD panel; read by `PlayScene`, not part of `InputState` (client-only UI). */
   readonly inventoryToggle: Phaser.Input.Keyboard.Key;
@@ -64,6 +73,7 @@ export class KeyboardInput {
     this.dash = keyboard.addKey(Codes.SPACE);
     this.interact = keyboard.addKey(Codes.E);
     this.shift = keyboard.addKey(Codes.SHIFT);
+    this.activateCore = keyboard.addKey(Codes.C);
     this.slotKeys = [Codes.ONE, Codes.TWO, Codes.THREE, Codes.FOUR, Codes.FIVE, Codes.SIX].map(
       (code) => keyboard.addKey(code),
     );
@@ -92,6 +102,7 @@ export class KeyboardInput {
       interactPressed: this.interact.isDown,
       discardSlotIndex,
       secureSlotIndex,
+      activateCorePressed: Phaser.Input.Keyboard.JustDown(this.activateCore),
     };
   }
 }

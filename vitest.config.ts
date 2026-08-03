@@ -9,6 +9,7 @@ import { defineConfig } from "vitest/config";
  * than failing a test.
  */
 const realServerTests = [
+  "apps/server/test/boss-core-decision.test.ts",
   "apps/server/test/foundation-room.test.ts",
   "apps/server/test/join-gate.test.ts",
   "apps/server/test/match-authority.test.ts",

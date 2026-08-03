@@ -18,6 +18,7 @@ import { meleePhase, type World } from "@carry-or-fall/simulation-core";
 import type { MapSchema } from "@colyseus/schema";
 
 import {
+  BossState,
   EnemyState,
   ExtractionPointState,
   GroundLootState,
@@ -240,6 +241,39 @@ export function syncMatchState(
       entry.x = point.position.x;
       entry.y = point.position.y;
       entry.remainingActiveMs = point.remainingActiveMs;
+    },
+  );
+
+  // The boss (M7). `world.boss` is one value or `null`, published through the
+  // same reconciler as a zero-or-one list, so a dead boss is *deleted* rather
+  // than left standing at zero health on every client.
+  reconcile(
+    state.boss,
+    world.boss === null ? [] : [world.boss],
+    (boss) =>
+      new BossState({
+        id: boss.id,
+        definitionId: boss.definitionId,
+        x: boss.position.x,
+        y: boss.position.y,
+        radius: boss.radius,
+        health: boss.health,
+        maxHealth: boss.maxHealth,
+        enraged: boss.enraged,
+        awake: boss.awake,
+        telegraphAttackIndex: boss.telegraph?.attackIndex ?? -1,
+        telegraphRemainingMs: boss.telegraph?.remainingMs ?? 0,
+        telegraphFacing: boss.telegraph?.facing ?? 0,
+      }),
+    (entry, boss) => {
+      entry.x = boss.position.x;
+      entry.y = boss.position.y;
+      entry.health = boss.health;
+      entry.enraged = boss.enraged;
+      entry.awake = boss.awake;
+      entry.telegraphAttackIndex = boss.telegraph?.attackIndex ?? -1;
+      entry.telegraphRemainingMs = boss.telegraph?.remainingMs ?? 0;
+      entry.telegraphFacing = boss.telegraph?.facing ?? 0;
     },
   );
 }

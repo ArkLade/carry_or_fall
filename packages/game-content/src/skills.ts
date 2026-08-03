@@ -199,7 +199,15 @@ export const bulwarkStrike: SkillDefinition = {
   limits: {},
 } as const;
 
-/** Every skill definition M3 ships, in a fixed order used for the wildcard chip table (`skill-chip.ts`). */
+/**
+ * Every skill definition, in a fixed order used for the wildcard chip table
+ * (`skill-chip.ts`) and for the loadout screen's key bindings.
+ *
+ * M3 shipped ten. M7 appends `splitReturn`, which is not one of them in the
+ * sense that matters: it is the boss core's skill, reachable only by carrying a
+ * core out of a run, and `boss.test.ts` asserts the ordinary set stays inside
+ * technical plan §38 M3's "8 to 10" without counting it.
+ */
 export const ALL_SKILLS: readonly SkillDefinition[] = [
   multishot,
   ricochet,
@@ -213,3 +221,8 @@ export const ALL_SKILLS: readonly SkillDefinition[] = [
   bulwarkStrike,
   splitReturn,
 ] as const;
+
+/** Look up one skill by id, or `null` if the id is unknown. */
+export function findSkill(skillId: string): SkillDefinition | null {
+  return ALL_SKILLS.find((skill) => skill.id === skillId) ?? null;
+}

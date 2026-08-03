@@ -355,8 +355,49 @@ Each milestone's exit criteria (technical plan §38) imply its tests:
   inventory, secure slot, loot, progression, and settlement (§2.6). Delivered as three layers:
   server integration suites for the queue and the isolation attacks, and three real browser contexts
   forming a party and landing in one room (`apps/client/e2e/party.spec.ts`).
-- **M7–M9:** boss-core decisions, deployment smoke, and load/soak/perf per the layers above. PvP
-  damage and the concept §16 solo/group balance rules are M7.5 (D59).
+- **M7 (boss and rare skill):** the three boss-core decisions produce three different outcomes and
+  cannot be combined, and settlement stays idempotent with a boss core in it. Both need
+  **adversarial** evidence, and both get M5's treatment rather than a happy path:
+  `apps/server/test/boss-core-decision.test.ts` attacks the decision over a real socket — every
+  slot tried after activation, activation racing a secure request inside one 50 ms step in both
+  orders, a payload naming a skill instead of a slot — and
+  `apps/server/test/settlement-adversarial.test.ts`'s second block re-runs M5's whole set (settled
+  twice, settled concurrently, retried after an indistinguishable failure, replayed by the client,
+  crashed on each side of the write) against a settlement carrying a core. The browser layer
+  (`apps/client/e2e/boss.spec.ts`) covers only what a browser can add: that the boss reaches the
+  client at all, and that its leash holds — which is what the rest of the browser suite's timing
+  margins rest on.
+- **M8–M9:** deployment smoke and load/soak/perf per the layers above. PvP damage and the concept
+  §16 solo/group balance rules are M7.5 (D59).
+
+### 4.1 The §13.4 hard caps, and which are reachable from live gameplay
+
+The eight caps live in `packages/simulation-core/src/combat/caps.ts` and are enforced in shared
+code. "Reachable" here means *a player can drive this cap through the real pipeline* — fire a real
+weapon, with real skills, and have the clamp decide the outcome — as opposed to being provable only
+by calling the clamp directly. A cap that only its own unit test can reach is a cap nobody has
+checked is wired in.
+
+Through M6, two were unreachable, and `docs/M1_ISSUES.md` said so rather than pretending otherwise.
+M7's `split_return` makes both reachable, because it is the first content that creates a child
+projectile at all.
+
+| #   | Cap                                  | Reachable | Driven from live gameplay by                                              |
+| --- | ------------------------------------ | --------- | ------------------------------------------------------------------------- |
+| 1   | projectiles per attack               | Yes       | `multishot` + a bow volley (`combat/ranged.test.ts`, `split-caps.test.ts`) |
+| 2   | bounces per projectile               | Yes       | `ricochet` off arena walls (`e2e/skills.spec.ts`)                          |
+| 3   | pierces per projectile               | Yes       | `piercing_rounds` through chasers (`e2e/skills.spec.ts`)                   |
+| 4   | returns per projectile               | Yes       | `returning_shot` down the open lane (`e2e/arena.spec.ts`)                  |
+| 5   | a child projectile may not split     | **Yes (M7)** | `split_return`: a split child that hits a target produces no grandchild (`split-caps.test.ts`) |
+| 6   | a child may not create a parent effect | **Yes (M7)** | `split_return`: a split child that expires does not return (`split-caps.test.ts`) |
+| 7   | active projectiles per player        | Yes       | sustained fire with `multishot` + `split_return` (`skill-caps-under-load.test.ts`, `split-caps.test.ts`) |
+| 8   | simultaneous effect instances        | Yes       | skill effects aggregated under load (`skill-caps-under-load.test.ts`)      |
+
+Caps 5 and 6 are tested the way an authority rule has to be: with a **liar**. `split-caps.test.ts`
+constructs a child projectile that claims `splitCount: 3`, and another that claims
+`canReturn: true`, and asserts the engine refuses both — the gate reads the child *flag*, not the
+projectile's own account of what it is allowed to do. An identical non-child projectile is run
+alongside as the control, so the test cannot pass because nothing happened.
 
 ## 5. Commands and CI
 
@@ -367,6 +408,13 @@ Each milestone's exit criteria (technical plan §38) imply its tests:
 | `pnpm test:integration`   | Room integration + build | Yes        |
 | `pnpm build`              | Production build         | Yes        |
 | `pnpm test:e2e`           | Browser (Playwright)     | Yes, as a separate job (D32) |
+
+`E2E_MARGIN=1 pnpm test:e2e` prints a `BUDGET` line per timed helper (§2.3.0). It is the audit
+that answers "did this change make the browser suite tighter" with a number. M7 added a boss to
+the shared arena, so it was re-run at the end of that milestone: the worst helper margin was 72%
+and every other was above that, against a 40% floor. The boss cannot be the reason a later run
+gets tighter, because it is leashed to a lair at least a leash radius from every route the suite
+walks (`docs/M7_ISSUES.md` §1.8) — a bound by construction rather than a budget.
 | `pnpm test:supabase`      | Real Supabase project    | **No** — needs credentials (D46) |
 
 `pnpm test:supabase` **pools and reuses anonymous accounts** rather than creating one per test

@@ -19,6 +19,7 @@
  * than one player.
  */
 import type {
+  BossDefinition,
   EnemyDefinition,
   LootDefinition,
   SkillDefinition,
@@ -192,6 +193,43 @@ export interface Enemy {
 }
 
 /**
+ * The wind-up of a boss attack that has been committed to but has not landed
+ * yet (M7, concept §14.3's "readable").
+ *
+ * `facing` is frozen when the wind-up starts, not re-aimed as it runs: a
+ * telegraph a player cannot step out of is not a telegraph, it is a delay.
+ */
+export interface BossTelegraph {
+  readonly attackIndex: number;
+  readonly facing: number;
+  readonly remainingMs: number;
+}
+
+/**
+ * The boss (M7, concept §14.3). One per world, or none.
+ *
+ * `lair` is fixed at spawn and is what `leashRadiusPx` is measured from
+ * (`docs/DECISIONS.md` D66), so the region a boss can occupy is decided by
+ * content and never by what a player does. `awake` is derived every step rather
+ * than latched, so a boss whose visitor leaves goes home rather than hunting.
+ */
+export interface Boss {
+  readonly id: string;
+  readonly definitionId: string;
+  readonly position: Vec2;
+  readonly lair: Vec2;
+  readonly radius: number;
+  readonly health: number;
+  readonly maxHealth: number;
+  /** Concept §14.3's one phase change; latched, because a boss does not calm down. */
+  readonly enraged: boolean;
+  readonly telegraph: BossTelegraph | null;
+  /** One remaining cooldown per attack, in definition order. */
+  readonly attackCooldownsMs: readonly number[];
+  readonly awake: boolean;
+}
+
+/**
  * A static wall: an axis-aligned bounding box, per the collision strategy
  * (technical plan §12.1). `x`/`y` is the top-left corner.
  */
@@ -255,6 +293,16 @@ export interface RunResult {
   readonly pointsGained: PointTotals;
   readonly itemsConverted: number;
   readonly itemsLost: number;
+  /**
+   * Boss cores that survived this run and reached settlement (M7, concept §11).
+   *
+   * On death, only a secured core: the inventory dropped. On extraction, the
+   * secured core plus every core carried. An **activated** core is in neither —
+   * it left the inventory when it was activated and became the wildcard, so it
+   * never reaches settlement at all, which is concept §11 option 1's "lost on
+   * death" and "cannot be secured" expressed as an absence rather than a rule.
+   */
+  readonly bossCoreIds: readonly string[];
 }
 
 /**
@@ -282,6 +330,12 @@ export interface InputState {
   readonly interactPressed: boolean;
   readonly discardSlotIndex: number | null;
   readonly secureSlotIndex: number | null;
+  /**
+   * One-shot request to activate the boss core in this slot (M7, concept §11
+   * option 1), or `null` for "no request this step" — the same edge-triggered
+   * shape `discardSlotIndex` and `secureSlotIndex` already have.
+   */
+  readonly activateCoreSlotIndex: number | null;
 }
 
 /**
@@ -306,6 +360,19 @@ export interface InputState {
  */
 export interface World {
   readonly players: readonly Player[];
+  /** The boss, or `null` on an arena that declares no `bossSpawnPoint` (M7). */
+  readonly boss: Boss | null;
+  /**
+   * The definition the boss is stepped against (M7).
+   *
+   * Carried on the world rather than re-looked-up from `definitionId` each step,
+   * for the same reason a `Player` carries its `WeaponDefinition` rather than a
+   * weapon id: the entity and the rules it runs on are one thing, and a lookup
+   * that can fail is a step that can silently stop happening. `Boss.definitionId`
+   * remains, because that is what crosses the wire for a client to render the
+   * telegraph from.
+   */
+  readonly bossDefinition: BossDefinition | null;
   readonly walls: readonly Wall[];
   readonly projectiles: readonly Projectile[];
   readonly enemies: readonly Enemy[];

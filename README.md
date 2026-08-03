@@ -180,6 +180,35 @@ Join codes expire ten minutes after they are issued, or when the party ends.
 Nothing about a party is stored: it lasts as long as its members stay connected,
 and a page reload leaves it (D57).
 
+### The boss and its core (M7)
+
+One boss — the Warden — stands in a lair in the arena's upper far quadrant. It is
+**leashed**: it wakes when someone comes close, fights them, and walks home when
+they leave, and it can never travel further from its lair than its leash radius.
+Everything outside that circle is exactly as dangerous as it was before.
+
+It has two melee attacks and one area attack, each with a visible wind-up drawn
+as the shape that is coming, and it speeds up once below half health. A player
+who reacts to the wind-up and leaves the shape is not hit.
+
+Killing it drops a **boss core**, and picking one up is a decision with three
+outcomes (concept §11), which the inventory panel spells out while you carry one:
+
+| Choice                | Key                | What you get                                                     |
+| --------------------- | ------------------ | ---------------------------------------------------------------- |
+| Activate now          | `C`                | The rare skill for the rest of this run. Lost when you die.       |
+| Carry it out          | walk to extraction | The permanent unlock — but the core drops if you die on the way.  |
+| Put it in the secure slot | `Shift`+its slot | The permanent unlock, kept even if you die. No combat power.  |
+
+You cannot combine them: activating takes the core out of your inventory, so
+there is nothing left to secure. Carrying a second core after you already hold
+the unlock converts it to points instead — the settlement screen names which core
+it converted.
+
+The unlock is `split_return`, a two-slot rare skill: your arrows split into two
+on a hit, and return to you when they expire. Both are gated by the shared safety
+caps — a split child cannot split again, and cannot return.
+
 ## Quality checks and tests
 
 Each command mirrors a step in CI:
@@ -256,7 +285,7 @@ Carry_or_Fall/
 **Excludes (deferred to later milestones)**
 
 - All gameplay (movement, combat, enemies, loot, inventory, extraction, skills,
-  bosses).
+  bosses — **the boss and its rare skill shipped in M7**).
 - Persistence / accounts (Supabase — **shipped in M5**), deployment (Cloudflare
   Pages, Railway), horizontal scaling (Redis / multi-process presence), and
   mobile support.
@@ -308,9 +337,9 @@ Carry_or_Fall/
 
 ## Next milestone
 
-**M7 (boss and rare skill)** is next, followed by **M7.5 (PvP damage and group
-balance)** — a milestone added by `docs/DECISIONS.md` D59 because technical plan
-§38 assigns player-versus-player damage to no milestone at all, and then **M8
-(private internet test)**. See [`docs/M6_ISSUES.md`](docs/M6_ISSUES.md) for what
-the current milestone deliberately left out, and the technical plan §38 for the
-roadmap.
+**M7.5 (PvP damage and group balance)** is next — a milestone added by
+`docs/DECISIONS.md` D59 because technical plan §38 assigns player-versus-player
+damage to no milestone at all — and it also carries the knockback decision D33
+deferred and D69 scheduled. Then **M8 (private internet test)**. See
+[`docs/M7_ISSUES.md`](docs/M7_ISSUES.md) for what the current milestone
+deliberately left out, and the technical plan §38 for the roadmap.

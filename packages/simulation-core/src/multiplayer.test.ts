@@ -41,6 +41,7 @@ const NO_INPUT: InputState = {
   interactPressed: false,
   discardSlotIndex: null,
   secureSlotIndex: null,
+  activateCoreSlotIndex: null,
 };
 const MOVE_RIGHT: InputState = { ...NO_INPUT, moveX: 1 };
 const MOVE_LEFT: InputState = { ...NO_INPUT, moveX: -1 };
@@ -279,6 +280,7 @@ describe("enemy targeting with several players", () => {
         },
         itemsConverted: 0,
         itemsLost: 0,
+        bossCoreIds: [],
       },
     };
 

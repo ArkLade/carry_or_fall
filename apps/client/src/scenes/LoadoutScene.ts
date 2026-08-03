@@ -73,6 +73,16 @@ export interface LoadoutSceneData {
   readonly settlement?: SettlementMessage | null;
 }
 
+/**
+ * One key per selectable skill, in `ALL_SKILLS` order.
+ *
+ * Ten digits were enough through M6. M7 adds an eleventh skill — `split_return`,
+ * the boss-core unlock — and a skill with no key is a skill a player who earned
+ * it cannot equip, which would make the unlock unreachable through the only
+ * screen that grants access to it. So the list runs past the digits, and
+ * `SKILL_KEY_LABELS` keeps the printed label and the bound key in step.
+ * `loadout.spec.ts` asserts there is a key for every skill.
+ */
 const DIGIT_CODES = [
   Phaser.Input.Keyboard.KeyCodes.ONE,
   Phaser.Input.Keyboard.KeyCodes.TWO,
@@ -84,7 +94,11 @@ const DIGIT_CODES = [
   Phaser.Input.Keyboard.KeyCodes.EIGHT,
   Phaser.Input.Keyboard.KeyCodes.NINE,
   Phaser.Input.Keyboard.KeyCodes.ZERO,
+  Phaser.Input.Keyboard.KeyCodes.Q,
 ];
+
+/** What each {@link DIGIT_CODES} entry is called on screen, same order. */
+export const SKILL_KEY_LABELS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "Q"];
 
 export class LoadoutScene extends Phaser.Scene {
   /**
@@ -222,7 +236,7 @@ export class LoadoutScene extends Phaser.Scene {
       .text(
         camera.centerX,
         camera.height - 40,
-        "1-0: toggle a skill · Enter: start run · P: create party · J: join by code",
+        "1-0/Q: toggle a skill · Enter: start run · P: create party · J: join by code",
         {
           fontFamily: BASE_FONT,
           fontSize: "14px",
@@ -514,7 +528,7 @@ ${party.status === "queued" ? "Finding a match…" : action}`;
 
   private render(): void {
     const lines = ALL_SKILLS.map((skill, index) => {
-      const key = index === 9 ? "0" : String(index + 1);
+      const key = SKILL_KEY_LABELS[index] ?? "-";
       const isSelected = this.selectedIds.includes(skill.id);
       const box = isSelected ? "[x]" : "[ ]";
       const rare = skill.slotCost === 2 ? " (rare, 2 slots)" : "";

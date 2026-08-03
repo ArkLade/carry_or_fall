@@ -115,6 +115,12 @@ export const SECURE_ITEM_MESSAGE_TYPE = "secure_item";
 export const DISCARD_ITEM_MESSAGE_TYPE = "discard_item";
 
 /**
+ * Message-type identifier for {@link ActivateCoreMessage} (M7, concept §11
+ * option 1).
+ */
+export const ACTIVATE_CORE_MESSAGE_TYPE = "activate_core";
+
+/**
  * Player input intent, matching docs/PROTOCOL.md §6 and the technical plan
  * §10.2 shape. The client reports only intent — which keys are held, where the
  * player aims, which actions were requested — never an outcome (see
@@ -159,6 +165,20 @@ export interface SecureItemMessage {
 
 /** Request to discard the item in `sourceSlot` (concept §7.1, "can be discarded"). */
 export interface DiscardItemMessage {
+  readonly sourceSlot: number;
+}
+
+/**
+ * Request to activate the boss core in `sourceSlot` (M7, concept §11 option 1).
+ *
+ * Exactly the shape {@link SecureItemMessage} has, and for exactly the same
+ * reason: the client names a **slot index** and nothing else. It cannot name the
+ * core, the skill that core grants, or the unlock it would eventually become — a
+ * client able to name any of those would be asserting what it is owed. Whether
+ * that slot holds a core at all, and what it grants, is read from content on the
+ * server (`docs/M7_ISSUES.md` §1.3).
+ */
+export interface ActivateCoreMessage {
   readonly sourceSlot: number;
 }
 
@@ -275,6 +295,31 @@ export interface EnemyView {
 }
 
 /**
+ * The boss, as every client in the match sees it (M7, concept §14.3).
+ *
+ * Public — unlike the fate of the *core* it drops — because a boss is a thing
+ * standing in the world that everyone can see. `telegraphAttackIndex` and
+ * `telegraphRemainingMs` are what make §14.3's "readable" true on screen: the
+ * index names an attack in the `BossDefinition` the client already holds, so the
+ * wind-up a player reacts to is the wind-up the server will resolve. `-1` means
+ * nothing is winding up.
+ */
+export interface BossView {
+  readonly id: string;
+  readonly definitionId: string;
+  readonly x: number;
+  readonly y: number;
+  readonly radius: number;
+  readonly health: number;
+  readonly maxHealth: number;
+  readonly enraged: boolean;
+  readonly awake: boolean;
+  readonly telegraphAttackIndex: number;
+  readonly telegraphRemainingMs: number;
+  readonly telegraphFacing: number;
+}
+
+/**
  * A live projectile. Carries the four skill-behavior fields the renderer turns
  * into its visual cues (`apps/client/src/render/world-view.ts`), because
  * concept §13.3 requires those behaviors to stay distinguishable.
@@ -355,6 +400,12 @@ export interface MatchRoomState {
   readonly groundLoot: SyncedCollection<GroundLootView>;
   readonly skillChips: SyncedCollection<SkillChipView>;
   readonly extractionPoints: SyncedCollection<ExtractionPointView>;
+  /**
+   * The boss, as a keyed collection holding zero or one entry (M7). A map rather
+   * than a nullable field because Colyseus synchronizes an entry appearing and
+   * disappearing cleanly, and the boss disappears the moment it dies.
+   */
+  readonly boss: SyncedCollection<BossView>;
 }
 
 /**
@@ -383,6 +434,8 @@ export interface MatchView {
   readonly groundLoot: readonly GroundLootView[];
   readonly skillChips: readonly SkillChipView[];
   readonly extractionPoints: readonly ExtractionPointView[];
+  /** The boss, or `null` — on an arena with no lair, or once it has died (M7). */
+  readonly boss: BossView | null;
 }
 
 /* ------------------------------------------------------------------ *
@@ -436,6 +489,14 @@ export interface SettlementMessage {
   readonly unlockIds: readonly string[];
   /** Only the ids this settlement newly granted; empty on a repeat. */
   readonly newUnlockIds: readonly string[];
+  /**
+   * Boss cores this settlement converted to points because their unlock was
+   * already held (M7, concept §11's duplicate rule). Empty on a repeat, for the
+   * same reason {@link SettlementMessage.newUnlockIds} is: showing "converted"
+   * twice is the visible half of a double award, even when nothing was awarded
+   * twice.
+   */
+  readonly duplicateCoreIds: readonly string[];
   /** Whether this account is anonymous, and therefore unrecoverable (technical plan §17.3). */
   readonly isAnonymous: boolean;
 }

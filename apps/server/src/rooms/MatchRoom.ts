@@ -34,12 +34,15 @@
 import {
   type ArenaDefinition,
   basicBow,
+  type BossDefinition,
   basicSword,
   chaser,
   lockedContentIds,
   testArena,
+  warden,
 } from "@carry-or-fall/game-content";
 import {
+  ACTIVATE_CORE_MESSAGE_TYPE,
   DISCARD_ITEM_MESSAGE_TYPE,
   INPUT_MESSAGE_TYPE,
   INVALID_MESSAGE_DISCONNECT_CODE,
@@ -51,6 +54,7 @@ import {
   SETTLEMENT_MESSAGE_TYPE,
   type SettlementMessage,
   UNAUTHORIZED_JOIN_CODE,
+  validateActivateCoreMessage,
   validateDiscardItemMessage,
   validateInputMessage,
   validateMatchJoinOptions,
@@ -199,6 +203,18 @@ export interface MatchRoomDeps {
    * chasers that would otherwise interrupt it.
    */
   readonly arena?: ArenaDefinition;
+  /**
+   * The boss that inhabits the arena's lair (M7). Defaults to the one boss the
+   * game ships; like {@link MatchRoomDeps.arena}, this is the seam a second boss
+   * would arrive through, and the one integration tests use so a decision about
+   * a boss core can be tested without first spending twenty seconds of real
+   * socket traffic killing a full-health warden.
+   *
+   * It changes nothing about *how* the boss behaves — `stepBoss` implements no
+   * per-boss behaviour — so a test's boss is the shipped boss with different
+   * numbers, not a different code path.
+   */
+  readonly bossDefinition?: BossDefinition;
   /** Permanent account storage (M5). */
   readonly store: ProgressionStore;
   readonly settlement: SettlementService;
@@ -233,6 +249,13 @@ interface Connection {
   /** One-shot inventory commands, consumed by the next tick. */
   pendingSecureSlot: number | null;
   pendingDiscardSlot: number | null;
+  /**
+   * Concept §11 option 1 (M7). One-shot like the other two, and deliberately
+   * *not* gated by `inventoryActionInFlight`: activating writes nothing, so
+   * there is no reservation for a second request to duplicate — and the
+   * simulation refuses a second one anyway, because the first emptied the slot.
+   */
+  pendingActivateCoreSlot: number | null;
   connected: boolean;
   lastPrivateSignature: string | null;
   /** The verified account behind this seat (M5). */
@@ -417,6 +440,12 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
       // logged with the room id so a reported match can be reproduced.
       const seed = deps.seed ?? Math.floor(Math.random() * 0xffff_ffff);
 
+      // The boss exists only where the arena declares a lair (M7,
+      // `docs/DECISIONS.md` D66), and the pair is spread in together rather than
+      // passed as two `undefined`s: an arena without a lair steps exactly as it
+      // did in M6, with no boss field set at all.
+      const lair = this.arena.bossSpawnPoint;
+
       this.world = createSimulation({
         walls: this.arena.walls,
         players: [],
@@ -426,6 +455,9 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
         groundLootSpawnPoints: this.arena.groundLootSpawnPoints,
         skillChipSpawnPoints: this.arena.skillChipSpawnPoints,
         extractionCandidatePoints: this.arena.extractionCandidatePoints,
+        ...(lair === undefined
+          ? {}
+          : { bossDefinition: deps.bossDefinition ?? warden, bossSpawnPoint: lair }),
         seed,
       });
 
@@ -473,6 +505,7 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
         input: NEUTRAL_INPUT,
         pendingSecureSlot: null,
         pendingDiscardSlot: null,
+        pendingActivateCoreSlot: null,
         connected: true,
         lastPrivateSignature: null,
         userId: auth.identity.userId,
@@ -768,6 +801,7 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
           interactPressed: result.value.interactPressed,
           discardSlotIndex: null,
           secureSlotIndex: null,
+          activateCoreSlotIndex: null,
         };
       });
 
@@ -810,6 +844,29 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
           return;
         }
         connection.pendingDiscardSlot = result.value.sourceSlot;
+      });
+
+      this.onMessage<unknown>(ACTIVATE_CORE_MESSAGE_TYPE, (client, message) => {
+        const connection = this.connections.get(client.sessionId);
+        if (connection === undefined) {
+          return;
+        }
+        const result = validateActivateCoreMessage(message, INVENTORY_SIZE);
+        if (!result.ok) {
+          this.recordInvalid(client, connection, result.error);
+          return;
+        }
+        if (
+          !connection.guard.acceptCommand(this.acceptsInputFrom(client.sessionId), Date.now())
+            .accepted
+        ) {
+          return;
+        }
+        // Again a slot, never a skill. Whether that slot holds a boss core, and
+        // which skill that core grants, is content the simulation reads — so
+        // this handler cannot be talked into granting a skill that is not in
+        // the slot (`docs/M7_ISSUES.md` §1.3).
+        connection.pendingActivateCoreSlot = result.value.sourceSlot;
       });
 
       // Any message type this room does not implement — including one a client
@@ -1040,9 +1097,11 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
           // One-shot commands apply on exactly one tick.
           discardSlotIndex: connection.pendingDiscardSlot,
           secureSlotIndex: connection.pendingSecureSlot,
+          activateCoreSlotIndex: connection.pendingActivateCoreSlot,
         });
         connection.pendingDiscardSlot = null;
         connection.pendingSecureSlot = null;
+        connection.pendingActivateCoreSlot = null;
       }
 
       // Hit events are one-shot and are deliberately not stored in synchronized
@@ -1140,6 +1199,7 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
         balances: outcome.balances,
         unlockIds: outcome.unlockIds,
         newUnlockIds: outcome.newUnlockIds,
+        duplicateCoreIds: outcome.duplicateCoreIds,
         isAnonymous: connection.isAnonymous,
       };
       // Sent after the write, so receiving it means the points are in the
@@ -1153,6 +1213,7 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
         outcome: runResult.outcome,
         alreadySettled: outcome.alreadySettled,
         newUnlocks: outcome.newUnlockIds.length,
+        duplicateCores: outcome.duplicateCoreIds.length,
       });
     }
 

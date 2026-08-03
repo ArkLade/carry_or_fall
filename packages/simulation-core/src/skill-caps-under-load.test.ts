@@ -52,6 +52,7 @@ const NO_INPUT: InputState = {
   interactPressed: false,
   discardSlotIndex: null,
   secureSlotIndex: null,
+  activateCoreSlotIndex: null,
 };
 const FIRE: InputState = { ...NO_INPUT, secondaryAttackPressed: true };
 const ATTACK: InputState = { ...NO_INPUT, attackPressed: true };

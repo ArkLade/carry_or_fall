@@ -26,8 +26,8 @@
  * - **bounce** → an outline ring around the projectile.
  */
 import Phaser from "phaser";
-import type { ArenaDefinition } from "@carry-or-fall/game-content";
-import type { MatchView, PlayerView, ProjectileView } from "@carry-or-fall/protocol";
+import { type ArenaDefinition, findBoss } from "@carry-or-fall/game-content";
+import type { BossView, MatchView, PlayerView, ProjectileView } from "@carry-or-fall/protocol";
 import { EXTRACTION_CHANNEL_MS } from "@carry-or-fall/simulation-core";
 
 const WALL_COLOR = 0x30363d;
@@ -73,6 +73,32 @@ const PARTY_MARKER_COLOR = 0x3fb950;
 const PARTY_MARKER_OFFSET_PX = 14;
 const PARTY_MARKER_HALF_WIDTH_PX = 7;
 const PARTY_MARKER_HEIGHT_PX = 7;
+
+/**
+ * The boss (M7; concept §14.3 "readable", §24.1's readability rules).
+ *
+ * Three static cues, no particles and no animation, matching every other cue in
+ * this file:
+ *
+ * - **body** — a larger circle in its own color, with a wider health bar, so it
+ *   is never mistaken for an ordinary enemy.
+ * - **phase change** — the body color shifts once it enrages, and a ring is
+ *   added around it. Two independent channels, like the stun indicator.
+ * - **telegraph** — the *shape of the attack that is coming*, filled
+ *   translucently, drawn from the `BossDefinition` this client already holds.
+ *   The arc attacks draw a wedge along the committed facing; the area attack
+ *   draws a full circle. That drawing is what makes §14.3's "readable" real: a
+ *   player who leaves the shape before the wind-up ends is not hit, because the
+ *   shape drawn here is the shape the server resolves.
+ */
+const BOSS_COLOR = 0xda3633;
+const BOSS_ENRAGED_COLOR = 0xff7b72;
+const BOSS_ENRAGED_RING_COLOR = 0xffa198;
+const BOSS_TELEGRAPH_COLOR = 0xf85149;
+const BOSS_TELEGRAPH_ALPHA = 0.28;
+const BOSS_HEALTH_BAR_WIDTH_PX = 90;
+const BOSS_HEALTH_BAR_HEIGHT_PX = 8;
+const BOSS_HEALTH_BAR_OFFSET_PX = 22;
 
 export class WorldView {
   private readonly graphics: Phaser.GameObjects.Graphics;
@@ -171,10 +197,59 @@ export class WorldView {
       );
     }
 
+    if (view.boss !== null) {
+      this.drawBoss(view.boss);
+    }
+
     const party = new Set(partyMemberIds);
     for (const player of view.players) {
       this.drawPlayer(player, player.id === localPlayerId, party.has(player.id));
     }
+  }
+
+  /** Draw the boss: its committed telegraph, body, phase ring, and health bar (M7). */
+  private drawBoss(boss: BossView): void {
+    const definition = findBoss(boss.definitionId);
+
+    // The telegraph first, so the body sits on top of the shape rather than
+    // under it.
+    const attack = definition?.attacks[boss.telegraphAttackIndex];
+    if (attack !== undefined && boss.telegraphRemainingMs > 0) {
+      this.graphics.fillStyle(BOSS_TELEGRAPH_COLOR, BOSS_TELEGRAPH_ALPHA);
+      if (attack.kind === "area") {
+        this.graphics.fillCircle(boss.x, boss.y, attack.rangePx);
+      } else {
+        const halfArcRad = (attack.arcDegrees * Math.PI) / 360;
+        this.graphics.slice(
+          boss.x,
+          boss.y,
+          attack.rangePx,
+          boss.telegraphFacing - halfArcRad,
+          boss.telegraphFacing + halfArcRad,
+        );
+        this.graphics.fillPath();
+      }
+    }
+
+    this.graphics.fillStyle(boss.enraged ? BOSS_ENRAGED_COLOR : BOSS_COLOR, 1);
+    this.graphics.fillCircle(boss.x, boss.y, boss.radius);
+    if (boss.enraged) {
+      this.graphics.lineStyle(3, BOSS_ENRAGED_RING_COLOR, 1);
+      this.graphics.strokeCircle(boss.x, boss.y, boss.radius + 6);
+    }
+
+    const barX = boss.x - BOSS_HEALTH_BAR_WIDTH_PX / 2;
+    const barY = boss.y - boss.radius - BOSS_HEALTH_BAR_OFFSET_PX;
+    const healthFraction = boss.maxHealth > 0 ? Math.max(0, boss.health / boss.maxHealth) : 0;
+    this.graphics.fillStyle(ENEMY_HEALTH_BAR_BACKGROUND, 1);
+    this.graphics.fillRect(barX, barY, BOSS_HEALTH_BAR_WIDTH_PX, BOSS_HEALTH_BAR_HEIGHT_PX);
+    this.graphics.fillStyle(ENEMY_HEALTH_BAR_FILL, 1);
+    this.graphics.fillRect(
+      barX,
+      barY,
+      BOSS_HEALTH_BAR_WIDTH_PX * healthFraction,
+      BOSS_HEALTH_BAR_HEIGHT_PX,
+    );
   }
 
   /** Draw one player: their active swing, body, shield ring, party marker, and aim line. */

@@ -332,9 +332,12 @@ Rules for authoring one:
   which table to look it up in. This is the same shape the `unlocks` table stores
   (`docs/DATA_MODEL.md` §3.3): a row there means only "this account has this id", and what the id
   grants lives here, in the repository.
-- **Every shipped skill needs exactly one unlock definition.** A skill in neither half could never
-  be selected by any account; a skill in both would be earnable after already being granted.
-  `unlocks.test.ts` asserts the partition.
+- **Every shipped skill needs exactly one unlock definition, from exactly one `source`.** The three
+  sources are `"default"` (concept §5.4's starting set), `"threshold"` (a point total), and
+  `"boss_core"` (M7 — earned by carrying a core out, never by any balance). A skill in none could
+  never be selected by any account; a skill in two would be earnable after already being granted.
+  `unlocks.test.ts` asserts the partition, and `boss.test.ts` asserts that no balance, however
+  large, grants a boss-core unlock.
 - **A threshold must trace to a concept §6 sentence.** Each category says what it is "used to unlock
   or improve"; map the skill to the category whose description names its effect, and say which
   sentence in the comment.
@@ -349,6 +352,94 @@ Rules for authoring one:
 Guard currently has no threshold unlock, and that gap is asserted by a test rather than left
 silent — §6.4's unlock targets are armor types and shield skills, armor is unimplemented, and the one
 shield skill is a default. The milestone that adds armor closes it.
+
+## 6.3 Bosses (M7, shipped)
+
+`packages/game-content/src/boss.ts`. A boss is a definition, not engine code:
+`packages/simulation-core/src/boss.ts` implements the three states (dormant, engaged, returning),
+the telegraph, and the leash, and contains **nothing specific to `warden`**. A second boss is a
+definition plus tests.
+
+```ts
+export interface BossAttack {
+  readonly id: string;
+  readonly kind: "arc" | "area";
+  readonly damage: number;
+  readonly rangePx: number;
+  readonly arcDegrees: number;   // ignored by "area"
+  readonly telegraphMs: number;  // wind-up before the damage lands
+  readonly intervalMs: number;
+}
+
+export interface BossDefinition extends ContentDefinition {
+  readonly kind: "boss";
+  readonly health: number;
+  readonly radius: number;
+  readonly moveSpeed: number;
+  readonly aggroRadiusPx: number;  // measured from the lair, not from the boss
+  readonly leashRadiusPx: number;  // the circle it cannot leave
+  /** Concept §14.3's "two normal attacks plus one area attack", in priority order. */
+  readonly attacks: readonly [BossAttack, BossAttack, BossAttack];
+  readonly enrageBelowHealthFraction: number;
+  readonly enrageIntervalMultiplier: number;
+  readonly coreLootId: string;
+}
+```
+
+Rules for authoring one:
+
+- **Exactly three attacks, scanned in order.** The first ready attack whose shape would land is the
+  one that starts, which is deterministic — a random choice would make a replay diverge. Listing the
+  area attack last, on the longest interval, is what makes it the exception rather than the habit
+  (concept §14.3).
+- **`telegraphMs` is the contract with the player.** Concept §14.3's "readable" means a player who
+  reacts to the wind-up can leave before the hit. A telegraph shorter than a player's reaction plus
+  a round trip is a delay, not a tell. The client draws the shape from this definition, so the shape
+  a player dodges is the shape the server resolves.
+- **`aggroRadiusPx` is measured from the lair and `leashRadiusPx` bounds the boss's position from
+  it**, so `leashRadiusPx > aggroRadiusPx`. That pairing is what makes the boss "attract nearby
+  players" (§14.3) rather than roam: there is a circle it cannot leave, and everything outside that
+  circle is exactly as dangerous as it was before the boss existed (`docs/DECISIONS.md` D66).
+- **No projectile attacks.** A boss projectile that damaged a player would be the first projectile
+  in the game not owned by a player, and every §13.4 cap counts per owner. D66 defers it rather than
+  quietly widening the cap model.
+- **Where the lair goes is a decision about the whole map**, not a flavour choice: `bossSpawnPoint`
+  on the arena decides which existing routes become dangerous. `testArena`'s comment records the
+  measured distance from the lair to every route the browser suite walks, so the boss cannot erode
+  those timing margins by construction (`docs/M7_ISSUES.md` §1.8).
+- Every number here is proposed and balance-deferred (concept §12.3).
+
+## 6.4 Boss cores — the loot a boss drops (M7, shipped)
+
+A boss core is **loot that carries a record**, not a new inventory kind (`docs/DECISIONS.md` D65).
+That shape is the whole reason pickup, death-drop, looting off another player's body, securing, and
+extraction all work for a core with no new code:
+
+```ts
+export interface BossCoreRecord {
+  readonly temporarySkillId: string;   // concept §11 option 1: activate now
+  readonly permanentUnlockId: string;  // concept §11 option 3: secure it
+  readonly secureSlotAllowed: boolean;
+  readonly duplicateConversion: LootPoints; // concept §11's duplicate rule
+}
+
+// on LootDefinition:
+readonly bossCore?: BossCoreRecord;
+```
+
+Rules for authoring one:
+
+- **A core's own `points` are zero.** An ordinary item converts to points; a core converts to an
+  *unlock*, and only a duplicate converts to points. Zero keeps the two categorically distinct, so
+  "first core" and "duplicate core" can never be confused for a bigger and smaller payout.
+- **Cores are not in `ALL_LOOT`.** They are not part of any random drop table — a core exists
+  because a boss died. `findLoot` searches both tables, so every id-resolving path still finds one.
+- **`duplicateConversion` must be worth more than the best ordinary item**, or the duplicate rule
+  reads as a punishment for killing the boss twice. `boss.test.ts` asserts this rather than trusting
+  the number.
+- **`permanentUnlockId` must have an unlock definition with `source: "boss_core"`**, and that unlock
+  must be unreachable by any point balance (`unlockForBossCore`). A boss unlock that a threshold
+  could also grant would make the boss optional, which is not what concept §11 describes.
 
 ## 7. How to add a content item
 

@@ -39,7 +39,7 @@ prevent an incompatible client from joining, showing a refresh/update message in
 
 | Version          | Source                                                        | Status                                                                          |
 | ---------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Protocol version | `PROTOCOL_VERSION` (currently `4`)                            | **Implemented** — the join gate compares on it.                                  |
+| Protocol version | `PROTOCOL_VERSION` (currently `5`)                            | **Implemented** — the join gate compares on it.                                  |
 | Build version    | `GAME_BUILD_VERSION` (server) / `VITE_BUILD_VERSION` (client) | **Implemented** — exchanged, informational.                                      |
 | Content version  | `CONTENT_VERSION` in `@carry-or-fall/game-content`            | **Implemented in M4** — the join gate compares on it (`docs/DECISIONS.md` D34). |
 
@@ -166,6 +166,7 @@ change that first makes the server consume it.
 export const INPUT_MESSAGE_TYPE = "input";
 export const SECURE_ITEM_MESSAGE_TYPE = "secure_item";
 export const DISCARD_ITEM_MESSAGE_TYPE = "discard_item";
+export const ACTIVATE_CORE_MESSAGE_TYPE = "activate_core"; // M7
 
 export interface InputMessage {
   readonly sequence: number; // strictly increasing per client; a replay is dropped
@@ -183,6 +184,16 @@ export interface SecureItemMessage {
   readonly sourceSlot: number;
 }
 export interface DiscardItemMessage {
+  readonly sourceSlot: number;
+}
+
+/**
+ * M7, concept §11 option 1. The same shape, for the same reason: the client
+ * names a slot. It cannot name the core, the skill that core grants, or the
+ * unlock it would become — a client able to name any of those would be
+ * asserting what it is owed.
+ */
+export interface ActivateCoreMessage {
   readonly sourceSlot: number;
 }
 ```
@@ -209,6 +220,7 @@ Still not implemented, and each added only when its milestone lands (technical p
 | `input`                  | M4        | movement / aim / attack / dash / interact intent |
 | `secure_item`            | M4        | move an inventory slot into the secure slot      |
 | `discard_item`           | M4        | discard an inventory slot                        |
+| `activate_core`          | M7        | activate a carried boss core (concept §11 option 1) |
 | `inventory_move`         | later     | rearrange inventory slots (concept §7.1)         |
 | `equip_ground_weapon`    | later     | swap to a ground weapon                          |
 | `replace_wildcard_skill` | later     | replace the wildcard through a UI rather than by walking over a chip |
@@ -216,8 +228,17 @@ Still not implemented, and each added only when its milestone lands (technical p
 
 **Nothing settlement-shaped will ever appear in this table.** M5's secure-slot write and reward
 settlement are both triggered by the server observing its own simulation state, never by a client
-message (`docs/DATA_MODEL.md` §6). `secure_item` remains the only inventory command, and it names a
-*slot*, never an item and never an outcome.
+message (`docs/DATA_MODEL.md` §6). Every inventory command names a *slot*, never an item and never an
+outcome — including M7's `activate_core`, which is the one command whose effect is a permanent
+unlock and therefore the one it would be most tempting to let a client describe.
+
+**The three inventory commands resolve in one fixed order inside a tick**: discard, then
+`activate_core`, then `secure_item` (`packages/simulation-core/src/simulation.ts`). This is a rule,
+not an implementation detail, because it decides a contested outcome: a client that sends
+`activate_core` and `secure_item` for the same slot in the same 50 ms step gets the activation and
+not the secure, in either arrival order, because activation removes the core from the inventory and
+there is then nothing in the slot to secure. The reservation opened by the losing `secure_item` is
+reconciled away by `confirmSecureActions` (D44) rather than left pending.
 
 ## 7. Server → client state
 
@@ -251,6 +272,32 @@ export interface MatchView {
   readonly groundLoot: readonly GroundLootView[];
   readonly skillChips: readonly SkillChipView[];
   readonly extractionPoints: readonly ExtractionPointView[];
+  readonly boss: BossView | null; // M7; null on an arena with no lair, or once it dies
+}
+
+/**
+ * M7, concept §14.3. Public, unlike the fate of the core it drops, because a
+ * boss is a body in the world that everyone can see.
+ *
+ * `telegraphAttackIndex` names an attack in the `BossDefinition` the client
+ * already holds (`-1` when nothing is winding up), so the client draws the shape
+ * the server is about to resolve rather than guessing at one. That is what makes
+ * §14.3's "readable" true on screen: a player who leaves the drawn shape before
+ * the wind-up ends is not hit.
+ */
+export interface BossView {
+  readonly id: string;
+  readonly definitionId: string;
+  readonly x: number;
+  readonly y: number;
+  readonly radius: number;
+  readonly health: number;
+  readonly maxHealth: number;
+  readonly enraged: boolean;
+  readonly awake: boolean;
+  readonly telegraphAttackIndex: number;
+  readonly telegraphRemainingMs: number;
+  readonly telegraphFacing: number;
 }
 ```
 
@@ -290,9 +337,18 @@ export interface SettlementMessage {
   readonly balances: PointTotalsPayload; // the account's five totals, after this settlement
   readonly unlockIds: readonly string[]; // everything the account now holds
   readonly newUnlockIds: readonly string[]; // only what this settlement granted
+  readonly duplicateCoreIds: readonly string[]; // M7: cores converted to points, not unlocks
   readonly isAnonymous: boolean;         // technical plan §17.3's warning condition
 }
 ```
+
+`duplicateCoreIds` is concept §11's duplicate rule said out loud: a second copy of a boss core does
+not become a second inventory object, it converts to points, and the player is told which core
+became them rather than watching one vanish into a balance. Like `newUnlockIds` it is empty on an
+`alreadySettled` repeat — saying "converted" twice is the visible half of a double award even when
+nothing was awarded twice. It is the one field on this message a client may legally *omit*: a server
+one version behind sends none, and the client's validator treats absence as "no duplicates" rather
+than refusing a settlement and hiding the points the player did earn.
 
 Its arrival — not the run ending — is what means the points are in the account. **There is no
 client → server counterpart, and that absence is the design**: no message a client can send carries a

@@ -28,7 +28,10 @@ import {
   CONTENT_VERSION,
   DEFAULT_UNLOCKS,
   findLoot,
+  isBossCore,
+  unlockForBossCore,
   unlocksEarnedAt,
+  type PointBalances,
   type UnlockDefinition,
 } from "@carry-or-fall/game-content";
 import {
@@ -72,6 +75,73 @@ function toGrants(unlocks: readonly UnlockDefinition[]): readonly UnlockGrant[] 
   return unlocks.map((unlock) => ({ unlockId: unlock.id, unlockType: unlock.unlockType }));
 }
 
+/**
+ * Split this run's boss cores into the unlock they grant and the points a
+ * duplicate converts into (M7, concept §11; `docs/DECISIONS.md` D67, D68).
+ *
+ * **The classification happens once, here, before the first write.** Which
+ * branch a core takes depends on whether the account already holds its unlock,
+ * and that changes the instant the first settlement lands — so re-deriving it
+ * on a retry would classify the same core differently the second time. It never
+ * gets the chance: `SettlementService.settle` computes the payload and the
+ * grants once and reuses both across every attempt (technical plan §15.3), and
+ * the store's idempotency on the settlement key means a recomputed
+ * classification could not be applied even if one happened. `§12.4` of
+ * `docs/M7_ISSUES.md` tests exactly that.
+ *
+ * An id this build cannot resolve is skipped rather than guessed at, the same
+ * way {@link SettlementService.recoverPending} skips an unknown item: a
+ * settlement written by a newer content version is not something to award from.
+ */
+export function classifyBossCores(
+  bossCoreIds: readonly string[],
+  heldUnlockIds: readonly string[],
+): {
+  readonly unlocks: readonly UnlockGrant[];
+  readonly points: PointTotals;
+  readonly duplicateCoreIds: readonly string[];
+} {
+  const held = new Set(heldUnlockIds);
+  const unlocks: UnlockGrant[] = [];
+  const duplicateCoreIds: string[] = [];
+  let points: PointTotals = { ...ZERO_POINTS };
+
+  for (const coreId of bossCoreIds) {
+    const core = findLoot(coreId);
+    if (core === null || !isBossCore(core)) {
+      continue;
+    }
+    const unlock = unlockForBossCore(core.bossCore.permanentUnlockId);
+    if (unlock === null) {
+      continue;
+    }
+    if (held.has(unlock.id)) {
+      // A duplicate. Concept §11: it does not become a second inventory object
+      // — it never was one by this point — and converts to points instead.
+      points = addPoints(points, core.bossCore.duplicateConversion);
+      duplicateCoreIds.push(core.id);
+      continue;
+    }
+    // First one. Granted once; two copies of the same core in one run collapse
+    // here rather than producing two identical grants, because the second sees
+    // the first in `held`.
+    held.add(unlock.id);
+    unlocks.push({ unlockId: unlock.id, unlockType: unlock.unlockType });
+  }
+
+  return { unlocks, points, duplicateCoreIds };
+}
+
+function addPoints(left: PointTotals, right: PointBalances): PointTotals {
+  return {
+    force: left.force + right.force,
+    precision: left.precision + right.precision,
+    motion: left.motion + right.motion,
+    guard: left.guard + right.guard,
+    signal: left.signal + right.signal,
+  };
+}
+
 function addBalances(balances: Balances, points: PointTotals): Balances {
   return {
     force: balances.force + points.force,
@@ -89,6 +159,12 @@ export interface SettlementOutcome {
   readonly unlockIds: readonly string[];
   /** Unlocks this settlement granted that the account did not already hold. */
   readonly newUnlockIds: readonly string[];
+  /**
+   * Boss cores this settlement converted to points instead of granting an
+   * unlock, because the account already held it (M7, concept §11). Empty on an
+   * already-settled repeat, exactly like {@link SettlementOutcome.newUnlockIds}.
+   */
+  readonly duplicateCoreIds: readonly string[];
 }
 
 export interface SettlementServiceOptions {
@@ -127,9 +203,15 @@ export class SettlementService {
     readonly startedAt: Date;
     readonly endedAt: Date;
   }): Promise<SettlementOutcome | null> {
-    const payload = buildRewardPayload(args.runResult, CONTENT_VERSION);
-    const projected = addBalances(args.account.balances, payload.points);
-    const unlocks = toGrants(unlocksEarnedAt(projected));
+    const base = buildRewardPayload(args.runResult, CONTENT_VERSION);
+    // Boss cores are resolved before anything is written, so the retry loop
+    // below re-sends one fixed decision rather than making a new one.
+    const cores = classifyBossCores(base.bossCoreIds, args.account.unlockIds);
+    const points = addPoints(base.points, cores.points);
+    const payload: RewardPayload = { ...base, points };
+
+    const projected = addBalances(args.account.balances, points);
+    const unlocks = [...toGrants(unlocksEarnedAt(projected)), ...cores.unlocks];
 
     return this.write({
       settlementKey: settlementKey(args.matchId, args.userId),
@@ -142,6 +224,7 @@ export class SettlementService {
       startedAt: args.startedAt,
       endedAt: args.endedAt,
       previouslyHeld: args.account.unlockIds,
+      duplicateCoreIds: cores.duplicateCoreIds,
     });
   }
 
@@ -187,18 +270,26 @@ export class SettlementService {
         continue;
       }
 
-      const points = pointsFromLoot(item);
       const account = (await this.store.loadAccount(userId)) ?? {
         userId,
         balances: { ...ZERO_POINTS },
         unlockIds: [],
       };
+      // A secured boss core is the case this recovery path exists for at its
+      // sharpest: the player paid for the unlock with their secure slot and the
+      // server died before writing it. Classified the same way a live
+      // settlement classifies it, under the same key, so recovering twice grants
+      // once (M7, `docs/M7_ISSUES.md` §12.8).
+      const bossCoreIds = isBossCore(item) ? [item.id] : [];
+      const cores = classifyBossCores(bossCoreIds, account.unlockIds);
+      const points = addPoints(pointsFromLoot(item), cores.points);
       const payload: RewardPayload = {
         outcome: "died",
         points,
         itemsConverted: 1,
         itemsLost: 0,
         contentVersion: CONTENT_VERSION,
+        bossCoreIds,
       };
       const now = new Date();
 
@@ -209,10 +300,14 @@ export class SettlementService {
         outcome: "abandoned",
         payload,
         points,
-        unlocks: toGrants(unlocksEarnedAt(addBalances(account.balances, points))),
+        unlocks: [
+          ...toGrants(unlocksEarnedAt(addBalances(account.balances, points))),
+          ...cores.unlocks,
+        ],
         startedAt: now,
         endedAt: now,
         previouslyHeld: account.unlockIds,
+        duplicateCoreIds: cores.duplicateCoreIds,
       });
 
       this.logger.info("recovered a pending secure reservation", {
@@ -236,15 +331,16 @@ export class SettlementService {
   private async write(
     request: Parameters<ProgressionStore["settleRun"]>[0] & {
       readonly previouslyHeld: readonly string[];
+      readonly duplicateCoreIds: readonly string[];
     },
   ): Promise<SettlementOutcome | null> {
-    const { previouslyHeld, ...settlement } = request;
+    const { previouslyHeld, duplicateCoreIds, ...settlement } = request;
     let lastError: unknown = null;
 
     for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
       try {
         const result = await this.store.settleRun(settlement);
-        return toOutcome(result, previouslyHeld);
+        return toOutcome(result, previouslyHeld, duplicateCoreIds);
       } catch (error) {
         lastError = error;
         this.logger.warn("settlement attempt failed; will retry with the same key", {
@@ -270,7 +366,11 @@ export class SettlementService {
   }
 }
 
-function toOutcome(result: SettlementResult, previouslyHeld: readonly string[]): SettlementOutcome {
+function toOutcome(
+  result: SettlementResult,
+  previouslyHeld: readonly string[],
+  duplicateCoreIds: readonly string[],
+): SettlementOutcome {
   const held = new Set(previouslyHeld);
   return {
     alreadySettled: result.alreadySettled,
@@ -280,6 +380,7 @@ function toOutcome(result: SettlementResult, previouslyHeld: readonly string[]):
     // retry has no news, and telling the player "you unlocked X" twice would be
     // the visible half of a double award even though nothing was awarded twice.
     newUnlockIds: result.alreadySettled ? [] : result.unlockIds.filter((id) => !held.has(id)),
+    duplicateCoreIds: result.alreadySettled ? [] : duplicateCoreIds,
   };
 }
 

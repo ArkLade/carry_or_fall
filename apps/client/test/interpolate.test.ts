@@ -47,6 +47,7 @@ function view(overrides: Partial<MatchView> = {}): MatchView {
     groundLoot: [],
     skillChips: [],
     extractionPoints: [],
+    boss: null,
     ...overrides,
   };
 }

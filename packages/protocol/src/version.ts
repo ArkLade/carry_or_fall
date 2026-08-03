@@ -5,7 +5,7 @@
  * understand. The client sends its value at join time (see `ClientHandshake`)
  * so the server can refuse a stale client instead of letting it silently desync.
  */
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 /**
  * Whether a peer reporting `peerVersion` speaks a compatible protocol. M0 uses
