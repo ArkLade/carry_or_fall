@@ -144,7 +144,21 @@ store a one-shot slot index consumed by the next tick.
 
 Boss body, health bar, phase tint, and a telegraph ring for the area attack in `world-view.ts`; the
 core's three affordances in the inventory HUD; `C` to activate in `keyboard.ts`; the settlement
-screen naming a new unlock or a duplicate conversion. Debug hook gains `getBoss()`.
+screen naming a new unlock or a duplicate conversion.
+
+Two changes made while implementing this step, both recorded rather than silently absorbed:
+
+- **The telegraph is drawn as the attack's actual shape, not a ring.** A ring says "something is
+  coming"; the arc attacks need "coming *this way*", or a player cannot step behind the boss and the
+  arc/area distinction is invisible. The client draws it from the `BossDefinition` it already holds,
+  indexed by what the server committed to.
+- **No `getBoss()` on the debug hook.** The boss is in the authoritative snapshot, so
+  `getSnapshot().boss` already reaches it and `apps/client/e2e/boss.spec.ts` reads it that way. A
+  second accessor over the same data is an empty layer, which this plan's §2 forbids.
+
+`LoadoutScene` also needed an eleventh key. It bound ten digits, and `split_return` is the eleventh
+skill — a skill with no key is an unlock a player who earned it cannot equip, which would make the
+whole boss-core reward unreachable through the only screen that grants access to it.
 
 ## 10. Step 8 — tests
 
@@ -154,11 +168,24 @@ packages/simulation-core/src/split-caps.test.ts    caps 5 and 6, through the rea
 packages/simulation-core/src/boss-core.test.ts     the three branches as pure rules
 apps/server/test/boss-core-decision.test.ts        the three branches under attack, real sockets
 apps/server/test/settlement-adversarial.test.ts    M5's set, extended to carry a core
-apps/client/e2e/boss.spec.ts                       one browser test: kill it, take the core, extract
+apps/client/e2e/boss.spec.ts                       the boss reaches the client, and its leash holds
 ```
 
 The new server file binds a real port, so it joins `vitest.config.ts`'s `integration-server` project
 (D54's serialised half).
+
+**The browser suite does not kill the boss**, which this plan first said it would. `warden` has 300
+health — roughly twenty seconds of uninterrupted bow fire through a browser, spent on a fight already
+proven twice: as rules in `packages/simulation-core/src/boss.test.ts`, and end-to-end over a real
+socket in `apps/server/test/boss-core-decision.test.ts`. What a browser can add, and what
+`boss.spec.ts` therefore asserts, is that the boss reaches the client at all and that its leash holds
+from outside — the second being the property every other spec's route depends on (§1.8 of
+`docs/M7_ISSUES.md`).
+
+The two server suites share `apps/server/test/boss-fixtures.ts`, which hosts a small boss through
+`MatchRoomDeps.bossDefinition` — the same override seam `arena` already provides. `boss.ts`
+implements no per-boss behaviour, so that is the shipped boss with different numbers, not a second
+code path.
 
 ## 11. Step 9 — documents and the margin audit
 

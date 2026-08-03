@@ -376,13 +376,21 @@ describe("the boss core's three-way decision, under attack (§38 M7 exit criteri
       await waitFor(() => a.privateState()?.wildcardSkillId === "split_return");
       await new Promise((resolve) => setTimeout(resolve, 300));
 
-      // Exactly one outcome, and it is activation: `stepPlayerAttacks` resolves
+      // Exactly one outcome, and it is activation: the simulation resolves
       // discard, then activate, then secure, so the slot is already empty when
       // the secure intent is read. The player got the skill and did not get to
       // keep the core.
       expect(a.privateState()?.wildcardSkillId).toBe("split_return");
       expect(a.privateState()?.secureSlotItemId).toBeNull();
       expect(a.privateState()?.inventory).not.toContain(splitReturnCore.id);
+
+      // And the reservation the losing `secure_item` opened is **withdrawn** —
+      // asserted against the store, not against a message. A reservation left
+      // `pending` for a core that never reached the secure slot is exactly what
+      // recovery would later award (`docs/DECISIONS.md` D44).
+      const userId = localUserIdFor(`race-token-${String(activateFirst)}`);
+      await waitFor(async () => (await store.listPendingReservations(userId, null)).length === 0);
+      expect(await store.listPendingReservations(userId, null)).toHaveLength(0);
 
       await a.room.leave(true);
     }
@@ -424,6 +432,14 @@ describe("the boss core's three-way decision, under attack (§38 M7 exit criteri
     a.room.send(ACTIVATE_CORE_MESSAGE_TYPE, { sourceSlot: 99, skillId: "split_return" });
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(a.privateState()?.wildcardSkillId).toBeNull();
+
+    // An invented message type entirely: there is no handler, so it reaches the
+    // room's catch-all, is counted as abuse, and grants nothing.
+    a.room.send("secure_core", { sourceSlot: slot, unlockId: "split_return" });
+    a.room.send("grant_unlock", { unlockId: "split_return" });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(a.privateState()?.wildcardSkillId).toBeNull();
+    expect(a.privateState()?.secureSlotItemId).toBeNull();
 
     a.room.send(ACTIVATE_CORE_MESSAGE_TYPE, { sourceSlot: slot, skillId: "bulwark_strike" });
     await waitFor(() => a.privateState()?.wildcardSkillId !== null);
@@ -509,13 +525,23 @@ describe("the boss core's three-way decision, under attack (§38 M7 exit criteri
     expect(carrier.settlement()?.duplicateCoreIds).toEqual([]);
 
     // Exactly one core exists in the world: it moved, it did not multiply.
-    let coresOnGround = 0;
-    scavenger.room.state.groundLoot.forEach((loot) => {
-      if (loot.lootId === splitReturnCore.id) {
-        coresOnGround += 1;
-      }
-    });
-    expect(coresOnGround).toBe(0);
+    //
+    // Awaited rather than read once. The pickup is observed through the private
+    // message and the ground-loot removal through the synchronized schema —
+    // two channels carrying two halves of the same server step, which arrive in
+    // whichever order they arrive. Reading the second the instant the first
+    // lands asserts a delivery order nothing promises.
+    const coresOnGround = (): number => {
+      let count = 0;
+      scavenger.room.state.groundLoot.forEach((loot) => {
+        if (loot.lootId === splitReturnCore.id) {
+          count += 1;
+        }
+      });
+      return count;
+    };
+    await waitFor(() => coresOnGround() === 0);
+    expect(coresOnGround()).toBe(0);
 
     await carrier.room.leave(true);
     await scavenger.room.leave(true);
@@ -533,6 +559,19 @@ describe("the boss core's three-way decision, under attack (§38 M7 exit criteri
     // combat power" is trivially true for a core, and the assertion that matters
     // is that securing is not a back door to the wildcard.
     expect(a.privateState()?.wildcardSkillId).toBeNull();
+
+    // Said as behaviour rather than as a field: fire a real shot and read what
+    // the server published. `split_return` would put `splitCount` on it, so an
+    // ordinary arrow is the evidence that the secured core granted nothing.
+    a.send({ secondaryAttackPressed: true, aimAngle: 0 });
+    await waitFor(() => a.room.state.projectiles.size > 0);
+    const fired: { canReturn: boolean }[] = [];
+    a.room.state.projectiles.forEach((projectile) => {
+      fired.push({ canReturn: projectile.canReturn });
+    });
+    a.send({ secondaryAttackPressed: false, aimAngle: 0 });
+    expect(fired.length).toBeGreaterThan(0);
+    expect(fired.every((projectile) => !projectile.canReturn)).toBe(true);
 
     // And it cannot be activated afterwards, from any slot.
     for (let candidate = 0; candidate < 6; candidate += 1) {

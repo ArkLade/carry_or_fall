@@ -39,7 +39,7 @@ const BASE_FONT = "system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
 const PANEL_X = 12;
 const PANEL_Y = 84;
 const PANEL_WIDTH = 320;
-const PANEL_HEIGHT = 258;
+const PANEL_HEIGHT = 282;
 const CORE_COLOR = "#f85149";
 
 function formatBuildEffects(effects: ReturnType<typeof aggregateBuildEffects>): string {
@@ -94,10 +94,17 @@ export class InventoryHud {
       .setScrollFactor(0);
     this.pointsText = scene.add.text(PANEL_X + 10, PANEL_Y + 184, "", textStyle).setScrollFactor(0);
     this.coreText = scene.add
-      .text(PANEL_X + 10, PANEL_Y + 206, "", { ...textStyle, fontSize: "12px", color: CORE_COLOR })
+      .text(PANEL_X + 10, PANEL_Y + 206, "", {
+        ...textStyle,
+        fontSize: "12px",
+        color: CORE_COLOR,
+        // Wrapped rather than trusted to fit: this is the longest string the
+        // panel ever shows, and an unwrapped line would run off its background.
+        wordWrap: { width: PANEL_WIDTH - 20 },
+      })
       .setScrollFactor(0);
     this.helpText = scene.add
-      .text(PANEL_X + 10, PANEL_Y + 232, "1-6 discard · Shift+1-6 secure · I toggle", {
+      .text(PANEL_X + 10, PANEL_Y + 256, "1-6 discard · Shift+1-6 secure · I toggle", {
         ...textStyle,
         fontSize: "12px",
         color: MUTED_COLOR,

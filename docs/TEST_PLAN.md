@@ -269,6 +269,23 @@ slower machine. Worst margins measured after the M6 audit: `walkToward` 53%, the
 idle window 56%, `dieToChasers` 69%, `waitForSnapshot` 70%, `attackChaserUntil` 95%, `pickUpAt` 99%.
 Re-run this whenever the arena's danger changes — adding the M7 boss will change it.
 
+### 2.3.0b Two ways to invalidate a browser run without failing a test
+
+Both of these have cost a real run, and both look exactly like a product defect —
+every test failing at "the client has not joined a room" — so they are written
+down rather than re-diagnosed each time.
+
+**A stale server on port 2567 or 5173.** `playwright.config.ts` sets
+`reuseExistingServer: !isCI`, which is right for local iteration and lethal
+after a previous run left a server behind: the suite silently adopts a process
+started with different configuration, and every join hangs. **Kill anything
+listening on 2567 and 5173 before a browser run.** Checking is not enough if you
+check before the wrong step — check immediately before invoking the suite.
+
+**Editing client source while the suite runs.** The Vite dev server is watching,
+so a save hot-reloads the page mid-test and the run in progress loses its room.
+This is not a flake to re-run past; it is the edit. Finish editing, then run.
+
 ### 2.3.1 Session durability
 
 The browser suite runs thirty tests against **one** server process and abandons every match by

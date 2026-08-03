@@ -342,8 +342,12 @@ claim nobody re-checks.
 1. **Activate then secure, same tick.** One client sends `activate_core` and `secure_item` for the
    same slot in the same tick. The core is the wildcard, the secure slot is empty, and the
    reservation the room opened is **withdrawn** — asserted against the store, not against a message.
-2. **Secure then activate, same tick.** The reverse order: the core is secured, and activation finds
-   an empty slot and refuses. The wildcard is unchanged.
+2. **Secure then activate, same tick.** The reverse arrival order, and — **corrected during
+   implementation** — the same outcome, not the mirrored one this line first predicted. §1.3 of this
+   document fixes the intra-tick order as discard, then activate, then secure, so *arrival* order
+   inside a 50 ms step decides nothing: activation always resolves first and empties the slot. Two
+   plausible rules cannot both hold, and the one written down in §1.3 is the one implemented and
+   tested. The prediction here was simply wrong, and is left visible rather than quietly rewritten.
 3. **Activate then secure, later ticks.** Activation, then a secure request for that slot, then for
    every other slot index: none of them secures the core, and none opens a reservation.
 4. **A fabricated message cannot secure an activated core.** `secure_item` with an out-of-range slot,
