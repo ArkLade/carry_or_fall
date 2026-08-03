@@ -24,7 +24,13 @@
  */
 import type { Page } from "@playwright/test";
 import { ALL_SKILLS, testArena } from "@carry-or-fall/game-content";
-import type { EnemyView, LocalPlayerState, MatchView, PlayerView } from "@carry-or-fall/protocol";
+import type {
+  EnemyView,
+  LocalPlayerState,
+  MatchView,
+  PartyView,
+  PlayerView,
+} from "@carry-or-fall/protocol";
 
 /** Matches `main.ts`'s Phaser game config (and so the arena's dimensions). */
 export const GAME_WIDTH = testArena.width;
@@ -111,6 +117,46 @@ export async function gotoGame(page: Page): Promise<void> {
   // its keys and be silently dropped.
   await page.waitForFunction(
     () => window.__CARRY_OR_FALL_DEBUG__?.getActiveSceneKey() === "loadout",
+  );
+}
+
+/** This page's party, or `null` when it is not in one (M6). */
+export async function getParty(page: Page): Promise<PartyView | null> {
+  return page.evaluate(() => window.__CARRY_OR_FALL_DEBUG__?.getParty() ?? null);
+}
+
+/** This page's party members inside the current match (M6). */
+export async function getPartyMemberIds(page: Page): Promise<readonly string[]> {
+  return page.evaluate(() => window.__CARRY_OR_FALL_DEBUG__?.getPartyMemberIds() ?? []);
+}
+
+/**
+ * Create a party on `page` and return its join code, read from the page's own
+ * state rather than from the canvas.
+ */
+export async function createParty(page: Page): Promise<string> {
+  await pressKey(page, "KeyP");
+  await page.waitForFunction(
+    () => (window.__CARRY_OR_FALL_DEBUG__?.getParty()?.joinCode.length ?? 0) > 0,
+    undefined,
+    { timeout: MATCH_START_TIMEOUT_MS },
+  );
+  return (await getParty(page))!.joinCode;
+}
+
+/** Join an existing party on `page` by typing its code, exactly as a human would. */
+export async function joinPartyByCode(page: Page, joinCode: string): Promise<void> {
+  await pressKey(page, "KeyJ");
+  await focusPage(page);
+  // Real typing: one keydown per character, which is what the scene's text
+  // entry reads. `type` with a delay keeps each press long enough to land on a
+  // frame, for the same reason `pressKey` holds its key (see the module doc).
+  await page.keyboard.type(joinCode, { delay: 40 });
+  await pressKey(page, "Enter");
+  await page.waitForFunction(
+    () => (window.__CARRY_OR_FALL_DEBUG__?.getParty()?.members.length ?? 0) > 0,
+    undefined,
+    { timeout: MATCH_START_TIMEOUT_MS },
   );
 }
 

@@ -63,6 +63,30 @@ export interface MatchJoinOptions extends ClientHandshake {
 }
 
 /**
+ * Join options for the party room (M6, technical plan §8.4).
+ *
+ * `joinCode` is the whole of the routing decision a client gets to make:
+ * `null` means "create a party and mint me a code", a string means "put me in
+ * the party that answers to this code". Everything else about membership — who
+ * leads, whether there is room, whether the code is still live — is the
+ * server's, because technical plan §5.1 lists *party membership authorization*
+ * among the things a client must not decide.
+ *
+ * The handshake, access token, and skill loadout are carried for the same
+ * reasons the match room carries them, and are checked by the same functions:
+ * a party member's loadout is the loadout they will bring into the match, so
+ * an illegal or un-unlocked one is refused at the earliest honest moment rather
+ * than when the party finally queues.
+ */
+export interface PartyJoinOptions extends ClientHandshake {
+  /** `null` creates a new party; a code joins an existing one. */
+  readonly joinCode: string | null;
+  readonly skillLoadoutIds: readonly string[];
+  /** As {@link MatchJoinOptions.accessToken} — the only thing accepted as identity. */
+  readonly accessToken: string | null;
+}
+
+/**
  * Read model of the synchronized foundation-room state. This mirrors the fields
  * of the server-side Colyseus schema so the client can type `room.state` without
  * depending on `@colyseus/schema`. The server remains the sole authority over
@@ -137,6 +161,47 @@ export interface SecureItemMessage {
 export interface DiscardItemMessage {
   readonly sourceSlot: number;
 }
+
+/* ------------------------------------------------------------------ *
+ * 1b. Client → server: party commands (M6)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Ask the server to seat this whole party into one match (technical plan §8.4
+ * step 4). Leader only; the server checks that, not the client.
+ */
+export const QUEUE_MATCH_MESSAGE_TYPE = "queue_match";
+
+/** Withdraw a queued party before its seats are consumed. Leader only. */
+export const CANCEL_QUEUE_MESSAGE_TYPE = "cancel_queue";
+
+/**
+ * Mint a fresh join code, invalidating the previous one immediately. Leader
+ * only. This is what makes a code's bounded lifetime usable rather than merely
+ * restrictive (`docs/DECISIONS.md` D56): an expired code does not end the
+ * party, it just needs replacing.
+ */
+export const REFRESH_JOIN_CODE_MESSAGE_TYPE = "refresh_join_code";
+
+/** Leave the party deliberately. Any member. */
+export const LEAVE_PARTY_MESSAGE_TYPE = "leave_party";
+
+/**
+ * Every party command in one union, because they share a shape: **no fields at
+ * all**.
+ *
+ * That is the point rather than an omission. A command that named a member
+ * would be a client asserting something about another player, and technical
+ * plan §5.1 forbids exactly that for party membership. "Queue us", "cancel",
+ * "new code", "I am leaving" each need no subject: the sender is the subject,
+ * and the server knows who the sender is because it assigned the session.
+ *
+ * They are still validated. An empty body arriving over a socket is untrusted
+ * like any other, and `validatePartyCommandMessage` refuses anything that is
+ * not an object — so a client sending `null`, an array, or a number gets the
+ * same treatment as one sending a malformed input message.
+ */
+export type PartyCommandMessage = Record<string, never>;
 
 /* ------------------------------------------------------------------ *
  * 2. Server → client: the public synchronized read model
@@ -394,4 +459,138 @@ export interface LocalPlayerState {
   readonly skillIds: readonly string[];
   readonly wildcardSkillId: string | null;
   readonly runResult: RunResultPayload | null;
+  /**
+   * The **other** members of this player's party who are in this match right
+   * now (M6; concept §8.4 step 6's "shared visual identifiers", §23.1's "party
+   * status"). Empty for a solo player.
+   *
+   * This rides on the private message rather than the synchronized schema, and
+   * that placement is the security claim (`docs/DECISIONS.md` D58): a non-party
+   * client is told nothing — not a party id, not a colour, not a count — and a
+   * party member is told only ids it already has from its own party roster, of
+   * players already visible in the public snapshot. The marker drawn from this
+   * grants no authority: no message a client may send becomes valid or invalid
+   * because of it.
+   */
+  readonly partyMemberIds: readonly string[];
+}
+
+/* ------------------------------------------------------------------ *
+ * 4. Server → client: the party room (M6)
+ * ------------------------------------------------------------------ */
+
+/** What a party is doing (technical plan §8.4; `docs/M6_ISSUES.md` §4). */
+export type PartyStatus = "forming" | "queued" | "in_match";
+
+const PARTY_STATUSES: readonly string[] = ["forming", "queued", "in_match"];
+
+/** Narrow a status read out of synchronized state, at the boundary, before it is trusted. */
+export function isPartyStatus(value: unknown): value is PartyStatus {
+  return typeof value === "string" && PARTY_STATUSES.includes(value);
+}
+
+/** Concept §15.3: "maximum three players". */
+export const MAX_PARTY_SIZE = 3;
+
+/**
+ * One party member, as the other members see them.
+ *
+ * Note what is absent, and why it is absent rather than filtered: no access
+ * token, no account id, no point balance, no unlock list, no inventory. Being
+ * in someone's party is not a licence to read their account
+ * (`docs/M6_ISSUES.md` §1.6), so none of it is put in the document the party
+ * receives. A name and a connection light is the whole of it.
+ */
+export interface PartyMemberView {
+  /** The member's party-room session id — not their account id, and not their match session id. */
+  readonly sessionId: string;
+  /** Server-generated (technical plan §17.1); a client never supplies one. */
+  readonly displayName: string;
+  readonly isLeader: boolean;
+  /** False while the member is disconnected but still inside their reconnect window. */
+  readonly connected: boolean;
+}
+
+/** Read model of the synchronized party-room state — the mirror of the server's `PartyState`. */
+export interface PartyRoomState {
+  readonly joinCode: string;
+  readonly leaderSessionId: string;
+  /** One of {@link PartyStatus}; typed `string` because that is what the wire carries. */
+  readonly status: string;
+  /** Milliseconds until the current join code expires; 0 once it has. */
+  readonly joinCodeExpiresInMs: number;
+  readonly members: SyncedCollection<PartyMemberView>;
+}
+
+/** One snapshot of the party, as the client renders it. */
+export interface PartyView {
+  readonly joinCode: string;
+  readonly leaderSessionId: string;
+  readonly status: PartyStatus;
+  readonly joinCodeExpiresInMs: number;
+  readonly members: readonly PartyMemberView[];
+}
+
+/**
+ * Message-type identifier for the seat this member has been given in a match
+ * (M6). Sent to each member individually once the whole party's seats have been
+ * reserved together.
+ */
+export const MATCH_READY_MESSAGE_TYPE = "match_ready";
+
+/**
+ * A Colyseus seat reservation, as it crosses to the client.
+ *
+ * This is the payload that makes "a party lands in one room, every time" true
+ * (`docs/M6_ISSUES.md` §1.2): the seat is already held when this arrives, so
+ * the member's join is no longer racing anyone for it. The client turns it into
+ * a connection with `consumeSeatReservation`.
+ *
+ * It is validated on arrival like any other message. That is not a formality —
+ * `roomId` is what the client opens a socket to, and `sessionId` is the
+ * identity it will hold in the match.
+ */
+export interface SeatReservationPayload {
+  readonly name: string;
+  readonly sessionId: string;
+  readonly roomId: string;
+  readonly processId: string;
+  readonly publicAddress?: string;
+}
+
+/** What the server sends a party member once their seat is held. */
+export interface MatchReadyMessage {
+  readonly seatReservation: SeatReservationPayload;
+}
+
+/** Message-type identifier for a party action the server refused. */
+export const PARTY_ERROR_MESSAGE_TYPE = "party_error";
+
+/** Why a party action was refused. Coarse on purpose — see {@link PartyErrorMessage}. */
+export type PartyErrorCode = "not_leader" | "already_queued" | "no_room_available" | "party_empty";
+
+const PARTY_ERROR_CODES: readonly string[] = [
+  "not_leader",
+  "already_queued",
+  "no_room_available",
+  "party_empty",
+];
+
+export function isPartyErrorCode(value: unknown): value is PartyErrorCode {
+  return typeof value === "string" && PARTY_ERROR_CODES.includes(value);
+}
+
+/**
+ * A refused party action, with a message the panel shows verbatim.
+ *
+ * The codes are coarse deliberately. A refusal that distinguished "there is no
+ * such party" from "that party is full" from "that code expired" would answer
+ * questions for whoever is guessing codes; those three are all refused at the
+ * join boundary with one code and one message instead (`docs/DECISIONS.md`
+ * D56), and this type covers only failures *inside* a party a member already
+ * belongs to.
+ */
+export interface PartyErrorMessage {
+  readonly code: PartyErrorCode;
+  readonly message: string;
 }

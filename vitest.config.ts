@@ -14,6 +14,9 @@ const realServerTests = [
   "apps/server/test/match-authority.test.ts",
   "apps/server/test/match-lifecycle.test.ts",
   "apps/server/test/match-room.test.ts",
+  "apps/server/test/party-isolation.test.ts",
+  "apps/server/test/party-queue.test.ts",
+  "apps/server/test/party-room.test.ts",
   "apps/server/test/settlement-adversarial.test.ts",
 ];
 

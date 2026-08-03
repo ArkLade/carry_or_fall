@@ -16,8 +16,23 @@
 import type { LocalPlayerState, RunResultPayload } from "@carry-or-fall/protocol";
 import type { Player } from "@carry-or-fall/simulation-core";
 
-/** Build the private state message for one player. */
-export function toLocalPlayerState(player: Player): LocalPlayerState {
+/**
+ * Build the private state message for one player.
+ *
+ * `partyMemberIds` (M6) is the one thing here that is about somebody else, and
+ * it is deliberately the *least* that can satisfy concept §8.4's "shared visual
+ * identifiers": the session ids of this player's own teammates who are in this
+ * room. They are ids the recipient already holds from its party roster, of
+ * players already present in the public snapshot, so nothing is disclosed that
+ * this client could not already see (`docs/DECISIONS.md` D58). A solo player
+ * gets an empty list, and a non-party player is told nothing about who is
+ * grouped, because this message goes to one client and the public schema has no
+ * party field at all.
+ */
+export function toLocalPlayerState(
+  player: Player,
+  partyMemberIds: readonly string[] = [],
+): LocalPlayerState {
   return {
     playerId: player.id,
     inventory: player.inventory.map((item) => item?.id ?? null),
@@ -25,6 +40,7 @@ export function toLocalPlayerState(player: Player): LocalPlayerState {
     skillIds: player.skillLoadout.map((skill) => skill.id),
     wildcardSkillId: player.wildcardSkill?.id ?? null,
     runResult: toRunResultPayload(player),
+    partyMemberIds: [...partyMemberIds],
   };
 }
 
@@ -47,7 +63,10 @@ function toRunResultPayload(player: Player): RunResultPayload | null {
  * state every tick. Comparing the serialized message itself would be correct
  * too; this is the same thing without allocating the message first.
  */
-export function privateStateSignature(player: Player): string {
+export function privateStateSignature(
+  player: Player,
+  partyMemberIds: readonly string[] = [],
+): string {
   const inventory = player.inventory.map((item) => item?.id ?? "-").join(",");
   const outcome = player.runResult === null ? "-" : player.runResult.outcome;
   return [
@@ -56,5 +75,9 @@ export function privateStateSignature(player: Player): string {
     player.skillLoadout.map((skill) => skill.id).join(","),
     player.wildcardSkill?.id ?? "-",
     outcome,
+    // Included so a teammate arriving or leaving actually resends this message.
+    // Without it the marker list would be computed correctly and then withheld,
+    // because nothing else about the player changed.
+    partyMemberIds.join(","),
   ].join("|");
 }

@@ -31,6 +31,7 @@ import {
   type InputMessage,
   PRIVATE_STATE_MESSAGE_TYPE,
   PROTOCOL_VERSION,
+  type SeatReservationPayload,
   SECURE_ITEM_MESSAGE_TYPE,
   SETTLEMENT_MESSAGE_TYPE,
   type SettlementMessage,
@@ -64,6 +65,17 @@ export interface MatchConnectionOptions {
    * comes back out of the token, on the server.
    */
   readonly accessToken: string | null;
+  /**
+   * A seat the server already reserved for this client, when the player is
+   * entering with a party (M6).
+   *
+   * With one, the client **consumes** the reservation instead of asking
+   * matchmaking for a room: the seat is already held, so the 620-930 ms this
+   * join takes (`docs/DECISIONS.md` D43) is spent against a seat nobody else
+   * can take rather than racing for one. Without one, this is an ordinary solo
+   * `joinOrCreate` and nothing about the M4 path changes.
+   */
+  readonly seatReservation?: SeatReservationPayload | null;
 }
 
 export interface MatchConnectionCallbacks {
@@ -162,9 +174,17 @@ export class MatchConnection {
     };
 
     try {
-      const room: MatchRoomHandle = await client.joinOrCreate<MatchRoomState>(MATCH_ROOM, {
-        ...joinOptions,
-      });
+      // Two ways in, one room afterwards. A party member's seat was reserved by
+      // the server when their party queued; everything past the socket opening
+      // — the join gate, the private state, the input path — is identical,
+      // because Colyseus runs this room's `onAuth` with *that member's own*
+      // recorded options when the reservation is consumed.
+      const room: MatchRoomHandle =
+        options.seatReservation == null
+          ? await client.joinOrCreate<MatchRoomState>(MATCH_ROOM, { ...joinOptions })
+          : ((await client.consumeSeatReservation<MatchRoomState>(
+              options.seatReservation,
+            )) as MatchRoomHandle);
       this.bind(client, room);
       this.setStatus("connected");
     } catch (error) {
@@ -175,6 +195,13 @@ export class MatchConnection {
 
   private bind(client: Client, room: MatchRoomHandle): void {
     this.room = room;
+
+    // One reconnection policy, not two racing (`docs/DECISIONS.md` D64). This
+    // connection already has an explicit single attempt in `onLeave` below,
+    // written for technical plan §34.1's window; the SDK's own automatic
+    // reconnection would start on its own timers once the room passes five
+    // seconds of uptime and retry fifteen more times underneath it.
+    room.reconnection.enabled = false;
 
     room.onStateChange((state) => {
       this.previous = this.latest;

@@ -74,7 +74,15 @@ import {
   type World,
 } from "@carry-or-fall/simulation-core";
 import { randomUUID } from "node:crypto";
-import { type Client, CloseCode, Room, type Server, ServerError } from "@colyseus/core";
+import {
+  type Client,
+  CloseCode,
+  type IRoomCache,
+  matchMaker,
+  Room,
+  type Server,
+  ServerError,
+} from "@colyseus/core";
 
 import type { Logger } from "../logger";
 import { matchMetrics } from "../metrics";
@@ -115,6 +123,63 @@ export const DEFAULT_RECONNECT_MS = 15_000;
  */
 export const DEFAULT_ENDING_MS = 60_000;
 
+/**
+ * How long a match room holds its lobby open for a party whose seats it has
+ * reserved but whose members have not connected yet (M6,
+ * `docs/M6_ISSUES.md` §1.8).
+ *
+ * This is not a race window — the seats are already the party's and nobody else
+ * can take them. It is the bound on how long one absent member may delay a
+ * match, so a party member who closed their laptop between queueing and
+ * connecting cannot stall the room forever. Ten seconds is comfortably above
+ * the 620-930 ms a browser actually takes to reach a match (`docs/DECISIONS.md`
+ * D43) and below Colyseus's own 15 s seat-reservation timeout, so the room stops
+ * waiting before the seat itself lapses.
+ */
+export const DEFAULT_GROUP_SEAT_HOLD_MS = 10_000;
+
+/**
+ * One member of a party being seated into this room (M6). `options` is that
+ * member's **own** join options — their handshake, their access token, their
+ * loadout — recorded with the seat and handed to `onAuth` when they connect, so
+ * every join gate still runs per member and nothing is admitted on a
+ * teammate's credentials.
+ */
+export interface GroupSeatMember {
+  readonly sessionId: string;
+  readonly options: MatchJoinOptions;
+}
+
+/** Why a group allocation was refused, so the queue can try the next room. */
+export type GroupSeatRefusal = "phase" | "capacity" | "raced";
+
+export type GroupSeatOutcome =
+  { readonly ok: true } | { readonly ok: false; readonly reason: GroupSeatRefusal };
+
+/**
+ * The one thing `MatchQueue` needs from a live match room. Expressed as an
+ * interface, and recovered from a `Room` by {@link asGroupSeatHost}, because
+ * `matchMaker.getLocalRoomById` returns the base `Room` type — the concrete
+ * class is defined inside `defineMatchRoom`'s closure and is deliberately not
+ * exported.
+ */
+export interface GroupSeatHost {
+  reserveGroupSeats(
+    partyId: string,
+    members: readonly GroupSeatMember[],
+    roomCache: IRoomCache,
+  ): Promise<GroupSeatOutcome>;
+}
+
+/** Narrow a room instance to a {@link GroupSeatHost}, or `null` if it is not one. */
+export function asGroupSeatHost(room: Room | undefined | null): GroupSeatHost | null {
+  if (room === undefined || room === null) {
+    return null;
+  }
+  const candidate = room as unknown as Partial<GroupSeatHost>;
+  return typeof candidate.reserveGroupSeats === "function" ? (candidate as GroupSeatHost) : null;
+}
+
 export interface MatchRoomDeps {
   readonly buildVersion: string;
   readonly logger: Logger;
@@ -123,6 +188,8 @@ export interface MatchRoomDeps {
   readonly matchDurationMs?: number;
   readonly reconnectWindowMs?: number;
   readonly endingDurationMs?: number;
+  /** Overridable so a test does not sit through a real party seat hold (M6). */
+  readonly groupSeatHoldMs?: number;
   /** Overridable so a test can seed a reproducible match (technical plan §9.4). */
   readonly seed?: number;
   /**
@@ -215,6 +282,7 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
   const matchDurationMs = deps.matchDurationMs ?? DEFAULT_MATCH_MS;
   const reconnectWindowMs = deps.reconnectWindowMs ?? DEFAULT_RECONNECT_MS;
   const endingDurationMs = deps.endingDurationMs ?? DEFAULT_ENDING_MS;
+  const groupSeatHoldMs = deps.groupSeatHoldMs ?? DEFAULT_GROUP_SEAT_HOLD_MS;
 
   class MatchRoom extends Room<{ state: MatchStateType; auth: AuthContext }> {
     override maxClients = MATCH_MAX_CLIENTS;
@@ -233,6 +301,27 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
      */
     private readonly matchId = randomUUID();
     private readonly startedAt = new Date();
+
+    /**
+     * Which party each seated (or expected) player belongs to, written by
+     * {@link reserveGroupSeats} before the members connect (M6).
+     *
+     * **This is the only source of party membership in this room.** It is
+     * written by the server, from the party room, over a direct in-process call;
+     * no join option, message field, or client-supplied value can reach it.
+     * That is what makes technical plan §5.1's "party membership authorization"
+     * structurally the server's rather than a check somebody has to remember
+     * (`docs/M6_ISSUES.md` §1.3).
+     */
+    private readonly partyBySession = new Map<string, string>();
+
+    /**
+     * Seats promised to a party that has not connected yet, and the deadline
+     * after which the room stops waiting for them. The lobby countdown does not
+     * complete while any of these is live (`docs/M6_ISSUES.md` §1.8), so a party
+     * never arrives to find its match already running.
+     */
+    private readonly groupSeatHolds = new Map<string, number>();
 
     /**
      * Join gate. Runs before `onJoin` and before the client occupies a seat, so
@@ -395,6 +484,10 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
         settlementStarted: false,
       });
 
+      // A party member has arrived, so the room no longer waits on their seat
+      // (M6). A solo player never had a hold to clear.
+      this.groupSeatHolds.delete(client.sessionId);
+
       if (this.state.phase === "waiting") {
         // The lobby countdown starts when the first player arrives, so a solo
         // player is not left waiting for a second who may never come.
@@ -403,6 +496,14 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
 
       this.publishState();
       this.sendPrivateState(client.sessionId, true);
+      // Their teammates' marker lists just grew by one, and during `countdown`
+      // nothing else would resend it: private state is refreshed inside the
+      // step, and the step does not run until the match starts. So the first
+      // member of a party to arrive would sit through the whole lobby seeing
+      // nobody, and only learn about the others on the first tick.
+      for (const teammateId of this.partyMemberIdsFor(client.sessionId)) {
+        this.sendPrivateState(teammateId, false);
+      }
 
       logger.info("player joined match", {
         roomId: this.roomId,
@@ -461,6 +562,141 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
       logger.info("match room disposed", { roomId: this.roomId, tick: this.world.tick });
     }
 
+    /**
+     * Seat a whole party into this room, or refuse — never partially (M6.4/M6.5,
+     * `docs/M6_ISSUES.md` §1.1, §1.8). Called by `MatchQueue` on the live room
+     * instance, in this process.
+     *
+     * **The ordering is the guarantee, and it is easy to break.** Steps 1-3 are
+     * synchronous, and step 4 must be reached with **no `await` in between**:
+     *
+     * 1. refuse unless the match has not started;
+     * 2. refuse unless every one of the party's seats fits right now;
+     * 3. record the party and the seat holds;
+     * 4. `reserveMultipleSeatsFor`, whose own capacity check and seat write are
+     *    likewise synchronous inside `@colyseus/core`'s `Room#_reserveSeat`.
+     *
+     * Because JavaScript is single-threaded and `docs/DECISIONS.md` D8 keeps
+     * every room in one process, nothing — no other party, no solo
+     * `joinOrCreate`, no timer — can run between the check and the write. So the
+     * allocation is atomic, and a party of three lands in one room *every time*
+     * rather than usually. Insert an `await` above step 4 and that stops being
+     * true, silently.
+     *
+     * Step 5 exists only because "structurally impossible" deserves a check
+     * rather than a comment.
+     */
+    async reserveGroupSeats(
+      partyId: string,
+      members: readonly GroupSeatMember[],
+      roomCache: IRoomCache,
+    ): Promise<GroupSeatOutcome> {
+      if (this.state.phase !== "waiting" && this.state.phase !== "countdown") {
+        return { ok: false, reason: "phase" };
+      }
+      if (this.freeSeats() < members.length) {
+        // Refused rather than trimmed: a party is never split
+        // (`docs/M6_ISSUES.md` §1.8). The queue takes the next room, or makes
+        // one.
+        return { ok: false, reason: "capacity" };
+      }
+
+      const deadline = Date.now() + groupSeatHoldMs;
+      for (const member of members) {
+        this.partyBySession.set(member.sessionId, partyId);
+        this.groupSeatHolds.set(member.sessionId, deadline);
+      }
+
+      const granted = await matchMaker.reserveMultipleSeatsFor(
+        roomCache,
+        members.map((member) => ({
+          sessionId: member.sessionId,
+          options: member.options,
+          // No pre-computed auth: leaving this undefined is what makes
+          // Colyseus run this room's own `onAuth` when the member connects,
+          // with that member's recorded options. Every join gate — version,
+          // token, loadout, unlocks — therefore still runs, per member.
+          auth: undefined,
+        })),
+      );
+
+      if (granted.some((seat) => !seat)) {
+        for (const member of members) {
+          this.partyBySession.delete(member.sessionId);
+          this.groupSeatHolds.delete(member.sessionId);
+        }
+        logger.warn("group seat reservation lost a race it should not have", {
+          roomId: this.roomId,
+          partyId,
+          requested: members.length,
+        });
+        return { ok: false, reason: "raced" };
+      }
+
+      logger.info("reserved group seats", {
+        roomId: this.roomId,
+        matchId: this.matchId,
+        partyId,
+        seats: members.length,
+        phase: this.state.phase,
+      });
+      return { ok: true };
+    }
+
+    /**
+     * Seats nobody holds right now.
+     *
+     * Colyseus counts a reserved seat in `hasReachedMaxClients()` but does not
+     * expose the count, so it is read from the room's own `_reservedSeats`
+     * record. Entries become non-enumerable once their client has actually
+     * joined (`Room#_onJoin`), so a joined player is counted once, through
+     * `this.clients`, and never twice.
+     *
+     * `party-queue.test.ts` asserts this accessor really sees an outstanding
+     * reservation, so a Colyseus upgrade that renames the field fails a test
+     * rather than silently letting a party overcommit a room.
+     */
+    private freeSeats(): number {
+      const reserved = (this as unknown as { _reservedSeats?: Record<string, unknown> })
+        ._reservedSeats;
+      const reservedCount = reserved === undefined ? 0 : Object.keys(reserved).length;
+      return MATCH_MAX_CLIENTS - this.clients.length - reservedCount;
+    }
+
+    /** Whether the lobby is still waiting on a party it promised seats to. */
+    private hasPendingGroupSeats(): boolean {
+      const now = Date.now();
+      for (const [sessionId, deadline] of this.groupSeatHolds) {
+        if (deadline <= now) {
+          this.groupSeatHolds.delete(sessionId);
+          logger.warn("group seat hold expired; starting without that player", {
+            roomId: this.roomId,
+            sessionId,
+          });
+        }
+      }
+      return this.groupSeatHolds.size > 0;
+    }
+
+    /**
+     * The other members of this player's party who are in this room right now
+     * (M6). Empty for a solo player, and never sent to anyone but the player it
+     * describes (`docs/DECISIONS.md` D58).
+     */
+    private partyMemberIdsFor(sessionId: string): readonly string[] {
+      const partyId = this.partyBySession.get(sessionId);
+      if (partyId === undefined) {
+        return [];
+      }
+      const ids: string[] = [];
+      for (const [otherId, otherParty] of this.partyBySession) {
+        if (otherId !== sessionId && otherParty === partyId && this.connections.has(otherId)) {
+          ids.push(otherId);
+        }
+      }
+      return ids;
+    }
+
     /** Spawn points are assigned in order, so no two players start stacked. */
     private nextSpawnPoint(): { x: number; y: number } {
       const points = this.arena.playerSpawnPoints;
@@ -484,6 +720,10 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
         this.withdrawReservation(sessionId, connection.userId);
       }
       this.world = removePlayerFromWorld(this.world, sessionId);
+      // Their teammates' marker lists shrink by one; the signature change in
+      // `privateStateSignature` is what makes that actually reach them (M6).
+      this.partyBySession.delete(sessionId);
+      this.groupSeatHolds.delete(sessionId);
       this.publishState();
       logger.info("player removed from match", { roomId: this.roomId, sessionId, reason });
     }
@@ -740,6 +980,14 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
         case "waiting":
           return;
         case "countdown":
+          if (this.hasPendingGroupSeats()) {
+            // The room promised a party seats it has not filled yet, so the
+            // countdown is held where it stands rather than running out under
+            // them (M6, `docs/M6_ISSUES.md` §1.8). Bounded: each hold has a
+            // deadline, and `hasPendingGroupSeats` drops the expired ones, so an
+            // absent member delays a match rather than preventing it.
+            return;
+          }
           this.state.countdownRemainingMs = Math.max(
             0,
             this.state.countdownRemainingMs - SIMULATION_DT_MS,
@@ -932,15 +1180,17 @@ export function defineMatchRoom(gameServer: Server, deps: MatchRoomDeps): void {
       if (connection === undefined || player === null) {
         return;
       }
-      const signature = privateStateSignature(player);
+      const partyMemberIds = this.partyMemberIdsFor(sessionId);
+      const signature = privateStateSignature(player, partyMemberIds);
       if (!force && signature === connection.lastPrivateSignature) {
         return;
       }
       connection.lastPrivateSignature = signature;
       // Addressed to exactly one client. There is no broadcast of this data and
-      // no field of it in synchronized state (technical plan §10.3).
+      // no field of it in synchronized state (technical plan §10.3). The party
+      // marker list rides here for the same reason (`docs/DECISIONS.md` D58).
       const target = this.clients.getById(sessionId);
-      target?.send(PRIVATE_STATE_MESSAGE_TYPE, toLocalPlayerState(player));
+      target?.send(PRIVATE_STATE_MESSAGE_TYPE, toLocalPlayerState(player, partyMemberIds));
     }
   }
 

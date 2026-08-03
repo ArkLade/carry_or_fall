@@ -9,5 +9,6 @@
 export * from "./version";
 export * from "./rooms";
 export * from "./messages";
+export * from "./party-code";
 export * from "./http";
 export * from "./validation";

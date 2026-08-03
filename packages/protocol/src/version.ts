@@ -5,7 +5,7 @@
  * understand. The client sends its value at join time (see `ClientHandshake`)
  * so the server can refuse a stale client instead of letting it silently desync.
  */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /**
  * Whether a peer reporting `peerVersion` speaks a compatible protocol. M0 uses
@@ -58,6 +58,56 @@ export const INVALID_MESSAGE_DISCONNECT_CODE = 4002;
  * re-selecting a loadout does not fix an expired session.
  */
 export const UNAUTHORIZED_JOIN_CODE = 4003;
+
+/**
+ * Application-defined code the server refuses a **party** join with (M6): the
+ * code is unknown, has expired, has been replaced by a refreshed one, or names
+ * a party that is already full (concept §15.3 caps it at three).
+ *
+ * One code for all four, and one message, on purpose: distinguishing them would
+ * tell someone guessing codes whether they had found a real party
+ * (`docs/DECISIONS.md` D56). Distinct from {@link PROTOCOL_MISMATCH_CODE} and
+ * {@link UNAUTHORIZED_JOIN_CODE} because the remedy is different again —
+ * refreshing the page does not fix a mistyped code, and neither does signing in.
+ */
+export const PARTY_JOIN_REFUSED_CODE = 4004;
+
+/**
+ * The same refusals, for the **matchmaking** half of a join (M6).
+ *
+ * Colyseus refuses a join in two different places over two different
+ * transports, and they do not accept the same numbers:
+ *
+ * - Refusals raised while a seat is being *consumed* travel over the WebSocket
+ *   and carry a close code, which is why every constant above is in the
+ *   application-defined 4000+ range.
+ * - Refusals raised during *matchmaking* travel over `POST /matchmake/...` and
+ *   become an **HTTP status**. A 4000+ value is not a legal status, and
+ *   constructing that response throws a `RangeError` inside Colyseus's router —
+ *   so the refusal reaches the client as an unrelated internal error and the
+ *   message explaining what to do is lost.
+ *
+ * Found exactly that way: the party room's gate runs at matchmaking time, and
+ * throwing `PARTY_JOIN_REFUSED_CODE` from it produced
+ * `init["status"] must be in the range of 200 to 599` on the server and a
+ * useless error on the client. These are the statuses for that path — the same
+ * refusals, said in a number HTTP can carry.
+ */
+export const PARTY_JOIN_REFUSED_HTTP_STATUS = 403;
+
+/** Matchmaking-time counterpart of {@link INVALID_MESSAGE_DISCONNECT_CODE}. */
+export const INVALID_JOIN_OPTIONS_HTTP_STATUS = 400;
+
+/** Matchmaking-time counterpart of {@link PROTOCOL_MISMATCH_CODE}. */
+export const INCOMPATIBLE_CLIENT_HTTP_STATUS = 426;
+
+/**
+ * Message returned with {@link PARTY_JOIN_REFUSED_CODE}. Says what to do rather
+ * than what went wrong, because what went wrong is deliberately not disclosed.
+ */
+export const PARTY_JOIN_REFUSED_MESSAGE =
+  "That party code did not work. Codes expire, and a party holds three players — " +
+  "ask your friend for a fresh one.";
 
 /**
  * Message the server returns with {@link PROTOCOL_MISMATCH_CODE} when it refuses
