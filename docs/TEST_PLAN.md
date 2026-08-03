@@ -241,6 +241,34 @@ also a more faithful simulation of an actual human keypress.
 warning (all require M4+ networking/M5 accounts, which do not exist yet); supported-browser smoke
 tests beyond Chromium (deferred; no cross-browser requirement yet).
 
+### 2.3.0 Timing rule: wait for the thing, never for a duration that implies it
+
+Everything the browser suite drives is sampled by Phaser inside a
+`requestAnimationFrame` loop; everything it observes is decided by a server stepping at a fixed
+50 ms. Neither clock belongs to the test runner. A helper that holds a key for 80 ms, or expects a
+walk to cover 30 px per poll, is really asserting **how fast the machine is** — which holds on a
+development machine and stops holding on CI, where the failure then looks like a game defect.
+
+Three helpers state the requirement instead of betting on it, each recording the measurement that
+motivated it:
+
+- `pressKey`/`interactFor` hold until the page has actually **rendered frames**. A press that falls
+  between two frames is never sampled; for `interactFor` that would be a **false pass**, since it is
+  used to establish that a player pressed interact and got nothing.
+- `fireAndObserve` holds the attack button until the server publishes the shot, rather than clicking
+  for a fixed 80 ms and hoping a frame caught it.
+- `walkToward` sizes each key hold to the distance remaining, so travel is paid in server time
+  (which no machine can slow) rather than in poll round trips (which every loaded machine does).
+  Measured: the previous fixed-150 ms-burst walker ran at a **25% duty cycle** — 55 px/s against the
+  server's 220 — and a 221 px walk took 2.4 s on an idle machine and long enough on a loaded one for
+  a chaser to cross the map and kill the walker.
+
+**Auditing the margins.** `E2E_MARGIN=1 pnpm test:e2e` prints one `BUDGET` line per budgeted wait,
+with used-against-budget. A budget routinely more than ~75% consumed is a failure waiting for a
+slower machine. Worst margins measured after the M6 audit: `walkToward` 53%, the extraction test's
+idle window 56%, `dieToChasers` 69%, `waitForSnapshot` 70%, `attackChaserUntil` 95%, `pickUpAt` 99%.
+Re-run this whenever the arena's danger changes — adding the M7 boss will change it.
+
 ### 2.3.1 Session durability
 
 The browser suite runs thirty tests against **one** server process and abandons every match by

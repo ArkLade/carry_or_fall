@@ -22,7 +22,7 @@ import {
   gotoGame,
   meetChasers,
   pressKey,
-  rangedAttackFor,
+  fireAndObserve,
   startRunWithLoadout,
   waitForSnapshot,
   walkToOpenLane,
@@ -114,9 +114,7 @@ test.describe("returning_shot is reachable on this arena", () => {
     await walkToward(page, FIRING_X, testArena.openLaneY, 30_000);
     const player = await getLocalPlayer(page);
     await aimAt(page, player.x + 400, player.y);
-    await rangedAttackFor(page, 80);
-
-    const fired = await waitForSnapshot(page, (view) => view.projectiles.length > 0);
+    const fired = await fireAndObserve(page);
     expect(fired.projectiles).toHaveLength(1);
     expect(fired.projectiles[0]!.velocityX).toBeGreaterThan(0);
     expect(fired.projectiles[0]!.canReturn).toBe(true);
@@ -196,8 +194,7 @@ test.describe("run end returns to the loadout screen", () => {
 
     // And the new skill really is the one driving the projectile now.
     await aimAt(page, player.x + 400, player.y);
-    await rangedAttackFor(page, 80);
-    const fired = await waitForSnapshot(page, (view) => view.projectiles.length > 0);
+    const fired = await fireAndObserve(page);
     expect(fired.projectiles[0]!.piercesRemaining).toBe(2);
     expect(fired.projectiles[0]!.bouncesRemaining).toBe(0);
   });

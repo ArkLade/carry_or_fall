@@ -29,7 +29,7 @@ import {
   gotoGame,
   nearestEnemy,
   pickUpAt,
-  rangedAttackFor,
+  fireAndObserve,
   startRunWithLoadout,
   waitForSnapshot,
   walkToArenaPoint,
@@ -38,8 +38,7 @@ import {
 /** Fire once and wait for the server to publish the resulting projectiles. */
 async function fireAndWait(page: import("@playwright/test").Page) {
   await aimAt(page, 700, 270);
-  await rangedAttackFor(page, 80);
-  return waitForSnapshot(page, (snapshot) => snapshot.projectiles.length > 0);
+  return fireAndObserve(page);
 }
 
 /**

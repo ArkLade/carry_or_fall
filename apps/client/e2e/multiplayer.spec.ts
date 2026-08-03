@@ -88,14 +88,25 @@ async function joinSameMatch(pageA: Page, pageB: Page): Promise<void> {
 /**
  * How long an idle player survives once a match starts, with this suite's seed.
  *
- * Not a guess: the three chasers spawn at least ~900 px away (`MATCH_SEED=76`
- * puts them all in the far or lower half), they close at 90 px/s, and contact
- * costs 5 health every 500 ms against 100 health. So the earliest an untouched,
- * motionless player can die is roughly 10 s of travel plus 10 s of grinding.
+ * Not a guess: with `MATCH_SEED=76` the three chasers spawn 1124-1287 px from
+ * the players (measured), close at 90 px/s in a straight line and about 53 px/s
+ * once the divider is in the way (also measured), and contact costs 5 health
+ * every 500 ms against 100 health. So the earliest an untouched, motionless
+ * player can die is roughly 13 s of travel plus 10 s of grinding.
  *
- * The two-client tests keep one client idle while the other acts, so this is the
- * budget that client's stillness has to fit inside. Tests below assert they
- * finished well within it rather than trusting that they did.
+ * **This is a premise check, not the thing that makes the test work.** It fails
+ * loudly if a window that should be short somehow was not — but the window is
+ * short by construction, because both of its parts are paid in *server* time:
+ * `walkToward` sizes its key holds to the distance left (so travel costs
+ * distance ÷ `PLAYER_SPEED`, whatever the machine is doing), and the extraction
+ * channel is a fixed 5 s of simulation. Measured end to end, the window is
+ * 8.8 s against this 20 s budget, and the nearest chaser was still 811 px away
+ * when the extraction completed.
+ *
+ * Before the walker was fixed the same window measured 19.9-22.5 s: the walk was
+ * paid in *machine* time at a 25% duty cycle, so a loaded CI runner stretched it
+ * until a chaser arrived. That is the failure this constant used to absorb and
+ * no longer has to.
  */
 const IDLE_PLAYER_SURVIVES_MS = 20_000;
 
@@ -192,8 +203,16 @@ test.describe("two real browsers play one match (§38 M4 exit criterion 1)", () 
       const snapshot = await getSnapshot(page);
       const target = snapshot.groundLoot[0]!;
 
-      // Both walk to the same item; A gets there and takes it.
+      // **Both** stand over the item before either takes it. That is what
+      // concept §32 means by "two players looting the same item", and it is
+      // also what keeps this test short: the previous order — A walks, A takes
+      // it, B then crosses the arena to try — left one player or the other
+      // standing in the middle of the map, which is where the chasers converge,
+      // for roughly twice as long as the contest itself needs.
+      await walkToArenaPoint(second, target.x, target.y, 40_000);
       await walkToArenaPoint(page, target.x, target.y, 40_000);
+
+      // A takes it, with B in range of the same item the whole time.
       await pickUpAt(page, target.x, target.y, (view) =>
         view.groundLoot.every((loot) => loot.id !== target.id),
       );
@@ -207,10 +226,20 @@ test.describe("two real browsers play one match (§38 M4 exit criterion 1)", () 
       );
       expect(onB.groundLoot.some((loot) => loot.id === target.id)).toBe(false);
 
-      await walkToArenaPoint(second, target.x, target.y, 40_000);
       await interactFor(second, 400);
       const stateB = await getPrivateState(second);
       expect(stateB.inventory.filter((item) => item === target.lootId)).toHaveLength(0);
+
+      // The premise the assertion above rests on, checked rather than assumed:
+      // A never died holding it. A dead player drops their inventory where they
+      // stood (concept §15.2) — which here is exactly where B is standing — so
+      // B ending up with the item would be correct behaviour rather than a
+      // double pickup, and this test would be reporting the opposite of what
+      // happened. Seen once, when a frame-timing fix made B's interact land
+      // reliably for the first time.
+      const playerA = await getLocalPlayer(page);
+      expect(playerA.alive).toBe(true);
+      expect((await getPrivateState(page)).inventory).toContain(target.lootId);
     } finally {
       await second.context().close();
     }

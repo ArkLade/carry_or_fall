@@ -904,7 +904,9 @@ milestone, not implemented yet).
   internet, the suite must be fixed, this limit returned to 30 or lower, and CAPTCHA
   or Turnstile added per D50. Supabase never cleans up anonymous users, so test
   accounts accumulate against the 500 MB free tier until then.
-- **Status:** Approved, to be reverted before M8.
+- **Status:** Superseded. M6 reduced the suite to 5 sign-ins per full run, so the
+  dashboard limit was returned to 30 on 2026-08-02. CAPTCHA or Turnstile remains an
+  M8 obligation per D50.
 
 ## D53. The Supabase CLI is the tool that applies migrations; the dashboard verifies nothing
 
