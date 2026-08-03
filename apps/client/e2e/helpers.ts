@@ -11,20 +11,36 @@
  * makes these assertions stronger than they were: they are assertions about
  * what the server decided.
  *
- * `pressKey` explicitly holds each key down for a short, real duration
- * instead of using Playwright's atomic `press()`. This matters specifically
- * for `LoadoutScene`'s digit/Enter keys, which are read via Phaser's
- * edge-triggered `JustDown` once per animation frame: `press()`'s
- * near-zero-duration keydown+keyup can land and clear within the same
- * frame Phaser's `update()` never observes, silently dropping the input —
- * confirmed empirically (a 5-attempt loop of bare `press("Enter")` calls
- * failed ~60% of the time; holding the key for 50ms was reliable across 20+
- * consecutive runs). A real human keypress is never zero-duration either,
- * so this is a faithful simulation, not a workaround for a client defect.
+ * ## Timing rule: wait for the thing, never for a duration that implies it
+ *
+ * Everything this file drives is sampled by Phaser inside a
+ * `requestAnimationFrame` loop, and everything it observes is decided by a
+ * server stepping at a fixed 50 ms. Neither clock is the test runner's. So a
+ * helper that holds a key for 80 ms, or expects a walk to cover 30 px per poll,
+ * is really asserting how fast the *machine* is — which is fine until CI, where
+ * it stops being true and the failure looks like a game defect.
+ *
+ * Three helpers below apply the rule, each recording the measurement that
+ * motivated it:
+ *
+ * - {@link pressKey} and {@link interactFor} hold until the page has actually
+ *   rendered frames, rather than for a duration chosen because it worked here.
+ * - {@link fireAndObserve} holds the attack button until the server publishes
+ *   the shot, rather than clicking for 80 ms and hoping a frame caught it.
+ * - {@link walkToward} sizes each key hold to the distance left, so travel is
+ *   paid in server time (which no machine can slow) instead of in poll
+ *   round trips (which every loaded machine does).
  */
 import type { Page } from "@playwright/test";
 import { ALL_SKILLS, testArena } from "@carry-or-fall/game-content";
-import type { EnemyView, LocalPlayerState, MatchView, PlayerView } from "@carry-or-fall/protocol";
+import type {
+  EnemyView,
+  LocalPlayerState,
+  MatchView,
+  PartyView,
+  PlayerView,
+} from "@carry-or-fall/protocol";
+import { PLAYER_SPEED } from "@carry-or-fall/simulation-core";
 
 /** Matches `main.ts`'s Phaser game config (and so the arena's dimensions). */
 export const GAME_WIDTH = testArena.width;
@@ -49,6 +65,29 @@ export const MATCH_START_TIMEOUT_MS =
   process.env.CI !== undefined && process.env.CI !== "" ? 60_000 : 30_000;
 
 /**
+ * Report how much of a wall-clock budget a helper actually used, when
+ * `E2E_MARGIN` is set. Silent otherwise.
+ *
+ * These budgets are the suite's timeouts, and a timeout that is routinely 90%
+ * consumed is a failure waiting for a slower machine. Printing used-against-
+ * budget turns "this test feels tight" into a number, and makes re-auditing the
+ * suite one command rather than a research project — which matters most when
+ * something changes the arena's danger, as adding a boss (M7) will.
+ *
+ * Run: `E2E_MARGIN=1 pnpm test:e2e`, then read the `BUDGET` lines.
+ */
+function reportMargin(label: string, startedAt: number, budgetMs: number): void {
+  if (process.env.E2E_MARGIN === undefined) {
+    return;
+  }
+  const used = Date.now() - startedAt;
+  console.log(
+    `BUDGET ${label} used=${String(used)} budget=${String(budgetMs)} ` +
+      `margin=${String(Math.round((100 * (budgetMs - used)) / budgetMs))}%`,
+  );
+}
+
+/**
  * Bring `page` to the front before driving it.
  *
  * This matters only once a test opens a second browser context, and then it
@@ -65,11 +104,60 @@ async function focusPage(page: Page): Promise<void> {
   await page.bringToFront();
 }
 
-/** Hold `key` down for `holdMs`, then release — see the module doc for why this beats `press()`. */
+/**
+ * Block until `page` has actually rendered `frames` animation frames.
+ *
+ * Phaser reads input inside its update loop, which runs on `requestAnimationFrame`.
+ * "Hold the key for 50 ms" is therefore a bet that the page renders faster than
+ * 20 fps — comfortably true on an idle machine and not something a loaded CI
+ * runner with several 1920x1080 canvases guarantees. Waiting for the frames
+ * themselves states the requirement instead of betting on it: however slowly the
+ * page is rendering, the key was down while it sampled.
+ *
+ * Bounded, so a page that stops rendering entirely fails its caller's own
+ * assertion rather than hanging here.
+ */
+async function awaitFrames(page: Page, frames = 2, timeoutMs = 3_000): Promise<void> {
+  await page.evaluate(
+    ([count, limit]) =>
+      new Promise<void>((resolve) => {
+        const deadline = performance.now() + limit;
+        let seen = 0;
+        const tick = (): void => {
+          seen += 1;
+          if (seen >= count || performance.now() >= deadline) {
+            resolve();
+            return;
+          }
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+        setTimeout(resolve, limit);
+      }),
+    [frames, timeoutMs] as const,
+  );
+}
+
+/**
+ * Hold `key` down for at least `holdMs` **and** at least two rendered frames,
+ * then release.
+ *
+ * `LoadoutScene`'s digit and Enter keys are read with Phaser's edge-triggered
+ * `JustDown` once per frame, and a keydown+keyup that both land between two
+ * frames is never observed — the press simply vanishes. That was originally
+ * fixed by holding for 50 ms, measured to be reliable across 20+ consecutive
+ * runs *on a development machine*; it is a frame-rate assumption wearing a
+ * duration's clothes. {@link awaitFrames} makes the requirement literal, so the
+ * press survives a page rendering at 5 fps as readily as one at 60.
+ *
+ * A real human keypress is never zero-duration either, so this remains a
+ * faithful simulation rather than a workaround for a client defect.
+ */
 export async function pressKey(page: Page, key: string, holdMs = 50): Promise<void> {
   await focusPage(page);
   await page.keyboard.down(key);
   await page.waitForTimeout(holdMs);
+  await awaitFrames(page);
   await page.keyboard.up(key);
 }
 
@@ -111,6 +199,46 @@ export async function gotoGame(page: Page): Promise<void> {
   // its keys and be silently dropped.
   await page.waitForFunction(
     () => window.__CARRY_OR_FALL_DEBUG__?.getActiveSceneKey() === "loadout",
+  );
+}
+
+/** This page's party, or `null` when it is not in one (M6). */
+export async function getParty(page: Page): Promise<PartyView | null> {
+  return page.evaluate(() => window.__CARRY_OR_FALL_DEBUG__?.getParty() ?? null);
+}
+
+/** This page's party members inside the current match (M6). */
+export async function getPartyMemberIds(page: Page): Promise<readonly string[]> {
+  return page.evaluate(() => window.__CARRY_OR_FALL_DEBUG__?.getPartyMemberIds() ?? []);
+}
+
+/**
+ * Create a party on `page` and return its join code, read from the page's own
+ * state rather than from the canvas.
+ */
+export async function createParty(page: Page): Promise<string> {
+  await pressKey(page, "KeyP");
+  await page.waitForFunction(
+    () => (window.__CARRY_OR_FALL_DEBUG__?.getParty()?.joinCode.length ?? 0) > 0,
+    undefined,
+    { timeout: MATCH_START_TIMEOUT_MS },
+  );
+  return (await getParty(page))!.joinCode;
+}
+
+/** Join an existing party on `page` by typing its code, exactly as a human would. */
+export async function joinPartyByCode(page: Page, joinCode: string): Promise<void> {
+  await pressKey(page, "KeyJ");
+  await focusPage(page);
+  // Real typing: one keydown per character, which is what the scene's text
+  // entry reads. `type` with a delay keeps each press long enough to land on a
+  // frame, for the same reason `pressKey` holds its key (see the module doc).
+  await page.keyboard.type(joinCode, { delay: 40 });
+  await pressKey(page, "Enter");
+  await page.waitForFunction(
+    () => (window.__CARRY_OR_FALL_DEBUG__?.getParty()?.members.length ?? 0) > 0,
+    undefined,
+    { timeout: MATCH_START_TIMEOUT_MS },
   );
 }
 
@@ -294,11 +422,52 @@ export async function rangedAttackFor(page: Page, durationMs: number): Promise<v
   await page.mouse.up({ button: "right" });
 }
 
-/** Hold `E` (interact — level-triggered, `input/keyboard.ts`) for `durationMs`. */
+/**
+ * Fire the bow and return the snapshot in which the shot appears.
+ *
+ * **Held until the server publishes the projectile, not for a fixed span.**
+ * `PointerInput` is read once per animation frame, so a fixed 80 ms press
+ * assumes the page is rendering at better than 12 fps — true on an idle
+ * machine, and not true on a loaded CI runner with several Phaser canvases
+ * alive. When that assumption broke the press fell between two frames, no shot
+ * was fired at all, and the wait that followed timed out looking for a
+ * projectile that was never created. Holding until the shot is *observed* has
+ * no frame-rate assumption in it.
+ *
+ * The button is released the moment one projectile exists, which is why this
+ * cannot fire twice: `basic_bow`'s attack interval is 650 ms against a 25 ms
+ * poll, so the second shot is 26 polls away. Callers that assert a projectile
+ * count depend on that.
+ *
+ * This is the same shape as the melee `swingAndWait` helper the skills spec
+ * already used for the same reason — a 120 ms swing window is not something a
+ * fixed-duration click can be relied on to land inside.
+ */
+export async function fireAndObserve(page: Page, timeoutMs = 15_000): Promise<MatchView> {
+  await focusPage(page);
+  await page.mouse.down({ button: "right" });
+  try {
+    return await waitForSnapshot(page, (view) => view.projectiles.length > 0, timeoutMs, 25);
+  } finally {
+    await page.mouse.up({ button: "right" });
+  }
+}
+
+/**
+ * Hold `E` (interact — level-triggered, `input/keyboard.ts`) for at least
+ * `durationMs` and at least two rendered frames.
+ *
+ * The frame guarantee matters most where this is used to establish a
+ * **negative** — "B pressed interact and got nothing". If the hold fell between
+ * two frames the client would never have sampled the key, and the test would
+ * pass because the button was never really pressed: a false pass, which is
+ * worse than a flake because nothing ever reports it.
+ */
 export async function interactFor(page: Page, durationMs: number): Promise<void> {
   await focusPage(page);
   await page.keyboard.down("KeyE");
   await page.waitForTimeout(durationMs);
+  await awaitFrames(page);
   await page.keyboard.up("KeyE");
 }
 
@@ -321,6 +490,7 @@ export async function pickUpAt(
   maxMs = 25_000,
 ): Promise<void> {
   await focusPage(page);
+  const budgetStart = Date.now();
   const deadline = Date.now() + maxMs;
   for (let attempt = 0; Date.now() < deadline; attempt += 1) {
     if (attempt > 0) {
@@ -331,6 +501,7 @@ export async function pickUpAt(
       const settled = Date.now() + 1500;
       while (Date.now() < settled) {
         if (done(await getSnapshot(page))) {
+          reportMargin("pickUpAt", budgetStart, maxMs);
           return;
         }
         await page.waitForTimeout(100);
@@ -346,15 +517,83 @@ export async function pickUpAt(
 
 type MoveKey = "KeyA" | "KeyD" | "KeyW" | "KeyS";
 
+/** How close to the target counts as arrived. */
+const ARRIVAL_PX = 24;
+
+/**
+ * The longest a single key hold may last, in milliseconds — about 200 px of
+ * travel at {@link PLAYER_SPEED}.
+ *
+ * It is capped at all because a hold is time the walker is not looking: a leg
+ * that turns out to be blocked wastes the remainder of it. Legs are wall-free
+ * by construction (see {@link walkToArenaPoint}), so this is generous.
+ */
+const MAX_HOLD_MS = 900;
+
+/** The shortest useful hold: several server ticks, so progress is measurable. */
+const MIN_HOLD_MS = 60;
+
+/** A detour is a guess, so it is re-checked often. */
+const SIDESTEP_HOLD_MS = 200;
+
+/**
+ * Fraction of the distance a hold *should* have covered, below which the
+ * walker concludes a wall is in the way. See {@link walkToward}.
+ */
+const STALL_PROGRESS_FRACTION = 0.25;
+
+/**
+ * The shortest hold whose outcome is allowed to diagnose a wall, in pixels of
+ * expected travel.
+ *
+ * A hold shortens as the target nears, and the last few are tiny. Those cannot
+ * tell "blocked" from "arrived a little past the mark": releasing a key does not
+ * stop the player instantly — the neutral input has to reach the server — so a
+ * short hold routinely overshoots and the distance *grows*. Reading that as a
+ * wall sends the walker on a detour away from a target nothing was blocking.
+ * A real wall stops a long hold too, so only long holds get a vote.
+ */
+const STALL_MIN_EXPECTED_PX = 40;
+
 /**
  * Walk the player toward `targetX`/`targetY`, polling the authoritative
- * position rather than assuming travel time (the chasers are closing distance
- * at the same time, and walls can block a leg of the route).
+ * position rather than assuming travel time (walls can block a leg of the
+ * route, and the chasers are closing distance at the same time).
  *
- * Wall routing is **derived from behavior, not from hardcoded coordinates**:
- * the walker moves greedily toward the target, and if it stops making
- * progress it assumes a wall is in the way and sidesteps perpendicular for a
- * moment before resuming.
+ * ## Why each hold is sized to the distance left
+ *
+ * The server stores each client's latest input and **re-applies it every tick
+ * until a newer one arrives** (technical plan §9.3), so while a key is held the
+ * player travels at the full `PLAYER_SPEED` no matter how busy the client is.
+ * Holding is therefore *server* time; everything around it — the position read,
+ * the four key events — is *machine* time.
+ *
+ * The previous walker held for a fixed 150 ms and then released, whatever the
+ * distance. Measured on an unloaded machine, one iteration took ~570 ms of which
+ * 150 ms was held: a **25% duty cycle**, an effective 55 px/s against the
+ * server's 220, and a 221 px walk that should take 1.0 s taking 2.4 s. The ratio
+ * is the problem, not the constant — on a loaded CI runner the machine-time part
+ * grows while the chasers keep moving at 90 px/s, so the same walk took long
+ * enough for one to cross the map and kill the walker. That is not a budget that
+ * needed raising; it is a walker whose speed was set by the machine instead of
+ * by the game.
+ *
+ * Sizing each hold to the distance remaining (capped by {@link MAX_HOLD_MS})
+ * puts the travel back on the server's clock and makes the *number* of
+ * iterations a function of the route rather than of its length: 221 px is now
+ * one hold plus a check, not seven bursts. The keys are still released before
+ * each poll, so travel per iteration is exactly the hold — a slow poll no longer
+ * carries the player past the target and into an oscillation it cannot settle.
+ *
+ * ## Why stalling is now measured against the hold, not against the clock
+ *
+ * "Made no progress" used to mean "moved less than a pixel since the last poll",
+ * counted four times over. That conflated *slow* with *blocked*: under load a
+ * poll legitimately covered almost nothing, the walker read a wall that was not
+ * there, and sidestepped away from an unobstructed target. Now the walker knows
+ * exactly how far a hold should have moved it — `PLAYER_SPEED × holdMs` is
+ * server truth — and treats covering less than a quarter of that as blocked.
+ * One observation is enough, and it means the same thing on any machine.
  */
 export async function walkToward(
   page: Page,
@@ -363,11 +602,15 @@ export async function walkToward(
   maxMs = 20_000,
 ): Promise<void> {
   await focusPage(page);
+  const budgetStart = Date.now();
   const deadline = Date.now() + maxMs;
-  let previousDistance = Number.POSITIVE_INFINITY;
-  let stalledPolls = 0;
+
+  let previousDistance: number | null = null;
+  let expectedProgressPx = 0;
   let sidestep: MoveKey | null = null;
-  let sidestepPollsLeft = 0;
+  let sidestepHoldsLeft = 0;
+  /** Whether the hold just completed was a detour rather than travel. */
+  let wasSidestepping = false;
   /**
    * Detours are for getting around geometry, and this arena has three interior
    * walls. A walk that has tried this many and still not arrived is not being
@@ -385,7 +628,8 @@ export async function walkToward(
     const dx = targetX - x;
     const dy = targetY - y;
     const distance = Math.hypot(dx, dy);
-    if (distance < 24) {
+    if (distance < ARRIVAL_PX) {
+      reportMargin("walkToward", budgetStart, maxMs);
       return;
     }
     // A dead player does not move, so without this the walk would spin to its
@@ -402,24 +646,24 @@ export async function walkToward(
       );
     }
 
-    // "Made no real progress since the last poll" means something is in the
-    // way — the walker is pressed against a wall it needs to go around.
+    // Blocked, judged against how far the *server* should have carried us
+    // during the previous hold rather than against how much wall time passed.
     //
-    // The threshold is deliberately near zero rather than a fraction of an
-    // expected step. A poll covers about 30 px when everything is fast, but
-    // under load — several browser pages and several live matches on one dev
-    // server — a poll can legitimately cover only a few pixels. Treating
-    // *slow* as *blocked* made the walker sidestep away from a target nothing
-    // was blocking, and it then oscillated until its timeout: alive, moving,
-    // and never arriving.
-    if (distance > previousDistance - 1) {
-      stalledPolls += 1;
-    } else {
-      stalledPolls = 0;
-    }
+    // Two holds are excluded from the judgement, and both exclusions are load
+    // bearing. A hold too short to have covered {@link STALL_MIN_EXPECTED_PX}
+    // cannot distinguish a wall from ordinary overshoot near the target. And a
+    // hold spent *sidestepping* moves perpendicular to the target on purpose,
+    // so it usually increases the distance — treating that as evidence of a
+    // wall makes each detour manufacture the justification for the next one,
+    // which is exactly how a 221 px walk turned into a 23 s wander.
+    const progressPx =
+      previousDistance === null ? Number.POSITIVE_INFINITY : previousDistance - distance;
+    const measurable = previousDistance !== null && expectedProgressPx >= STALL_MIN_EXPECTED_PX;
+    const blocked =
+      measurable && !wasSidestepping && progressPx < expectedProgressPx * STALL_PROGRESS_FRACTION;
     previousDistance = distance;
 
-    if (stalledPolls >= 4 && sidestepPollsLeft <= 0 && sidestepsRemaining > 0) {
+    if (blocked && sidestepHoldsLeft <= 0 && sidestepsRemaining > 0) {
       sidestepsRemaining -= 1;
       // Detour *perpendicular* to the direction of travel: pushing further
       // along the blocked axis just presses harder into the wall.
@@ -430,12 +674,12 @@ export async function walkToward(
         sidestep = sidestepSign > 0 ? "KeyA" : "KeyD";
       }
       sidestepSign *= -1;
-      sidestepPollsLeft = 8;
-      stalledPolls = 0;
+      sidestepHoldsLeft = 4;
     }
 
     const keys: MoveKey[] = [];
-    if (sidestepPollsLeft > 0 && sidestep !== null) {
+    let holdMs: number;
+    if (sidestepHoldsLeft > 0 && sidestep !== null) {
       keys.push(sidestep);
       // Keep pushing along the blocked axis too, so the moment the detour
       // clears the obstacle the walker immediately resumes progress.
@@ -444,16 +688,33 @@ export async function walkToward(
       } else if (Math.abs(dy) > 10) {
         keys.push(dy > 0 ? "KeyS" : "KeyW");
       }
-      sidestepPollsLeft -= 1;
+      sidestepHoldsLeft -= 1;
+      wasSidestepping = true;
+      // Short, because a detour is a guess and the walker wants to re-check
+      // whether it has cleared the obstacle.
+      holdMs = SIDESTEP_HOLD_MS;
     } else {
+      wasSidestepping = false;
       if (Math.abs(dx) > 10) keys.push(dx > 0 ? "KeyD" : "KeyA");
       if (Math.abs(dy) > 10) keys.push(dy > 0 ? "KeyS" : "KeyW");
+      // Sized to stop just short of the target rather than sail past it. The
+      // keys are released before the next poll, so travel per iteration is
+      // exactly this hold — the poll's own latency moves the player not at all,
+      // which is what keeps a slow machine from overshooting and oscillating.
+      // Aimed at the *inside* of the arrival circle rather than its edge, so
+      // the overshoot that releasing a key always costs lands the player inside
+      // it instead of just past it.
+      holdMs = Math.min(
+        MAX_HOLD_MS,
+        Math.max(MIN_HOLD_MS, ((distance - ARRIVAL_PX) / PLAYER_SPEED) * 1000),
+      );
     }
+    expectedProgressPx = (PLAYER_SPEED * holdMs) / 1000;
 
     for (const key of keys) {
       await page.keyboard.down(key);
     }
-    await page.waitForTimeout(150);
+    await page.waitForTimeout(holdMs);
     for (const key of keys) {
       await page.keyboard.up(key);
     }
@@ -569,12 +830,14 @@ export async function meetChasers(page: Page): Promise<void> {
 
 /** Let the chasers kill the player, and return their final authoritative state. */
 export async function dieToChasers(page: Page, maxMs = 60_000): Promise<PlayerView> {
+  const budgetStart = Date.now();
   await meetChasers(page);
 
   const deadline = Date.now() + maxMs;
   for (;;) {
     const player = await getLocalPlayer(page);
     if (!player.alive) {
+      reportMargin("dieToChasers", budgetStart, maxMs);
       return player;
     }
     if (Date.now() > deadline) {
@@ -614,10 +877,12 @@ export async function attackChaserUntil(
   predicate: (snapshot: MatchView) => boolean,
   maxMs = 40_000,
 ): Promise<MatchView> {
+  const budgetStart = Date.now();
   const deadline = Date.now() + maxMs;
   for (;;) {
     const snapshot = await getSnapshot(page);
     if (predicate(snapshot)) {
+      reportMargin("attackChaserUntil", budgetStart, maxMs);
       return snapshot;
     }
     if (Date.now() > deadline) {
@@ -679,10 +944,12 @@ export async function waitForSnapshot(
   timeoutMs = 10_000,
   intervalMs = 100,
 ): Promise<MatchView> {
+  const budgetStart = Date.now();
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const snapshot = await getSnapshot(page);
     if (predicate(snapshot)) {
+      reportMargin("waitForSnapshot", budgetStart, timeoutMs);
       return snapshot;
     }
     if (Date.now() > deadline) {

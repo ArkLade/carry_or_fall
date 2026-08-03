@@ -59,6 +59,21 @@ const EXTRACTION_CHANNEL_FILL_ALPHA = 0.4;
 const SHIELD_RING_COLOR = 0x58a6ff;
 const SHIELD_RING_OFFSET_PX = 6;
 
+/**
+ * Party marker (M6; concept §8.4 step 6's "shared visual identifiers", §23.1's
+ * "party status"). A small chevron above a teammate's head — a silhouette, no
+ * particles and no animation, matching concept §24.1's readability rules and
+ * the projectile cues above.
+ *
+ * It is drawn from the per-owner private message, so **only** party members see
+ * it and only over their own teammates (`docs/DECISIONS.md` D58). It grants no
+ * authority: deleting this code would change what is on screen and nothing else.
+ */
+const PARTY_MARKER_COLOR = 0x3fb950;
+const PARTY_MARKER_OFFSET_PX = 14;
+const PARTY_MARKER_HALF_WIDTH_PX = 7;
+const PARTY_MARKER_HEIGHT_PX = 7;
+
 export class WorldView {
   private readonly graphics: Phaser.GameObjects.Graphics;
 
@@ -66,7 +81,12 @@ export class WorldView {
     this.graphics = scene.add.graphics();
   }
 
-  render(view: MatchView, arena: ArenaDefinition, localPlayerId: string | null): void {
+  render(
+    view: MatchView,
+    arena: ArenaDefinition,
+    localPlayerId: string | null,
+    partyMemberIds: readonly string[] = [],
+  ): void {
     this.graphics.clear();
 
     this.graphics.fillStyle(WALL_COLOR, 1);
@@ -151,13 +171,14 @@ export class WorldView {
       );
     }
 
+    const party = new Set(partyMemberIds);
     for (const player of view.players) {
-      this.drawPlayer(player, player.id === localPlayerId);
+      this.drawPlayer(player, player.id === localPlayerId, party.has(player.id));
     }
   }
 
-  /** Draw one player: their active swing, body, shield ring, and aim line. */
-  private drawPlayer(player: PlayerView, isLocal: boolean): void {
+  /** Draw one player: their active swing, body, shield ring, party marker, and aim line. */
+  private drawPlayer(player: PlayerView, isLocal: boolean, isPartyMember: boolean): void {
     // A player whose run has ended is no longer in the match; drawing their
     // body would suggest otherwise.
     if (player.runOver) {
@@ -189,6 +210,19 @@ export class WorldView {
     if (player.shieldHp > 0) {
       this.graphics.lineStyle(3, SHIELD_RING_COLOR, 1);
       this.graphics.strokeCircle(player.x, player.y, player.radius + SHIELD_RING_OFFSET_PX);
+    }
+
+    if (isPartyMember) {
+      const tipY = player.y - player.radius - PARTY_MARKER_OFFSET_PX;
+      this.graphics.fillStyle(PARTY_MARKER_COLOR, 1);
+      this.graphics.fillTriangle(
+        player.x,
+        tipY,
+        player.x - PARTY_MARKER_HALF_WIDTH_PX,
+        tipY + PARTY_MARKER_HEIGHT_PX,
+        player.x + PARTY_MARKER_HALF_WIDTH_PX,
+        tipY + PARTY_MARKER_HEIGHT_PX,
+      );
     }
 
     this.graphics.lineStyle(2, AIM_LINE_COLOR, 1);

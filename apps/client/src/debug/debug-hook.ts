@@ -17,7 +17,7 @@
  * `apps/client/test/build.test.ts`, which asserts the built output does not
  * contain {@link DEBUG_HOOK_KEY}.
  */
-import type { LocalPlayerState, MatchView } from "@carry-or-fall/protocol";
+import type { LocalPlayerState, MatchView, PartyView } from "@carry-or-fall/protocol";
 
 /** The `window` property name the hook is installed under. */
 export const DEBUG_HOOK_KEY = "__CARRY_OR_FALL_DEBUG__";
@@ -33,6 +33,15 @@ export interface CarryOrFallDebugHook {
   readonly getConnectionStatus: () => string;
   /** The currently active Phaser scene's key ("loadout", "play", "boot"), or `null`. */
   readonly getActiveSceneKey: () => string | null;
+  /**
+   * This client's party as the server describes it, or `null` when not in one
+   * (M6). Read-only like everything else here: the browser suite reads the join
+   * code off this rather than out of a canvas, which is the only way one test
+   * context can pass a code to another.
+   */
+  readonly getParty: () => PartyView | null;
+  /** This client's party members *in the current match*, from the private message (M6). */
+  readonly getPartyMemberIds: () => readonly string[];
 }
 
 declare global {

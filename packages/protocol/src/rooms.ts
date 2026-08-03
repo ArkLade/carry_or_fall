@@ -13,4 +13,21 @@ export const FOUNDATION_ROOM = "foundation_room";
 
 export const MATCH_ROOM = "match_room";
 
-export type RoomName = typeof FOUNDATION_ROOM | typeof MATCH_ROOM;
+/**
+ * The party room (M6, technical plan §8.4). One room is one party, capped at
+ * three (concept §15.3).
+ *
+ * It is **not** a match and does not violate D7: it runs no simulation, holds
+ * no world, and allocates no match seat of its own. What it holds is a roster,
+ * a join code, and a leader — the smallest thing that can carry §8.4's seven
+ * steps — and its one consequential action is asking the server to seat its
+ * members into one `MATCH_ROOM` together.
+ *
+ * It is also not a lobby (`docs/DECISIONS.md` D57): there is no room browser,
+ * no waiting for strangers, and nothing about a party is persisted. Rooms of
+ * this name are addressed only by a join code the server minted, and Colyseus
+ * exposes no route that lists them.
+ */
+export const PARTY_ROOM = "party_room";
+
+export type RoomName = typeof FOUNDATION_ROOM | typeof MATCH_ROOM | typeof PARTY_ROOM;

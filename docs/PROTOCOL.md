@@ -1,6 +1,6 @@
 # Network Protocol
 
-Status: **M4 (authoritative multiplayer).** This document is authoritative for the client/server
+Status: **M6 (party and matchmaking).** This document is authoritative for the client/server
 wire contract. It records what exists today and the shapes the next milestones will add, so the contract is designed
 once rather than reinvented per feature (technical plan §10, §35, §46). It is a control document,
 not an authoritative design document; where it and the technical plan disagree, the technical plan
@@ -39,7 +39,7 @@ prevent an incompatible client from joining, showing a refresh/update message in
 
 | Version          | Source                                                        | Status                                                                          |
 | ---------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Protocol version | `PROTOCOL_VERSION` (currently `3`)                            | **Implemented** — the join gate compares on it.                                  |
+| Protocol version | `PROTOCOL_VERSION` (currently `4`)                            | **Implemented** — the join gate compares on it.                                  |
 | Build version    | `GAME_BUILD_VERSION` (server) / `VITE_BUILD_VERSION` (client) | **Implemented** — exchanged, informational.                                      |
 | Content version  | `CONTENT_VERSION` in `@carry-or-fall/game-content`            | **Implemented in M4** — the join gate compares on it (`docs/DECISIONS.md` D34). |
 
@@ -328,3 +328,132 @@ When a change makes an older peer unable to understand the wire format:
 
 A backward-compatible addition (a new optional field, a new message type an old peer simply never
 sends) does not require a version bump, but must still be validated at the boundary.
+
+## 10. The party room (M6)
+
+A second room name, `party_room`, alongside `match_room` and `foundation_room`. It runs no
+simulation and decides no game outcome; its whole authority is deciding who is in a party, which is
+what technical plan §5.1 denies the client ("party membership authorization").
+
+### 10.1 Joining a party
+
+```ts
+export const PARTY_ROOM = "party_room";
+export const MAX_PARTY_SIZE = 3; // concept §15.3
+
+export interface PartyJoinOptions extends ClientHandshake {
+  readonly joinCode: string | null; // null creates a party; a code joins one
+  readonly skillLoadoutIds: readonly string[];
+  readonly accessToken: string | null;
+}
+```
+
+`validatePartyJoinOptions` runs the same handshake, loadout, and token checks the match room runs,
+plus two rules specific to this room:
+
+- `joinCode` must be **present**, `null` included. Colyseus builds its matchmaking filter from the
+  properties a client actually sent, so an omitted `joinCode` is an *empty filter* — which matches
+  any party room, i.e. a stranger's. Refusing the payload keeps that request out of matchmaking
+  entirely (`docs/DECISIONS.md` D56).
+- A non-null `joinCode` must satisfy `isPartyJoinCode`: eight characters over
+  `PARTY_CODE_ALPHABET` (Crockford base32). Shape only — whether a party answers to it, and whether
+  it has expired, is the server's to decide, and `PartyRoom#onJoin` re-checks it against the room it
+  landed in.
+
+Generation is server-only (`apps/server/src/party/join-code.ts`); this package owns the shape
+because both ends check it.
+
+### 10.2 Client → server: four fieldless commands
+
+```ts
+export const QUEUE_MATCH_MESSAGE_TYPE = "queue_match";
+export const CANCEL_QUEUE_MESSAGE_TYPE = "cancel_queue";
+export const REFRESH_JOIN_CODE_MESSAGE_TYPE = "refresh_join_code";
+export const LEAVE_PARTY_MESSAGE_TYPE = "leave_party";
+
+export type PartyCommandMessage = Record<string, never>;
+```
+
+**None of them has a field**, and that is the design rather than an omission: a command that named a
+member would be a client asserting something about another player. The sender is always the subject,
+and the server knows who the sender is because it assigned the session. `validatePartyCommandMessage`
+still runs — an empty body arriving over a socket is untrusted like any other — and any field a
+client attaches is dropped.
+
+Leader-only commands (`queue_match`, `refresh_join_code`) are checked on the server; the client's
+panel is a courtesy.
+
+### 10.3 Server → client: the party, the seat, and refusals
+
+The synchronized `PartyState` carries a join code, a leader session id, a status
+(`forming | queued | in_match`), the code's remaining lifetime, and a member map of
+`{ sessionId, displayName, isLeader, connected }`. **No access token, account id, balance, unlock
+list, or inventory is in it** — being in someone's party is not a licence to read their account, and
+the way that is enforced is by not putting the data in the document the party receives.
+
+```ts
+export const MATCH_READY_MESSAGE_TYPE = "match_ready";
+
+export interface SeatReservationPayload {
+  readonly name: string;
+  readonly sessionId: string;
+  readonly roomId: string;
+  readonly processId: string;
+  readonly publicAddress?: string;
+}
+```
+
+`match_ready` carries the seat the server already reserved for this member in a match room. The
+client turns it into a connection with `consumeSeatReservation`, and everything after the socket
+opens is identical to a solo join — Colyseus runs `MatchRoom#onAuth` with **that member's own**
+recorded join options, so every gate (version, token, loadout, unlocks) still runs per member.
+
+It is validated on arrival (`validateSeatReservationMessage`), which is not a formality: `roomId` is
+what the client opens a socket to and `sessionId` is the identity it will hold for the match.
+
+`party_error` (`{ code, message }`) reports a refusal *inside* a party the member already belongs
+to — not the leader, already queued, no room available, party empty. Refusals at the **door** are
+deliberately coarser; see §10.4.
+
+### 10.4 Refusal codes, and why there are two sets
+
+| Constant                            | Value | Transport | Raised by                                     |
+| ----------------------------------- | ----- | --------- | --------------------------------------------- |
+| `PROTOCOL_MISMATCH_CODE`            | 4001  | WebSocket | seat-consumption gates (match, foundation)    |
+| `INVALID_MESSAGE_DISCONNECT_CODE`   | 4002  | WebSocket | repeated invalid messages (§33)               |
+| `UNAUTHORIZED_JOIN_CODE`            | 4003  | WebSocket | match-room identity/entitlement refusal       |
+| `PARTY_JOIN_REFUSED_CODE`           | 4004  | WebSocket | `PartyRoom#onJoin`'s code check               |
+| `INCOMPATIBLE_CLIENT_HTTP_STATUS`   | 426   | HTTP      | party gate, version mismatch                  |
+| `INVALID_JOIN_OPTIONS_HTTP_STATUS`  | 400   | HTTP      | party gate, malformed payload                 |
+| `PARTY_JOIN_REFUSED_HTTP_STATUS`    | 403   | HTTP      | party gate, unknown/expired/unentitled        |
+
+Colyseus refuses a join in two places over two transports. A refusal raised while a seat is being
+*consumed* travels over the WebSocket and carries a close code, which is why the 4000-range
+constants exist. A refusal raised during *matchmaking* becomes an **HTTP status**, and a 4000-range
+value is not a legal one — constructing that response throws inside Colyseus's router, so the
+refusal reaches the client as an unrelated internal error and the message explaining what to do is
+lost. Found exactly that way while building the party gate. `authorizeHandshake` takes the code to
+use, so one version gate serves both paths.
+
+The party door returns **one code and one message** for unknown, expired, replaced, and full,
+because telling them apart would answer questions for whoever is guessing codes
+(`docs/DECISIONS.md` D56).
+
+### 10.5 What the match room gained
+
+One field, on the **private** message only:
+
+```ts
+export interface LocalPlayerState {
+  // …
+  readonly partyMemberIds: readonly string[]; // this player's own teammates, in this match
+}
+```
+
+The synchronized `MatchState` schema gains nothing. A non-party client is told nothing about who is
+grouped; a party member is told only ids it already holds from its own roster, of players already in
+the public snapshot (`docs/DECISIONS.md` D58).
+
+There is deliberately **no** `partyId` in `MatchJoinOptions`. A party is recorded inside the match
+room by the queue, over an in-process call, before the members connect — so there is no field for a
+client to forge.

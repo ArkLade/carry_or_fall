@@ -274,3 +274,32 @@ export function assertPersistenceConfigured(env: ServerEnv): void {
     );
   }
 }
+
+/**
+ * The same refusal, at the seam where the consequence is chosen (M6.8,
+ * `docs/M6_ISSUES.md` §9; `docs/DECISIONS.md` D61).
+ *
+ * {@link assertPersistenceConfigured} guards the **process**: `index.ts` calls
+ * it before anything is built. This guards the **server**: `createGameServer`
+ * decides, from whether the store is Supabase-backed, that a non-persistent
+ * process mints local identities (`docs/DECISIONS.md` D45) and provisions every
+ * unlock (D49). Both are right for development and wrong for a deployment, and
+ * a check that lives only in the bootstrap is one that a second entry point —
+ * an embedding, a different `main`, a test harness someone later trusts — walks
+ * straight past.
+ *
+ * Takes the raw `NODE_ENV` rather than a parsed {@link ServerEnv} because
+ * `createGameServer` is handed dependencies, not configuration: the store it
+ * was given is the fact that matters, and the environment is the only thing it
+ * needs to look up.
+ */
+export function assertPersistenceSelected(nodeEnv: string | undefined, persistent: boolean): void {
+  if (nodeEnv === "production" && !persistent) {
+    throw new Error(
+      "Refusing to build a production game server on non-persistent progression. " +
+        "Without Supabase the server mints a fresh local identity per join and provisions " +
+        "every unlock, and every account's points, unlocks, and secure-slot rewards are " +
+        "discarded when the process exits.",
+    );
+  }
+}

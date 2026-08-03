@@ -36,11 +36,23 @@ export function authorizeHandshake(
   options: unknown,
   sessionId: string,
   logger: Logger,
+  /**
+   * Which number the refusal carries.
+   *
+   * Defaults to the WebSocket close code, which is right for a gate that runs
+   * when a seat is consumed (the match and foundation rooms). A gate that runs
+   * during **matchmaking** — the party room's, which is a static `onAuth` —
+   * must pass the HTTP counterpart instead: that refusal becomes an HTTP status,
+   * and a 4000+ value is not a legal one, so Colyseus's router throws while
+   * building the response and the client gets an internal error instead of the
+   * refresh prompt technical plan §35 requires (`packages/protocol/src/version.ts`).
+   */
+  refusalCode: number = PROTOCOL_MISMATCH_CODE,
 ): ClientHandshake {
   const result = validateClientHandshake(options);
   if (!result.ok) {
     logger.warn("refused malformed client handshake", { sessionId, error: result.error });
-    throw new ServerError(PROTOCOL_MISMATCH_CODE, INCOMPATIBLE_CLIENT_MESSAGE);
+    throw new ServerError(refusalCode, INCOMPATIBLE_CLIENT_MESSAGE);
   }
 
   if (!isProtocolCompatible(result.value.protocolVersion)) {
@@ -49,7 +61,7 @@ export function authorizeHandshake(
       clientProtocol: result.value.protocolVersion,
       serverProtocol: PROTOCOL_VERSION,
     });
-    throw new ServerError(PROTOCOL_MISMATCH_CODE, INCOMPATIBLE_CLIENT_MESSAGE);
+    throw new ServerError(refusalCode, INCOMPATIBLE_CLIENT_MESSAGE);
   }
 
   if (!isContentCompatible(result.value.contentVersion, CONTENT_VERSION)) {
@@ -61,7 +73,7 @@ export function authorizeHandshake(
       clientContent: result.value.contentVersion,
       serverContent: CONTENT_VERSION,
     });
-    throw new ServerError(PROTOCOL_MISMATCH_CODE, INCOMPATIBLE_CLIENT_MESSAGE);
+    throw new ServerError(refusalCode, INCOMPATIBLE_CLIENT_MESSAGE);
   }
 
   logger.info("accepted client handshake", {

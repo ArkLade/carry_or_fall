@@ -9,6 +9,7 @@
 import Phaser from "phaser";
 
 import { installDebugHook } from "./debug/debug-hook";
+import { partyConnection } from "./party/party-connection";
 import { BootScene } from "./scenes/BootScene";
 import { LoadoutScene } from "./scenes/LoadoutScene";
 import { PlayScene } from "./scenes/PlayScene";
@@ -48,4 +49,8 @@ installDebugHook({
   getLocalPlayerId: () => playScene()?.getLocalPlayerId() ?? null,
   getPrivateState: () => playScene()?.getPrivateState() ?? null,
   getConnectionStatus: () => playScene()?.getConnectionStatus() ?? "connecting",
+  // The party lives outside any scene (it has to outlive `PlayScene`), so the
+  // hook reads it from the connection directly.
+  getParty: () => partyConnection.getParty(),
+  getPartyMemberIds: () => playScene()?.getPartyMemberIds() ?? [],
 });

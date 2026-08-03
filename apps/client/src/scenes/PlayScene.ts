@@ -17,7 +17,12 @@
  * §1.2).
  */
 import { findArena, testArena, type ArenaDefinition } from "@carry-or-fall/game-content";
-import type { InputMessage, MatchView, PlayerView } from "@carry-or-fall/protocol";
+import type {
+  InputMessage,
+  MatchView,
+  PlayerView,
+  SeatReservationPayload,
+} from "@carry-or-fall/protocol";
 import Phaser from "phaser";
 
 import { UNCONFIGURED_ACCOUNT, type AccountState } from "../account/account";
@@ -40,6 +45,12 @@ export interface PlaySceneData {
    * re-reads its own copy of both.
    */
   readonly account?: AccountState;
+  /**
+   * The seat the server reserved for this client when their party queued (M6).
+   * Present only for a party member; a solo run leaves it undefined and takes
+   * the unchanged M4 path.
+   */
+  readonly seatReservation?: SeatReservationPayload | null;
 }
 
 export class PlayScene extends Phaser.Scene {
@@ -53,6 +64,8 @@ export class PlayScene extends Phaser.Scene {
   private statusDetail: string | null = null;
   private arena: ArenaDefinition = testArena;
   private account: AccountState = UNCONFIGURED_ACCOUNT;
+  /** This client's own party members in this match, from the private message (M6). */
+  private partyMemberIds: readonly string[] = [];
 
   constructor() {
     super("play");
@@ -81,6 +94,19 @@ export class PlayScene extends Phaser.Scene {
     return this.status;
   }
 
+  /**
+   * This client's party members in this match, for the dev-only debug hook.
+   *
+   * Read from the connection rather than from the field the renderer uses: that
+   * field is refreshed in `update()`, which runs on an animation frame, and a
+   * backgrounded tab's frames are throttled to a handful a second. A test that
+   * asked a backgrounded page for its teammates would get the value from before
+   * they arrived — a stale answer that looks exactly like a missing feature.
+   */
+  getPartyMemberIds(): readonly string[] {
+    return this.connection?.getPrivateState()?.partyMemberIds ?? [];
+  }
+
   create(data: PlaySceneData = {}): void {
     this.keyboardInput = new KeyboardInput(this);
     this.pointerInput = new PointerInput(this);
@@ -92,10 +118,14 @@ export class PlayScene extends Phaser.Scene {
     this.statusDetail = null;
 
     this.account = data.account ?? UNCONFIGURED_ACCOUNT;
-    void this.connect(data.skillLoadoutIds ?? DEFAULT_SKILL_LOADOUT_IDS);
+    this.partyMemberIds = [];
+    void this.connect(data.skillLoadoutIds ?? DEFAULT_SKILL_LOADOUT_IDS, data.seatReservation);
   }
 
-  private async connect(skillLoadoutIds: readonly string[]): Promise<void> {
+  private async connect(
+    skillLoadoutIds: readonly string[],
+    seatReservation?: SeatReservationPayload | null,
+  ): Promise<void> {
     try {
       // Inside the `try` deliberately. `loadClientEnv` throws on missing or
       // malformed configuration — which is correct, that is a real
@@ -106,7 +136,12 @@ export class PlayScene extends Phaser.Scene {
       // is right; failing silently is not.
       const env = loadClientEnv();
       this.connection = await MatchConnection.join(
-        { ...env, skillLoadoutIds, accessToken: this.account.accessToken },
+        {
+          ...env,
+          skillLoadoutIds,
+          accessToken: this.account.accessToken,
+          seatReservation: seatReservation ?? null,
+        },
         {
           onStatusChange: (status, detail) => {
             this.status = status;
@@ -153,6 +188,9 @@ export class PlayScene extends Phaser.Scene {
     const localPlayerId = connection.getLocalPlayerId();
     const localPlayer = findLocalPlayer(snapshot, localPlayerId);
     const privateState = connection.getPrivateState();
+    // Rendering only: the marker list changes no rule and grants no authority
+    // (`docs/DECISIONS.md` D58).
+    this.partyMemberIds = privateState?.partyMemberIds ?? [];
     const runOver = localPlayer !== null && localPlayer.runOver;
 
     if (runOver || snapshot.phase === "ending") {
@@ -173,7 +211,7 @@ export class PlayScene extends Phaser.Scene {
     const alpha = connection.getInterpolationAlpha(performance.now());
     const view = interpolateMatchView(connection.getPreviousSnapshot(), snapshot, alpha);
 
-    this.worldView.render(view, this.arenaFor(snapshot), localPlayerId);
+    this.worldView.render(view, this.arenaFor(snapshot), localPlayerId, this.partyMemberIds);
     this.combatHud.render(
       snapshot,
       localPlayer,
@@ -235,7 +273,7 @@ export class PlayScene extends Phaser.Scene {
     // Nothing authoritative has arrived yet, so there is nothing to draw but the
     // status. Deliberately not a fabricated world: the client owns no state to
     // show before the server sends some.
-    this.worldView.render(EMPTY_VIEW, this.arena, null);
+    this.worldView.render(EMPTY_VIEW, this.arena, null, []);
     this.combatHud.render(EMPTY_VIEW, null, null, this.status);
     this.inventoryHud.render(null, null);
   }

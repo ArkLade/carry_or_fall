@@ -9,7 +9,9 @@ import { Server } from "@colyseus/core";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import { HEALTH_PATH, type HealthResponse, PROTOCOL_VERSION } from "@carry-or-fall/protocol";
 
+import { assertPersistenceSelected } from "./config/env";
 import type { Logger } from "./logger";
+import { MatchQueue } from "./party/match-queue";
 import { LocalTokenVerifier, SupabaseTokenVerifier, type TokenVerifier } from "./progression/auth";
 import { MemoryStore } from "./progression/memory-store";
 import {
@@ -21,6 +23,7 @@ import type { ProgressionStore } from "./progression/store";
 import { SupabaseStore } from "./progression/supabase-store";
 import { defineFoundationRoom } from "./rooms/FoundationRoom";
 import { defineMatchRoom, type MatchRoomTuning } from "./rooms/MatchRoom";
+import { definePartyRoom, type PartyRoomTuning } from "./rooms/PartyRoom";
 
 const DEFAULT_MAX_CLIENTS = 64;
 
@@ -51,6 +54,13 @@ export interface GameServerDeps {
    * not configurable.
    */
   readonly match?: MatchRoomTuning;
+  /**
+   * Party-room timings (M6). Optional and defaulting to the real values;
+   * integration tests shorten the join-code lifetime so an expiry can be tested
+   * without waiting ten real minutes. The party's size cap is fixed at three
+   * (concept §15.3) and is deliberately not configurable.
+   */
+  readonly party?: PartyRoomTuning;
 }
 
 export interface GameServerHandle {
@@ -79,6 +89,15 @@ export function createGameServer(deps: GameServerDeps): GameServerHandle {
   // The store is what decides, rather than a separate "persistent" flag, so
   // there is only one source of the truth "can this process reach Supabase".
   const persistent = store instanceof SupabaseStore;
+  // The two behaviors below — minting local identities (D45) and provisioning
+  // every unlock (D49) — are chosen right here, from `persistent`. `index.ts`
+  // already refuses to start a production process without Supabase, and this is
+  // the same invariant asserted at the seam where the consequence is decided:
+  // `createGameServer` is a public entry point (every integration test builds
+  // one, and so would any future embedding), and an invariant enforced only in
+  // the process bootstrap is one a second entry point silently escapes.
+  assertPersistenceSelected(process.env["NODE_ENV"], persistent);
+
   const tokenVerifier: TokenVerifier =
     deps.progression?.tokenVerifier ??
     (persistent ? new SupabaseTokenVerifier(store.authClient) : new LocalTokenVerifier());
@@ -154,6 +173,19 @@ export function createGameServer(deps: GameServerDeps): GameServerHandle {
     tokenVerifier,
     unlockGrants,
     ...deps.match,
+  });
+
+  // The party room (M6) and the queue it hands parties to. The queue is
+  // constructed here, once, because it serializes every allocation in this
+  // process — two queues would be two chains and no serialization at all
+  // (`docs/DECISIONS.md` D55).
+  definePartyRoom(gameServer, {
+    logger,
+    store,
+    tokenVerifier,
+    unlockGrants,
+    queue: new MatchQueue({ logger }),
+    ...deps.party,
   });
 
   return { gameServer, httpServer, store };

@@ -15,11 +15,17 @@ import {
   ClientHandshake,
   DiscardItemMessage,
   InputMessage,
+  isPartyErrorCode,
   MatchJoinOptions,
+  PartyCommandMessage,
+  PartyErrorMessage,
+  PartyJoinOptions,
   PointTotalsPayload,
+  SeatReservationPayload,
   SecureItemMessage,
   SettlementMessage,
 } from "./messages";
+import { isPartyJoinCode } from "./party-code";
 import { isBuildVersion } from "./version";
 
 /**
@@ -154,45 +160,169 @@ export function validateMatchJoinOptions(
     return fail("match join options must be an object");
   }
 
-  const rawIds: unknown = input["skillLoadoutIds"];
-  if (!Array.isArray(rawIds)) {
-    return fail("match join options skillLoadoutIds must be an array");
+  const skillLoadoutIds = validateSkillLoadoutIds(input["skillLoadoutIds"], maxSkillIds, "match");
+  if (!skillLoadoutIds.ok) {
+    return fail(skillLoadoutIds.error);
   }
-  if (rawIds.length > maxSkillIds) {
-    return fail(`match join options skillLoadoutIds must hold at most ${String(maxSkillIds)} ids`);
+
+  const accessToken = validateAccessToken(input["accessToken"], "match");
+  if (!accessToken.ok) {
+    return fail(accessToken.error);
   }
-  const skillLoadoutIds: string[] = [];
-  for (const id of rawIds) {
+
+  return ok({
+    ...handshake.value,
+    skillLoadoutIds: skillLoadoutIds.value,
+    accessToken: accessToken.value,
+  });
+}
+
+/**
+ * Validate untrusted **party**-room join options (M6): the same handshake,
+ * loadout, and token the match room takes, plus the one routing decision a
+ * client is allowed to make — `joinCode`.
+ *
+ * An explicit `null` means "create a party"; a string must be a well-formed
+ * code; and the property must be **present either way** — see the comment on
+ * the check itself, which is where the reason lives. Whether a party answers to
+ * that code, whether it has room, and whether the code has expired are all the
+ * server's to decide; this function only refuses payloads that could not be a
+ * code at all, so a typo never becomes a matchmaking query.
+ *
+ * The loadout and token are validated here rather than deferred to the match
+ * join because a party member's loadout *is* what they will carry into the
+ * match: refusing it at the party door is refusing it at the earliest honest
+ * moment, and means a party cannot queue and then have one member bounced.
+ */
+export function validatePartyJoinOptions(
+  input: unknown,
+  maxSkillIds: number,
+): ValidationResult<PartyJoinOptions> {
+  const handshake = validateClientHandshake(input);
+  if (!handshake.ok) {
+    return fail(handshake.error);
+  }
+  if (!isRecord(input)) {
+    return fail("party join options must be an object");
+  }
+
+  // `joinCode` must be **present**, even when it is null, and that is load
+  // bearing rather than pedantic. Colyseus builds its matchmaking filter from
+  // the properties a client actually sent, so a payload that simply omits
+  // `joinCode` would produce an empty filter — which matches *any* party room,
+  // i.e. a stranger's. Requiring the key means such a request is refused here
+  // and never reaches matchmaking. An explicit `null` is safe on its own terms:
+  // it filters for a room whose code is null, and every party's code is a
+  // string. `PartyRoom#onJoin` re-checks the code against the room it landed in
+  // regardless, so this is the first of two independent defences, not the only
+  // one (`apps/server/src/rooms/PartyRoom.ts`).
+  if (!Object.hasOwn(input, "joinCode")) {
+    return fail("party join options must include joinCode (null to create a party)");
+  }
+  const rawCode: unknown = input["joinCode"];
+  let joinCode: string | null = null;
+  if (rawCode !== null) {
+    if (!isPartyJoinCode(rawCode)) {
+      return fail("party join options joinCode must be a well-formed join code");
+    }
+    joinCode = rawCode;
+  }
+
+  const skillLoadoutIds = validateSkillLoadoutIds(input["skillLoadoutIds"], maxSkillIds, "party");
+  if (!skillLoadoutIds.ok) {
+    return fail(skillLoadoutIds.error);
+  }
+
+  const accessToken = validateAccessToken(input["accessToken"], "party");
+  if (!accessToken.ok) {
+    return fail(accessToken.error);
+  }
+
+  return ok({
+    ...handshake.value,
+    joinCode,
+    skillLoadoutIds: skillLoadoutIds.value,
+    accessToken: accessToken.value,
+  });
+}
+
+/**
+ * The pre-run skill selection, bounded. Shared by the match and party join
+ * gates so the two can never drift into accepting different payloads for the
+ * same choice.
+ *
+ * Whether the named skills exist, are unique, and fit the slot budget is
+ * decided by `createSkillLoadout` on the server — the same function the
+ * client's picker uses, run on the trusted side.
+ */
+function validateSkillLoadoutIds(
+  input: unknown,
+  maxSkillIds: number,
+  label: string,
+): ValidationResult<readonly string[]> {
+  if (!Array.isArray(input)) {
+    return fail(`${label} join options skillLoadoutIds must be an array`);
+  }
+  if (input.length > maxSkillIds) {
+    return fail(
+      `${label} join options skillLoadoutIds must hold at most ${String(maxSkillIds)} ids`,
+    );
+  }
+  const ids: string[] = [];
+  for (const id of input) {
     if (typeof id !== "string" || id.length === 0 || id.length > MAX_CONTENT_ID_LENGTH) {
-      return fail("match join options skillLoadoutIds must hold short non-empty strings");
+      return fail(`${label} join options skillLoadoutIds must hold short non-empty strings`);
     }
-    skillLoadoutIds.push(id);
+    ids.push(id);
   }
+  return ok(ids);
+}
 
-  // The access token (M5). Bounded here; *authenticated* only by Supabase Auth,
-  // in the server's `onAuth`. Two separate checks because neither can do the
-  // other's job: this one cannot tell a forged token from a real one, and
-  // Supabase should never be handed a megabyte of attacker-chosen string.
-  //
-  // `undefined` and `null` both mean "no session", which is legal on the wire —
-  // the server decides whether a session is required, because that depends on
-  // whether *it* has a Supabase project to verify against, which is not
-  // something the protocol package can know.
-  const rawToken: unknown = input["accessToken"];
-  let accessToken: string | null = null;
-  if (rawToken !== undefined && rawToken !== null) {
-    if (typeof rawToken !== "string") {
-      return fail("match join options accessToken must be a string when present");
-    }
-    if (rawToken.length === 0 || rawToken.length > MAX_ACCESS_TOKEN_LENGTH) {
-      return fail(
-        `match join options accessToken must be 1..${String(MAX_ACCESS_TOKEN_LENGTH)} characters`,
-      );
-    }
-    accessToken = rawToken;
+/**
+ * The access token (M5). Bounded here; *authenticated* only by Supabase Auth,
+ * in the server's `onAuth`. Two separate checks because neither can do the
+ * other's job: this one cannot tell a forged token from a real one, and
+ * Supabase should never be handed a megabyte of attacker-chosen string.
+ *
+ * `undefined` and `null` both mean "no session", which is legal on the wire —
+ * the server decides whether a session is required, because that depends on
+ * whether *it* has a Supabase project to verify against, which is not something
+ * the protocol package can know.
+ */
+function validateAccessToken(input: unknown, label: string): ValidationResult<string | null> {
+  if (input === undefined || input === null) {
+    return ok(null);
   }
+  if (typeof input !== "string") {
+    return fail(`${label} join options accessToken must be a string when present`);
+  }
+  if (input.length === 0 || input.length > MAX_ACCESS_TOKEN_LENGTH) {
+    return fail(
+      `${label} join options accessToken must be 1..${String(MAX_ACCESS_TOKEN_LENGTH)} characters`,
+    );
+  }
+  return ok(input);
+}
 
-  return ok({ ...handshake.value, skillLoadoutIds, accessToken });
+/**
+ * Validate an untrusted party command (M6): `queue_match`, `cancel_queue`,
+ * `refresh_join_code`, `leave_party`.
+ *
+ * All four carry **no fields**, and this function's job is to say so — an
+ * object, and nothing read out of it. That is not a formality: the alternative
+ * is a handler that reads `message.someField` on a payload nobody checked, and
+ * the reason there is nothing to read is that a party command's subject is
+ * always its sender (`messages.ts`, {@link PartyCommandMessage}).
+ *
+ * Extra properties a client bolts on are ignored rather than rejected, exactly
+ * as {@link validateInputMessage} treats them: nothing reads them, so they are
+ * decoration.
+ */
+export function validatePartyCommandMessage(input: unknown): ValidationResult<PartyCommandMessage> {
+  if (!isRecord(input)) {
+    return fail("party command must be an object");
+  }
+  return ok({});
 }
 
 /**
@@ -373,6 +503,84 @@ function validateContentIdArray(
     ids.push(id);
   }
   return ok(ids);
+}
+
+/**
+ * Longest accepted Colyseus identifier in a seat reservation. Room ids and
+ * session ids are short generated strings; process ids are too. The cap exists
+ * so a malformed or hostile payload cannot make the client build an
+ * arbitrarily long URL out of one.
+ */
+const MAX_ROOM_IDENTIFIER_LENGTH = 128;
+
+/**
+ * Validate a {@link SeatReservationPayload} arriving at the **client** (M6).
+ *
+ * The server built it, but it crosses a socket and the client *acts* on it: it
+ * opens a WebSocket to `roomId` and takes `sessionId` as the identity it will
+ * hold for the whole match. So it is checked before it is used, exactly like
+ * {@link validateSettlementMessage} and {@link validateHealthResponse}.
+ *
+ * `publicAddress` is optional because Colyseus only sets it when the server is
+ * configured with one; absent means "the address you are already talking to".
+ */
+export function validateSeatReservationMessage(
+  input: unknown,
+): ValidationResult<SeatReservationPayload> {
+  if (!isRecord(input)) {
+    return fail("match_ready message must be an object");
+  }
+  const reservation = input["seatReservation"];
+  if (!isRecord(reservation)) {
+    return fail("match_ready seatReservation must be an object");
+  }
+
+  for (const field of ["name", "sessionId", "roomId", "processId"] as const) {
+    const value = reservation[field];
+    if (typeof value !== "string" || value.length === 0) {
+      return fail(`match_ready seatReservation ${field} must be a non-empty string`);
+    }
+    if (value.length > MAX_ROOM_IDENTIFIER_LENGTH) {
+      return fail(
+        `match_ready seatReservation ${field} must be at most ${String(MAX_ROOM_IDENTIFIER_LENGTH)} characters`,
+      );
+    }
+  }
+
+  const publicAddress = reservation["publicAddress"];
+  if (publicAddress !== undefined) {
+    if (typeof publicAddress !== "string" || publicAddress.length > MAX_ROOM_IDENTIFIER_LENGTH) {
+      return fail("match_ready seatReservation publicAddress must be a short string when present");
+    }
+  }
+
+  return ok({
+    name: reservation["name"] as string,
+    sessionId: reservation["sessionId"] as string,
+    roomId: reservation["roomId"] as string,
+    processId: reservation["processId"] as string,
+    ...(publicAddress === undefined ? {} : { publicAddress }),
+  });
+}
+
+/**
+ * Validate a {@link PartyErrorMessage} arriving at the client (M6). The message
+ * is rendered verbatim in the party panel, so its length is bounded and its
+ * code must be one this build knows — a server one version ahead can invent a
+ * code, and the client shows the message rather than a blank panel.
+ */
+export function validatePartyErrorMessage(input: unknown): ValidationResult<PartyErrorMessage> {
+  if (!isRecord(input)) {
+    return fail("party_error message must be an object");
+  }
+  if (!isPartyErrorCode(input["code"])) {
+    return fail("party_error code must be a known party error code");
+  }
+  const message = input["message"];
+  if (typeof message !== "string" || message.length === 0 || message.length > 200) {
+    return fail("party_error message must be a short non-empty string");
+  }
+  return ok({ code: input["code"], message });
 }
 
 /**

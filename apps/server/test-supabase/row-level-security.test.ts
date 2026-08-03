@@ -23,6 +23,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   deleteUser,
   hasBrowserCredentials,
+  reportSignIns,
   serviceClient,
   signInAnonymously,
   type BrowserSession,
@@ -51,6 +52,11 @@ describe.skipIf(!hasBrowserCredentials)("row-level security (docs/DATA_MODEL.md 
   let bob: BrowserSession;
 
   beforeAll(async () => {
+    // Two **fresh** accounts, deliberately, where the rest of the suite pools
+    // them (`docs/DECISIONS.md` D63): property 7 links Alice's anonymous account
+    // to a permanent one, which flips the `is_anonymous` claim for good. An
+    // account that has crossed that boundary can never again stand in for an
+    // anonymous one, so it cannot go in a pool.
     alice = await signInAnonymously();
     bob = await signInAnonymously();
 
@@ -58,12 +64,19 @@ describe.skipIf(!hasBrowserCredentials)("row-level security (docs/DATA_MODEL.md 
     // try (and fail) to read.
     const admin = serviceClient();
     for (const session of [alice, bob]) {
-      await admin.rpc("ensure_account", {
+      // Checked, not fired and forgotten. An `ensure_account` that failed here
+      // used to surface three tests later as "profiles returned no own rows" —
+      // which reads as a broken policy rather than as a failed setup. Seen once,
+      // under load from the other file running in parallel.
+      const provisioned = await admin.rpc("ensure_account", {
         p_user_id: session.userId,
         p_display_name: "Runner-RLS",
         p_default_unlocks: [{ unlock_id: "ricochet", unlock_type: "skill" }],
       });
-      await admin.rpc("settle_match_reward", {
+      if (provisioned.error !== null) {
+        throw new Error(`setup failed: ensure_account: ${provisioned.error.message}`);
+      }
+      const settled = await admin.rpc("settle_match_reward", {
         p_settlement_key: `${crypto.randomUUID()}:${session.userId}`,
         p_match_id: crypto.randomUUID(),
         p_user_id: session.userId,
@@ -74,12 +87,16 @@ describe.skipIf(!hasBrowserCredentials)("row-level security (docs/DATA_MODEL.md 
         p_started_at: new Date().toISOString(),
         p_ended_at: new Date().toISOString(),
       });
+      if (settled.error !== null) {
+        throw new Error(`setup failed: settle_match_reward: ${settled.error.message}`);
+      }
     }
   }, 60_000);
 
   afterAll(async () => {
     await deleteUser(alice.userId);
     await deleteUser(bob.userId);
+    reportSignIns("row-level-security");
   });
 
   it("property 1 — a user reads their own rows", async () => {
