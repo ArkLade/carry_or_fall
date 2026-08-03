@@ -17,6 +17,7 @@ const realServerTests = [
   "apps/server/test/party-isolation.test.ts",
   "apps/server/test/party-queue.test.ts",
   "apps/server/test/party-room.test.ts",
+  "apps/server/test/sdk-reconnection.test.ts",
   "apps/server/test/settlement-adversarial.test.ts",
 ];
 

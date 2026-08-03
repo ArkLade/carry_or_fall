@@ -9,6 +9,7 @@ import { Server } from "@colyseus/core";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import { HEALTH_PATH, type HealthResponse, PROTOCOL_VERSION } from "@carry-or-fall/protocol";
 
+import { assertPersistenceSelected } from "./config/env";
 import type { Logger } from "./logger";
 import { MatchQueue } from "./party/match-queue";
 import { LocalTokenVerifier, SupabaseTokenVerifier, type TokenVerifier } from "./progression/auth";
@@ -88,6 +89,15 @@ export function createGameServer(deps: GameServerDeps): GameServerHandle {
   // The store is what decides, rather than a separate "persistent" flag, so
   // there is only one source of the truth "can this process reach Supabase".
   const persistent = store instanceof SupabaseStore;
+  // The two behaviors below — minting local identities (D45) and provisioning
+  // every unlock (D49) — are chosen right here, from `persistent`. `index.ts`
+  // already refuses to start a production process without Supabase, and this is
+  // the same invariant asserted at the seam where the consequence is decided:
+  // `createGameServer` is a public entry point (every integration test builds
+  // one, and so would any future embedding), and an invariant enforced only in
+  // the process bootstrap is one a second entry point silently escapes.
+  assertPersistenceSelected(process.env["NODE_ENV"], persistent);
+
   const tokenVerifier: TokenVerifier =
     deps.progression?.tokenVerifier ??
     (persistent ? new SupabaseTokenVerifier(store.authClient) : new LocalTokenVerifier());

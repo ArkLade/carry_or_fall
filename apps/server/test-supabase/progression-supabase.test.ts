@@ -10,11 +10,17 @@
  *
  * Skips without credentials (`docs/DECISIONS.md` D46).
  */
-import { describe, it } from "vitest";
+import { afterAll, describe, it } from "vitest";
 
 import { SupabaseStore } from "../src/progression/supabase-store";
 import { describeProgressionContract, type StoreHarness } from "../test/progression-contract";
-import { deleteUser, hasCredentials, serviceClient, signInAnonymously } from "./helpers";
+import {
+  acquireAccounts,
+  hasCredentials,
+  releaseAccounts,
+  reportSignIns,
+  serviceClient,
+} from "./helpers";
 
 if (!hasCredentials) {
   describe.skip("SupabaseStore (no credentials configured)", () => {
@@ -23,11 +29,24 @@ if (!hasCredentials) {
     });
   });
 } else {
+  afterAll(async () => {
+    // Every account this file borrowed is deleted here, so the suite leaves no
+    // anonymous users behind (`docs/DECISIONS.md` D50, D63).
+    await releaseAccounts();
+    reportSignIns("progression-supabase");
+  }, 60_000);
+
   describeProgressionContract("SupabaseStore", async (): Promise<StoreHarness> => {
     // Real users, because every table's foreign key references auth.users and a
     // fabricated UUID would be rejected — which is itself worth exercising.
-    const first = await signInAnonymously();
-    const second = await signInAnonymously();
+    //
+    // **Borrowed, not created.** Each test needs a user with no rows, which is
+    // what `acquireAccounts` hands back: the same starting state a fresh
+    // sign-in gives, without spending an anonymous sign-in from a production
+    // rate limit or leaving a permanent user behind (D52, D63). The contract
+    // suite's isolation is unchanged — it was never about the user being new,
+    // only about the rows being absent.
+    const [first, second] = await acquireAccounts(2);
     const store = new SupabaseStore(
       process.env["SUPABASE_URL"] as string,
       process.env["SUPABASE_SECRET_KEY"] as string,
@@ -35,14 +54,13 @@ if (!hasCredentials) {
 
     return {
       store,
-      userId: first.userId,
-      otherUserId: second.userId,
+      userId: first!.userId,
+      otherUserId: second!.userId,
       newMatchId: () => crypto.randomUUID(),
       cleanup: async () => {
         await store.close();
-        // Cascade removes every progression row these tests wrote.
-        await deleteUser(first.userId);
-        await deleteUser(second.userId);
+        // The accounts stay; their rows are wiped by the next `acquireAccounts`
+        // and the accounts themselves are deleted in `afterAll`.
       },
     };
   });
@@ -52,7 +70,10 @@ if (!hasCredentials) {
       // The claim the memory store cannot support: the guarantee here is a
       // unique index plus `read committed`, not an event loop that happens to
       // serialize callers.
-      const session = await signInAnonymously();
+      // This one wants an account of its own: twelve concurrent settlements on
+      // one key would otherwise race whatever the pool handed the previous
+      // test, and the claim under test is about the *database*'s serialization.
+      const [, , session] = await acquireAccounts(3);
       const admin = serviceClient();
       const store = new SupabaseStore(
         process.env["SUPABASE_URL"] as string,
@@ -62,13 +83,13 @@ if (!hasCredentials) {
       const points = { force: 5, precision: 0, motion: 0, guard: 0, signal: 0 };
 
       try {
-        await store.ensureAccount(session.userId, "Runner-CONCURRENT", []);
+        await store.ensureAccount(session!.userId, "Runner-CONCURRENT", []);
 
         const attempts = Array.from({ length: 12 }, () =>
           store.settleRun({
-            settlementKey: `${matchId}:${session.userId}`,
+            settlementKey: `${matchId}:${session!.userId}`,
             matchId,
-            userId: session.userId,
+            userId: session!.userId,
             outcome: "extracted",
             payload: {
               outcome: "extracted",
@@ -90,7 +111,7 @@ if (!hasCredentials) {
           throw new Error(`expected exactly one applied settlement, got ${String(applied.length)}`);
         }
 
-        const account = await store.loadAccount(session.userId);
+        const account = await store.loadAccount(session!.userId);
         if (account?.balances.force !== points.force) {
           throw new Error(
             `expected force ${String(points.force)}, got ${String(account?.balances.force)}`,
@@ -102,12 +123,12 @@ if (!hasCredentials) {
         const ledger = await admin
           .from("reward_ledger")
           .select("settlement_key")
-          .eq("user_id", session.userId);
+          .eq("user_id", session!.userId);
         if ((ledger.data ?? []).length !== 1) {
           throw new Error(`expected one ledger row, got ${String((ledger.data ?? []).length)}`);
         }
       } finally {
-        await deleteUser(session.userId);
+        await store.close();
       }
     }, 60_000);
   });

@@ -95,13 +95,113 @@ export interface BrowserSession {
   readonly isAnonymous: boolean;
 }
 
+/**
+ * Every anonymous sign-in this file has performed.
+ *
+ * Counted, and printed by {@link reportSignIns}, because the number is the
+ * point: `docs/DECISIONS.md` D52 raised a **production** rate limit from 30 per
+ * hour to 100 for this suite's convenience, and the way that gets reverted is
+ * by measuring how many sign-ins the suite actually needs rather than
+ * estimating.
+ */
+let signInCount = 0;
+
+export function signInsPerformed(): number {
+  return signInCount;
+}
+
 export async function signInAnonymously(): Promise<BrowserSession> {
   const client = browserClient();
+  signInCount += 1;
   const { data, error } = await client.auth.signInAnonymously();
   if (error !== null || data.user === null) {
     throw new Error(`anonymous sign-in failed: ${error?.message ?? "no user returned"}`);
   }
   return { client, userId: data.user.id, isAnonymous: data.user.is_anonymous === true };
+}
+
+/**
+ * Every table a test can leave a row in, in the order they are wiped
+ * (`docs/DATA_MODEL.md` §3). Order does not matter — every foreign key points at
+ * `auth.users`, not at another of these — but the list is exhaustive on purpose:
+ * a table missing from it would let one test see the previous test's rows, which
+ * is the isolation this pooling has to preserve.
+ */
+const PROGRESSION_TABLES = [
+  "reward_ledger",
+  "secure_reservations",
+  "match_results",
+  "loadouts",
+  "unlocks",
+  "point_balances",
+  "profiles",
+] as const;
+
+/**
+ * A pool of anonymous accounts, reused across the tests in one file (M6.11,
+ * `docs/M6_ISSUES.md` §12; `docs/DECISIONS.md` D63).
+ *
+ * **Why reuse rather than create.** Anonymous sign-in is IP rate-limited (30
+ * per hour by default), and Supabase never cleans up anonymous users — so a
+ * suite that created two accounts per test both spent a production rate limit
+ * and left permanent rows behind, on every run, forever. D52 raised the limit
+ * to 100 to paper over it and said in the same breath that the real fix was
+ * here.
+ *
+ * **Why isolation survives.** The property the contract suite needs is *a user
+ * with no rows*, not *a user that did not exist a moment ago*. So an account is
+ * handed back with every progression row deleted, which is the same starting
+ * state a fresh sign-in gives — and the auth user itself carries no state a test
+ * reads. The one thing reuse cannot survive is a test that changes the *account*
+ * rather than its rows (linking an anonymous user to a permanent one flips the
+ * `is_anonymous` claim permanently), and that test asks for a fresh sign-in
+ * explicitly.
+ */
+const pool: BrowserSession[] = [];
+let borrowed = 0;
+
+/**
+ * Take `count` accounts, growing the pool only when it is too small. Every
+ * account comes back wiped clean.
+ */
+export async function acquireAccounts(count: number): Promise<BrowserSession[]> {
+  while (pool.length < count) {
+    pool.push(await signInAnonymously());
+  }
+  borrowed = Math.max(borrowed, count);
+  const taken = pool.slice(0, count);
+  await Promise.all(taken.map((session) => resetAccount(session.userId)));
+  return taken;
+}
+
+/** Delete every progression row this user owns, leaving the auth user intact. */
+export async function resetAccount(userId: string): Promise<void> {
+  const admin = serviceClient();
+  for (const table of PROGRESSION_TABLES) {
+    await admin.from(table).delete().eq("user_id", userId);
+  }
+}
+
+/**
+ * Delete every pooled auth user. Called from a file's teardown, so the suite
+ * leaves a project no dirtier than it found it — the accumulation half of D50.
+ */
+export async function releaseAccounts(): Promise<void> {
+  const users = pool.splice(0);
+  borrowed = 0;
+  await Promise.all(users.map((session) => deleteUser(session.userId)));
+}
+
+/**
+ * Print the sign-in count for this file. Read from the run's output and put in
+ * the milestone report, so the number that decides whether the dashboard limit
+ * can go back to 30 is measured rather than guessed.
+ */
+export function reportSignIns(label: string): void {
+  console.info(
+    `[supabase suite] ${label}: ${String(signInCount)} anonymous sign-in(s), ` +
+      `${String(pool.length)} pooled account(s)`,
+  );
 }
 
 /**
