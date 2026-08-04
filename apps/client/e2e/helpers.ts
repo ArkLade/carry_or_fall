@@ -34,6 +34,7 @@
 import type { Page } from "@playwright/test";
 import { ALL_SKILLS, testArena } from "@carry-or-fall/game-content";
 import type {
+  BossView,
   EnemyView,
   LocalPlayerState,
   MatchView,
@@ -75,8 +76,15 @@ export const MATCH_START_TIMEOUT_MS =
  * something changes the arena's danger, as adding a boss (M7) will.
  *
  * Run: `E2E_MARGIN=1 pnpm test:e2e`, then read the `BUDGET` lines.
+ *
+ * **Exported, because a helper is not the only thing that spends a budget.** A
+ * spec that waits inline — `boss.spec.ts` stands a player inside the Warden's
+ * aggro radius while it watches the boss leave its lair — spends one too, and a
+ * window the audit cannot see is a window the audit cannot certify. That is
+ * exactly how the M7 audit came to report a 72% floor for a suite containing a
+ * wait it had never measured (`docs/TEST_PLAN.md` §2.3.0).
  */
-function reportMargin(label: string, startedAt: number, budgetMs: number): void {
+export function reportMargin(label: string, startedAt: number, budgetMs: number): void {
   if (process.env.E2E_MARGIN === undefined) {
     return;
   }
@@ -302,6 +310,22 @@ export async function getLocalPlayer(page: Page): Promise<PlayerView> {
     throw new Error("expected this client to have a player in the authoritative snapshot");
   }
   return player;
+}
+
+/**
+ * The boss as the server currently sees it, or `null` in an arena without one.
+ *
+ * Read **inside the page** and returned alone, for the reason
+ * {@link getLocalPlayer} records: a full {@link getSnapshot} ships every enemy,
+ * projectile, and loot entity across the debugging protocol, and a poll that
+ * pays that price several times a second is slow enough to matter. It matters
+ * more here than anywhere else in the file, because the only caller polls this
+ * while its player is **standing inside the boss's aggro radius** — where the
+ * Warden deals a measured 16-22 health per second (`docs/TEST_PLAN.md`
+ * §2.3.0c). Every millisecond of poll latency there is paid in health.
+ */
+export async function getBoss(page: Page): Promise<BossView | null> {
+  return page.evaluate(() => window.__CARRY_OR_FALL_DEBUG__?.getSnapshot()?.boss ?? null);
 }
 
 function digitKeyFor(skillId: string): string {

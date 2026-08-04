@@ -223,6 +223,27 @@ The lair sits in the **upper far quadrant**, far enough from every one of those 
 radius cannot reach them. §13 re-runs the margin audit and reports the table; anything under about
 40% is fixed in this milestone rather than left for CI.
 
+**The list above is exhaustive of the routes that _avoid_ the boss, and that is not the same as the
+suite.** `boss.spec.ts` walks into the lair on purpose — it is the one spec whose subject is the
+boss — so no placement of the lair bounds its exposure, and the by-construction argument does not
+reach it. Read as covering the whole suite, it produced a margin audit that certified a floor for a
+spec it had never measured (`docs/TEST_PLAN.md` §5, "The margin audit").
+
+Two things follow, both done rather than deferred:
+
+- The audit must be able to see waits that live **in a spec**, not only in `helpers.ts`.
+  `reportMargin` is exported for that, and `boss.spec.ts` reports its own observation window.
+- `boss.spec.ts`'s bound is not distance but **health**. A stationary player inside the Warden's
+  aggro radius loses ~16 health per second, so the length of that spec's stay is a health budget
+  wearing a duration's clothes; it is measured, capped at 2000 ms, and asserted in
+  `packages/simulation-core/src/boss.test.ts` so CI catches a later content change that invalidates
+  it. Numbers in `docs/TEST_PLAN.md` §2.3.0c.
+
+Disengagement itself is **not** tight, which is what makes the leash worth having rather than
+decorative: a full-health player who aggros the Warden and retreats immediately takes zero damage
+(`awake` is measured lair-to-player, so 80 px of retreat ends the engagement against a 400 ms
+shortest wind-up).
+
 ---
 
 ## §2. M7.1 — Content: the boss, its core, and the rare skill

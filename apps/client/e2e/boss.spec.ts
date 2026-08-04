@@ -24,13 +24,15 @@
  * server rule, and a browser adds nothing to the evidence but minutes.
  */
 import { testArena, warden } from "@carry-or-fall/game-content";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import {
   DEFAULT_SKILL_LOADOUT_IDS,
+  getBoss,
   getLocalPlayer,
   getSnapshot,
   gotoGame,
+  reportMargin,
   startRunWithLoadout,
   walkToArenaPoint,
   walkToward,
@@ -41,6 +43,84 @@ const LAIR = testArena.bossSpawnPoint ?? { x: 0, y: 0 };
 /** How far the boss currently is from its lair. */
 function distanceFromLair(boss: { x: number; y: number }): number {
   return Math.hypot(boss.x - LAIR.x, boss.y - LAIR.y);
+}
+
+/** How far the boss must be from its lair to count as having left it. */
+const LEFT_ITS_LAIR_PX = 20;
+
+/**
+ * How long the player may stand inside the aggro radius watching the boss come
+ * out to meet it. **A health budget wearing a duration's clothes**, and the one
+ * number in this file that had to be measured rather than chosen.
+ *
+ * The observation cannot be made instantly, and the reason is content: at the
+ * approach point the player is 240 px from the lair, `warden_nova` reaches
+ * 276 px, and a telegraphing boss does not move (`simulation-core/src/boss.ts`
+ * commits it for the wind-up). So the Warden's *first* act is to stand still for
+ * `warden_nova.telegraphMs` — 900 ms — and it only clears
+ * {@link LEFT_ITS_LAIR_PX} at **t ≈ 1000 ms**. There is no route to this
+ * evidence that does not cost the player one nova.
+ *
+ * What it must not cost is an *unbounded* stay. Measured against the real
+ * simulation, a stationary player at the approach point loses health at
+ * 16-22 per second — the Warden's opening rotation is nova 26 at 0.9 s, cleave
+ * 14 at ~2.2 s, slam 20 at ~3.0 s — and the three chasers, which have been
+ * following since spawn and have no leash, arrive about a second behind the
+ * player and add 5 per touch. Standing for 3-4 s is fatal from full health. The
+ * previous shape of this test used two `expect.poll` blocks with 20-second
+ * timeouts, so the stay was bounded by *how fast the machine could answer* —
+ * which on an idle machine is ~2 s and on a loaded CI runner is not.
+ *
+ * 2000 ms is ~1.9x the ~1050 ms the evidence actually needs, and the worst case
+ * it can cost was measured end-to-end (spawn -> approach -> full dwell ->
+ * retreat) at 40 health remaining on the slowest walker duty cycle that still
+ * reaches the lair. The loop below also returns the instant the evidence is in,
+ * so the typical cost is one nova and the player leaves at 74.
+ */
+const SORTIE_BUDGET_MS = 2_000;
+
+/** What one visit to the aggro radius saw the boss do. */
+interface Sortie {
+  readonly awake: boolean;
+  readonly worstLairDistance: number;
+}
+
+/**
+ * Stand still and watch, returning the moment the boss is both awake and
+ * demonstrably out of its lair — or when {@link SORTIE_BUDGET_MS} runs out,
+ * with whatever was seen, so the caller's assertions report the shortfall
+ * rather than a timeout.
+ *
+ * One cheap `getBoss` per iteration rather than a whole-match `getSnapshot`:
+ * see that helper's note. `awake` is sticky and `worstLairDistance` is a running
+ * maximum, so a sample that lands after the boss has already turned for home
+ * cannot erase evidence an earlier one collected.
+ */
+async function watchSortie(page: Page): Promise<Sortie> {
+  const budgetStart = Date.now();
+  const deadline = budgetStart + SORTIE_BUDGET_MS;
+  let awake = false;
+  let worstLairDistance = 0;
+  for (;;) {
+    const boss = await getBoss(page);
+    if (boss !== null) {
+      awake ||= boss.awake;
+      worstLairDistance = Math.max(worstLairDistance, distanceFromLair(boss));
+    }
+    if (awake && worstLairDistance > LEFT_ITS_LAIR_PX) {
+      break;
+    }
+    if (Date.now() >= deadline) {
+      break;
+    }
+    // Throttled, unlike an `expect.poll`, and deliberately short: ~80 samples
+    // across the budget against a boss that clears the threshold at ~1000 ms,
+    // so the evidence is caught promptly without spinning a tight loop on the
+    // loaded machine this whole change exists to survive.
+    await page.waitForTimeout(25);
+  }
+  reportMargin("bossSortie", budgetStart, SORTIE_BUDGET_MS);
+  return { awake, worstLairDistance };
 }
 
 test.describe("the boss (concept §14.3)", () => {
@@ -100,28 +180,21 @@ test.describe("the boss (concept §14.3)", () => {
     // of the lair and on the boss's own side of the central divider.
     await walkToArenaPoint(page, LAIR.x - warden.aggroRadiusPx + 80, LAIR.y, 60_000);
 
-    await expect
-      .poll(async () => (await getSnapshot(page)).boss?.awake ?? false, { timeout: 20_000 })
-      .toBe(true);
+    // Stand and watch, for a **bounded** time (see {@link SORTIE_BUDGET_MS}).
+    // Both facts are collected in one window, from one cheap read, because the
+    // window is paid for in the player's health rather than in wall clock.
+    const sortie = await watchSortie(page);
 
-    // It left its lair to come and meet us. Asserted **here**, while the player
-    // is standing in the aggro radius, rather than after the retreat: the boss
-    // walks home at 150 px/s and the player runs at 220, so by the end of even
-    // one retreat leg it is usually back on its spawn and "did it move" reads as
-    // "no". (Found exactly that way, by this test failing on a fast machine.)
-    let worst = 0;
-    await expect
-      .poll(
-        async () => {
-          const boss = (await getSnapshot(page)).boss;
-          if (boss !== null) {
-            worst = Math.max(worst, distanceFromLair(boss));
-          }
-          return worst;
-        },
-        { timeout: 20_000 },
-      )
-      .toBeGreaterThan(20);
+    expect(sortie.awake).toBe(true);
+
+    // It left its lair to come and meet us. Asserted from **this** window, while
+    // the player is standing in the aggro radius, rather than after the retreat:
+    // the boss walks home at 150 px/s and the player runs at 220, so by the end
+    // of even one retreat leg it is usually back on its spawn and "did it move"
+    // reads as "no". (Found exactly that way, by this test failing on a fast
+    // machine.)
+    expect(sortie.worstLairDistance).toBeGreaterThan(LEFT_ITS_LAIR_PX);
+    let worst = sortie.worstLairDistance;
 
     // Now run. The boss gives chase and is stopped by its leash — the bound that
     // makes "the boss is over there" a fact about the map rather than a hope
@@ -132,7 +205,9 @@ test.describe("the boss (concept §14.3)", () => {
     // page Playwright is closing.
     for (const legX of [LAIR.x - 400, LAIR.x - 600, 700]) {
       await walkToward(page, legX, 250, 30_000);
-      const boss = (await getSnapshot(page)).boss;
+      // The cheap read again: between legs the player is standing still, and
+      // the first leg is still partly inside the aggro radius.
+      const boss = await getBoss(page);
       if (boss !== null) {
         worst = Math.max(worst, distanceFromLair(boss));
       }
