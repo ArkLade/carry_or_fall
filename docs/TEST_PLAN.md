@@ -267,7 +267,66 @@ motivated it:
 with used-against-budget. A budget routinely more than ~75% consumed is a failure waiting for a
 slower machine. Worst margins measured after the M6 audit: `walkToward` 53%, the extraction test's
 idle window 56%, `dieToChasers` 69%, `waitForSnapshot` 70%, `attackChaserUntil` 95%, `pickUpAt` 99%.
-Re-run this whenever the arena's danger changes — adding the M7 boss will change it.
+Re-run this whenever the arena's danger changes — adding the M7 boss did change it.
+
+**A wait the audit cannot see is a wait the audit cannot certify.** `reportMargin` is exported for
+exactly that reason: a spec that waits inline spends a budget just as a helper does, and until M7
+the audit only ever measured `helpers.ts`. The M7 boss suite added a wait *inside a spec* — and it
+was the one wait in the suite whose cost is not time but the player's health (§2.3.0c). It was
+therefore invisible to a table that nevertheless reported a 72% floor for the whole suite. Any new
+inline wait calls `reportMargin`.
+
+### 2.3.0b Two ways to invalidate a browser run without failing a test
+
+Both of these have cost a real run, and both look exactly like a product defect —
+every test failing at "the client has not joined a room" — so they are written
+down rather than re-diagnosed each time.
+
+**A stale server on port 2567 or 5173.** `playwright.config.ts` sets
+`reuseExistingServer: !isCI`, which is right for local iteration and lethal
+after a previous run left a server behind: the suite silently adopts a process
+started with different configuration, and every join hangs. **Kill anything
+listening on 2567 and 5173 before a browser run.** Checking is not enough if you
+check before the wrong step — check immediately before invoking the suite.
+
+**Editing client source while the suite runs.** The Vite dev server is watching,
+so a save hot-reloads the page mid-test and the run in progress loses its room.
+This is not a flake to re-run past; it is the edit. Finish editing, then run.
+
+### 2.3.0c Budgets paid in health, not in wall clock
+
+`walkToward`'s rule — spend server time, not machine time — assumes the only cost of a slow machine
+is *waiting*. `apps/client/e2e/boss.spec.ts` is the suite's one exception, and it is worth stating
+because the assumption is otherwise invisible: that spec deliberately walks a player **into** the
+Warden's aggro radius and stands still there, and a stationary player inside that radius is losing
+health the whole time. A poll round trip there is not merely slow; it is damage.
+
+Measured against the real simulation (`packages/simulation-core/src/boss.test.ts`, "disengagement: a
+visitor at full health can leave", which is CI's copy of these numbers):
+
+| Fact                                                                | Measured                  |
+| ------------------------------------------------------------------- | ------------------------- |
+| Warden damage to a player who aggros it and retreats immediately     | **0**                     |
+| Warden damage per second to a player standing at the approach point  | **~16** (100 hp in 6.3 s) |
+| …standing adjacent to the boss                                       | **~22** (100 hp in 4.6 s) |
+| Time before the boss is demonstrably out of its lair (>20 px)        | **~1000 ms**              |
+| Health that observation costs (one `warden_nova`)                    | **26 of 100**             |
+| Chasers' distance behind the player on arrival at the lair           | **~100-185 px** (~1-2 s)  |
+
+The boss's *first* act at the approach point is a 900 ms `warden_nova` wind-up, and a telegraphing
+boss does not move — so there is no route to the evidence "it left its lair" that does not cost one
+nova. What there is a route to is bounding the stay: `boss.spec.ts`'s `SORTIE_BUDGET_MS` is 2000 ms,
+~1.9x the ~1050 ms the evidence needs, and the worst case it can cost was measured end-to-end at
+**40 of 100 health remaining**. The shape it replaced — two `expect.poll` blocks with 20-second
+timeouts — bounded the stay by *how fast the machine could answer*, which on an idle machine is
+~2 s (the player leaves at 74 health) and on a loaded CI runner is not (3-4 s of standing is fatal).
+That is what failed, and it failed as `walkToward: the player died en route`.
+
+**This is not a balance defect in the boss.** Disengagement is free: a player who aggros the Warden
+and turns around takes **zero** damage, because `awake` is measured from the *lair* to the player
+(320 px) rather than from the boss, so 80 px of retreat — under half a second — ends the engagement
+permanently, against a boss whose shortest wind-up is 400 ms. The leash is doing its job; the test
+was standing still in front of it.
 
 ### 2.3.1 Session durability
 
@@ -355,8 +414,49 @@ Each milestone's exit criteria (technical plan §38) imply its tests:
   inventory, secure slot, loot, progression, and settlement (§2.6). Delivered as three layers:
   server integration suites for the queue and the isolation attacks, and three real browser contexts
   forming a party and landing in one room (`apps/client/e2e/party.spec.ts`).
-- **M7–M9:** boss-core decisions, deployment smoke, and load/soak/perf per the layers above. PvP
-  damage and the concept §16 solo/group balance rules are M7.5 (D59).
+- **M7 (boss and rare skill):** the three boss-core decisions produce three different outcomes and
+  cannot be combined, and settlement stays idempotent with a boss core in it. Both need
+  **adversarial** evidence, and both get M5's treatment rather than a happy path:
+  `apps/server/test/boss-core-decision.test.ts` attacks the decision over a real socket — every
+  slot tried after activation, activation racing a secure request inside one 50 ms step in both
+  orders, a payload naming a skill instead of a slot — and
+  `apps/server/test/settlement-adversarial.test.ts`'s second block re-runs M5's whole set (settled
+  twice, settled concurrently, retried after an indistinguishable failure, replayed by the client,
+  crashed on each side of the write) against a settlement carrying a core. The browser layer
+  (`apps/client/e2e/boss.spec.ts`) covers only what a browser can add: that the boss reaches the
+  client at all, and that its leash holds — which is what the rest of the browser suite's timing
+  margins rest on.
+- **M8–M9:** deployment smoke and load/soak/perf per the layers above. PvP damage and the concept
+  §16 solo/group balance rules are M7.5 (D59).
+
+### 4.1 The §13.4 hard caps, and which are reachable from live gameplay
+
+The eight caps live in `packages/simulation-core/src/combat/caps.ts` and are enforced in shared
+code. "Reachable" here means *a player can drive this cap through the real pipeline* — fire a real
+weapon, with real skills, and have the clamp decide the outcome — as opposed to being provable only
+by calling the clamp directly. A cap that only its own unit test can reach is a cap nobody has
+checked is wired in.
+
+Through M6, two were unreachable, and `docs/M1_ISSUES.md` said so rather than pretending otherwise.
+M7's `split_return` makes both reachable, because it is the first content that creates a child
+projectile at all.
+
+| #   | Cap                                  | Reachable | Driven from live gameplay by                                              |
+| --- | ------------------------------------ | --------- | ------------------------------------------------------------------------- |
+| 1   | projectiles per attack               | Yes       | `multishot` + a bow volley (`combat/ranged.test.ts`, `split-caps.test.ts`) |
+| 2   | bounces per projectile               | Yes       | `ricochet` off arena walls (`e2e/skills.spec.ts`)                          |
+| 3   | pierces per projectile               | Yes       | `piercing_rounds` through chasers (`e2e/skills.spec.ts`)                   |
+| 4   | returns per projectile               | Yes       | `returning_shot` down the open lane (`e2e/arena.spec.ts`)                  |
+| 5   | a child projectile may not split     | **Yes (M7)** | `split_return`: a split child that hits a target produces no grandchild (`split-caps.test.ts`) |
+| 6   | a child may not create a parent effect | **Yes (M7)** | `split_return`: a split child that expires does not return (`split-caps.test.ts`) |
+| 7   | active projectiles per player        | Yes       | sustained fire with `multishot` + `split_return` (`skill-caps-under-load.test.ts`, `split-caps.test.ts`) |
+| 8   | simultaneous effect instances        | Yes       | skill effects aggregated under load (`skill-caps-under-load.test.ts`)      |
+
+Caps 5 and 6 are tested the way an authority rule has to be: with a **liar**. `split-caps.test.ts`
+constructs a child projectile that claims `splitCount: 3`, and another that claims
+`canReturn: true`, and asserts the engine refuses both — the gate reads the child *flag*, not the
+projectile's own account of what it is allowed to do. An identical non-child projectile is run
+alongside as the control, so the test cannot pass because nothing happened.
 
 ## 5. Commands and CI
 
@@ -368,6 +468,46 @@ Each milestone's exit criteria (technical plan §38) imply its tests:
 | `pnpm build`              | Production build         | Yes        |
 | `pnpm test:e2e`           | Browser (Playwright)     | Yes, as a separate job (D32) |
 | `pnpm test:supabase`      | Real Supabase project    | **No** — needs credentials (D46) |
+
+### The margin audit
+
+`E2E_MARGIN=1 pnpm test:e2e` prints a `BUDGET` line per timed wait (§2.3.0). It is the audit that
+answers "did this change make the browser suite tighter" with a number, against a **40% floor**.
+
+M7 added a boss to the shared arena, so it was re-run at the end of that milestone — and the first
+run of it was wrong in a way worth recording, because the mistake is easy to repeat. It reported a
+72% worst margin and justified it with "the boss cannot be the reason a later run gets tighter,
+because it is leashed to a lair at least a leash radius from every route the suite walks". That
+sentence is true of every spec **except the one whose subject is the boss**: `boss.spec.ts` walks
+into the lair deliberately. The audit had measured the routes that avoid the boss and concluded
+something about the suite. It also could not have measured the wait that mattered, because that wait
+was inline in the spec and only `helpers.ts` called `reportMargin` (§2.3.0).
+
+Both are fixed: `reportMargin` is exported, and the two budgets that were spent inside specs rather
+than inside helpers — `boss.spec.ts`'s observation window and `multiplayer.spec.ts`'s extraction
+idle window — now report. The by-construction claim still holds where it was actually meant, for
+the routes the *rest* of the suite walks; for `boss.spec.ts` the bound is a measured health budget
+instead (§2.3.0c).
+
+**Re-run with every spec covered** (worst margin per label across a full 35-test run, two
+consecutive runs — one with a repository-root `.env` present and one with it renamed away):
+
+| Budget                                    | Worst margin | Worst case             |
+| ----------------------------------------- | ------------ | ---------------------- |
+| `extractionIdleWindow` (was never audited) | **48%**      | 10.4 s of 20 s         |
+| `waitForSnapshot`                          | 70%          | 2.4 s of 8 s           |
+| `walkToward` (50 calls)                    | 70%          | 12.0 s of 40 s         |
+| `dieToChasers`                             | 72%          | 16.9 s of 60 s         |
+| `attackChaserUntil`                        | 95%          | 2.3 s of 45 s          |
+| `bossSortie` (was never audited)           | 97%          | 59 ms of 2000 ms       |
+| `pickUpAt`                                 | 98%          | 429 ms of 25 s         |
+
+Nothing is under the 40% floor. The two previously unaudited budgets bracket the range: the
+extraction idle window is now the suite's tightest at 48%, and it was invisible while the audit
+reported a 72% floor — which is the whole reason for this section. `bossSortie` finishes in ~50 ms
+because `walkToArenaPoint`'s own final approach already spends about a second inside the aggro
+radius, so the boss has usually left its lair before the window opens; the 2000 ms budget is sized
+for the case where it has not (§2.3.0c), not for the case measured here.
 
 `pnpm test:supabase` **pools and reuses anonymous accounts** rather than creating one per test
 (`docs/DECISIONS.md` D63). Anonymous sign-in is a production rate limit and Supabase never cleans up

@@ -12,6 +12,7 @@
  */
 import { HealthResponse } from "./http";
 import {
+  ActivateCoreMessage,
   ClientHandshake,
   DiscardItemMessage,
   InputMessage,
@@ -423,6 +424,26 @@ export function validateDiscardItemMessage(
 }
 
 /**
+ * Validate an untrusted {@link ActivateCoreMessage} (M7). The same bounds the
+ * other two inventory commands have, and — the part that matters — the same
+ * *narrowness*: only `sourceSlot` is read, so a client that bolts a `coreId`, a
+ * `skillId`, or an `unlockId` onto the payload is sending decoration that never
+ * reaches a decision.
+ */
+export function validateActivateCoreMessage(
+  input: unknown,
+  slotCount: number,
+): ValidationResult<ActivateCoreMessage> {
+  if (!isRecord(input)) {
+    return fail("activate_core message must be an object");
+  }
+  if (!isSlotIndex(input["sourceSlot"], slotCount)) {
+    return fail(`activate_core sourceSlot must be an integer in [0, ${String(slotCount)})`);
+  }
+  return ok({ sourceSlot: input["sourceSlot"] });
+}
+
+/**
  * Validate a {@link SettlementMessage} arriving at the **client** (M5).
  *
  * The server wrote it, but it still crosses a socket, so the client checks it
@@ -455,6 +476,16 @@ export function validateSettlementMessage(input: unknown): ValidationResult<Sett
   if (!newUnlockIds.ok) {
     return fail(newUnlockIds.error);
   }
+  // Absent is legal, unlike the fields above: a server one version behind sends
+  // no duplicate list, and refusing the whole settlement over a missing optional
+  // field would hide the points the player did earn.
+  const duplicateCoreIds =
+    input["duplicateCoreIds"] === undefined
+      ? ok<readonly string[]>([])
+      : validateContentIdArray(input["duplicateCoreIds"], "duplicateCoreIds");
+  if (!duplicateCoreIds.ok) {
+    return fail(duplicateCoreIds.error);
+  }
 
   return ok({
     alreadySettled: input["alreadySettled"],
@@ -462,6 +493,7 @@ export function validateSettlementMessage(input: unknown): ValidationResult<Sett
     balances: balances.value,
     unlockIds: unlockIds.value,
     newUnlockIds: newUnlockIds.value,
+    duplicateCoreIds: duplicateCoreIds.value,
   });
 }
 

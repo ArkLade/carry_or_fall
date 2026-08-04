@@ -14,12 +14,13 @@
  */
 import {
   CONTENT_VERSION,
+  findLoot as findLootDefinition,
+  findSkill as findSkillDefinition,
   type LootDefinition,
   type SkillDefinition,
-  ALL_LOOT,
-  ALL_SKILLS,
 } from "@carry-or-fall/game-content";
 import {
+  ACTIVATE_CORE_MESSAGE_TYPE,
   DISCARD_ITEM_MESSAGE_TYPE,
   INPUT_MESSAGE_TYPE,
   isMatchPhase,
@@ -120,17 +121,29 @@ export function toMatchView(state: MatchRoomState): MatchView {
     groundLoot: collect(state.groundLoot, (loot) => ({ ...loot })),
     skillChips: collect(state.skillChips, (chip) => ({ ...chip })),
     extractionPoints: collect(state.extractionPoints, (point) => ({ ...point })),
+    // Zero or one entry (M7); the view flattens it to a nullable value, because
+    // nothing on the client wants to iterate a one-element list.
+    boss: collect(state.boss, (boss) => ({ ...boss }))[0] ?? null,
   };
 }
 
-/** Resolve a loot content id the server sent. Returns `undefined` for an id this build does not know. */
+/**
+ * Resolve a loot content id the server sent. Returns `undefined` for an id this
+ * build does not know.
+ *
+ * Delegates to the content package rather than searching `ALL_LOOT` itself,
+ * which it did until M7: boss cores are deliberately **not** in `ALL_LOOT` (they
+ * are not part of the random drop tables), so a local search would have returned
+ * `undefined` for a core sitting in the player's own inventory and the HUD would
+ * have drawn an empty slot over a real item.
+ */
 export function findLoot(lootId: string): LootDefinition | undefined {
-  return ALL_LOOT.find((loot) => loot.id === lootId);
+  return findLootDefinition(lootId) ?? undefined;
 }
 
 /** Resolve a skill content id the server sent. */
 export function findSkill(skillId: string): SkillDefinition | undefined {
-  return ALL_SKILLS.find((skill) => skill.id === skillId);
+  return findSkillDefinition(skillId) ?? undefined;
 }
 
 export class MatchConnection {
@@ -335,6 +348,15 @@ export class MatchConnection {
   /** Ask the server to discard an inventory slot. */
   sendDiscardItem(sourceSlot: number): void {
     this.room?.send(DISCARD_ITEM_MESSAGE_TYPE, { sourceSlot });
+  }
+
+  /**
+   * Ask the server to activate a boss core (M7, concept §11 option 1). Sends a
+   * slot index and nothing else — the client does not name the skill it expects,
+   * because it does not get to decide what a core grants.
+   */
+  sendActivateCore(sourceSlot: number): void {
+    this.room?.send(ACTIVATE_CORE_MESSAGE_TYPE, { sourceSlot });
   }
 
   /** Leave deliberately: the server frees the seat immediately instead of holding a reconnect window. */

@@ -35,6 +35,17 @@ export interface RewardPayload {
   readonly itemsConverted: number;
   readonly itemsLost: number;
   readonly contentVersion: number;
+  /**
+   * Boss cores that survived this run (M7, concept §11), by content id.
+   *
+   * Stored rather than derived because the payload is the immutable record of
+   * what the run earned: whether a given core became an unlock or a duplicate
+   * conversion depends on what the account held *at settlement time*, and a
+   * payload that had to be re-interpreted later would be a second chance to get
+   * that wrong. `reward_payload` is `jsonb`, so this needed no migration
+   * (`docs/M7_ISSUES.md` §1.5).
+   */
+  readonly bossCoreIds: readonly string[];
 }
 
 /**
@@ -53,6 +64,7 @@ export function buildRewardPayload(runResult: RunResult, contentVersion: number)
     itemsConverted: runResult.itemsConverted,
     itemsLost: runResult.itemsLost,
     contentVersion,
+    bossCoreIds: runResult.bossCoreIds,
   };
 }
 

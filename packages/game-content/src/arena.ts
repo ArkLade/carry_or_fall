@@ -67,6 +67,16 @@ export interface ArenaDefinition extends ContentDefinition {
    * number that silently rots when the map changes.
    */
   readonly openLaneY: number;
+  /**
+   * Where the boss's lair is (M7), or absent for an arena with no boss.
+   *
+   * Chosen against the routes the browser suite actually walks, not just
+   * somewhere thematically sensible (`docs/M7_ISSUES.md` §1.8): the boss is
+   * leashed to this point, so a lair far from those routes is a *by
+   * construction* bound on how much danger the rest of the suite has to survive,
+   * rather than a budget that a slower machine invalidates.
+   */
+  readonly bossSpawnPoint?: ArenaPoint;
 }
 
 const WIDTH = 1920;
@@ -141,6 +151,13 @@ export const testArena: ArenaDefinition = {
     { x: 1720, y: 880 },
   ],
   openLaneY: 900,
+  // The upper far quadrant. Every route the browser suite walks is at least a
+  // leash-radius away: the far-side skill chip at (1740, 620) is ~441 px off,
+  // `meetChasers` goes to (1200, 900), `walkToOpenLane` to (700, 900), the
+  // returning-shot test fires from (400, 900), and the extraction test takes the
+  // point nearest spawn at (200, 200). With `warden`'s 420 px leash the boss
+  // cannot reach any of them (`docs/M7_ISSUES.md` §1.8).
+  bossSpawnPoint: { x: 1500, y: 250 },
 } as const;
 
 /** Every arena the game ships. One for now (concept §21.1: "initial map"). */

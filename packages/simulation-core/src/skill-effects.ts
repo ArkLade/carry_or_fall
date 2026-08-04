@@ -37,6 +37,16 @@ export interface SkillEffects {
   readonly recoveryReductionAdd: number;
   readonly stunChanceAdd: number;
   readonly shieldOnHitAdd: number;
+  /**
+   * How many children a projectile bursts into when a target consumes it (M7).
+   *
+   * Clamped here like every other magnitude, and clamped *again* in
+   * `combat/ranged.ts` against §13.4's caps 1 and 7 when the burst actually
+   * happens — because this number is a request and those are the ceilings. The
+   * two recursion caps (5 and 6) are not magnitudes and are not clamped: they
+   * are refusals, gated on the projectile's own `isSplitChild`.
+   */
+  readonly splitCountAdd: number;
 }
 
 /** The pipeline's pass-through value: no equipped skills, no change to any stat. */
@@ -52,6 +62,7 @@ export const NO_SKILL_EFFECTS: SkillEffects = {
   recoveryReductionAdd: 0,
   stunChanceAdd: 0,
   shieldOnHitAdd: 0,
+  splitCountAdd: 0,
 } as const;
 
 /** Ceiling on the summed per-step homing steering strength (fraction of velocity direction per step). */
@@ -68,6 +79,16 @@ export const MAX_RECOVERY_REDUCTION_ADD = 0.7;
 export const MAX_STUN_CHANCE_ADD = 0.75;
 /** Ceiling on the summed per-hit shield grant. */
 export const MAX_SHIELD_ON_HIT_ADD = 12;
+/**
+ * Ceiling on the summed split count one attack may request (M7).
+ *
+ * Deliberately far below §13.4's cap 1 of eight projectiles per attack: this
+ * bounds what *content* may ask for, and cap 1 bounds what the engine will ever
+ * produce. Two ceilings, because a content table that asked for eight children
+ * per hit would be a balance mistake worth catching here rather than a safety
+ * failure — the safety failure is caught either way, one layer down.
+ */
+export const MAX_SPLIT_COUNT_ADD = 3;
 /** Ceiling on the player's total shield pool. */
 export const MAX_SHIELD_HP = 40;
 /** Fixed stun duration applied on a successful stun roll (M3.5). */
@@ -98,6 +119,7 @@ export function aggregateSkillEffects(
   let recoveryReductionAdd = 0;
   let stunChanceAdd = 0;
   let shieldOnHitAdd = 0;
+  let splitCountAdd = 0;
 
   for (const skill of equippedSkills) {
     const isCompatible = skill.requiresTags.some((tag) => weaponTags.includes(tag));
@@ -118,6 +140,7 @@ export function aggregateSkillEffects(
     recoveryReductionAdd += effects.recoveryReductionAdd ?? 0;
     stunChanceAdd += effects.stunChanceAdd ?? 0;
     shieldOnHitAdd += effects.shieldOnHitAdd ?? 0;
+    splitCountAdd += effects.splitCountAdd ?? 0;
   }
 
   return {
@@ -136,6 +159,7 @@ export function aggregateSkillEffects(
     recoveryReductionAdd: clamp(recoveryReductionAdd, 0, MAX_RECOVERY_REDUCTION_ADD),
     stunChanceAdd: clamp(stunChanceAdd, 0, MAX_STUN_CHANCE_ADD),
     shieldOnHitAdd: clamp(shieldOnHitAdd, 0, MAX_SHIELD_ON_HIT_ADD),
+    splitCountAdd: clamp(splitCountAdd, 0, MAX_SPLIT_COUNT_ADD),
   };
 }
 

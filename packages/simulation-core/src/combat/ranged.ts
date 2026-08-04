@@ -21,7 +21,10 @@ import { type BuildEffects, NO_BUILD_EFFECTS } from "../build-effects";
 import { NO_SKILL_EFFECTS, type SkillEffects } from "../skill-effects";
 import type { Projectile, Vec2, Wall } from "../world";
 import {
+  canChildCreateParentEffect,
   canProjectileReturn,
+  canProjectileSplit,
+  MAX_PROJECTILES_PER_ATTACK,
   clampBounceCount,
   clampPierceCount,
   clampProjectilesPerAttack,
@@ -43,6 +46,26 @@ export const PROJECTILE_LIFESPAN_MS = 2000;
  * real gameplay rather than a value that happens to already be under the cap.
  */
 export const HOMING_SEARCH_RADIUS_PX = 900;
+
+/**
+ * How wide the fan of split children is, in degrees, total (M7).
+ *
+ * Proposed and balance-deferred (concept §12.3), like every other unsourced
+ * number here. Wide enough that the children visibly diverge — concept §13.3
+ * wants attacks to stay distinguishable — and narrow enough that a split still
+ * reads as "that shot broke apart" rather than "something exploded".
+ */
+export const SPLIT_SPREAD_DEGREES = 70;
+
+/**
+ * What fraction of the parent's damage each child carries (M7).
+ *
+ * Below one half, so a split is a trade — reach and coverage for raw damage —
+ * rather than a strict multiplication of it. Concept §30.2 asks carried power to
+ * "avoid instant unstoppable snowballing", and a boss skill is exactly where
+ * that pressure is highest.
+ */
+export const SPLIT_CHILD_DAMAGE_MULTIPLIER = 0.45;
 
 export type RangedStartResult =
   | {
@@ -117,6 +140,10 @@ export function startRangedAttack(
     definition.weapon.limits.maxPierces,
   );
   const canReturn = definition.skillEffects.returnEnabled;
+  // The split *request*. Clamped again where the burst actually happens, against
+  // §13.4's caps 1 and 7 — this is what content asked for, those are what the
+  // engine will produce.
+  const splitCount = definition.skillEffects.splitCountAdd;
   const homingStrength = definition.skillEffects.homingStrengthAdd;
   const postBounceDamageMultiplier = definition.skillEffects.damageAfterBounceMultiplier;
 
@@ -139,6 +166,10 @@ export function startRangedAttack(
       homingStrength,
       postBounceDamageMultiplier,
       hitTargetIds: [],
+      splitCount,
+      // A projectile a player fired is never a child; only `splitProjectile`
+      // makes those, and it makes them with this `true`.
+      isSplitChild: false,
     });
   }
 
@@ -251,6 +282,66 @@ function resolveProjectileAxis(
  * shooter and a target must protect that target, not just cosmetically stop
  * the projectile after it has already been credited with the hit.
  */
+/**
+ * Burst one consumed projectile into its children (M7, the `split_return` boss
+ * skill) — or refuse, which is where technical plan §13.4's cap 5 finally does
+ * something in a running game.
+ *
+ * **Cap 5 is the gate, not the `splitCount` field.** A child is created with
+ * `splitCount: 0`, so in practice it would not split anyway; the gate is
+ * `canProjectileSplit(parent.isSplitChild)` regardless, because "split
+ * projectiles cannot split again" has to be a refusal the engine makes rather
+ * than a value content happened to set. `split-caps.test.ts` hands this function
+ * a child that claims a non-zero `splitCount` and asserts it still produces
+ * nothing.
+ *
+ * The number of children is clamped twice more: by cap 1
+ * ({@link MAX_PROJECTILES_PER_ATTACK}) because a burst is an attack's worth of
+ * projectiles, and by cap 7 against the owner's live count, so a player cannot
+ * exceed their active ceiling by splitting rather than by firing.
+ */
+export function splitProjectile(
+  parent: Projectile,
+  ownerActiveCount: number,
+): readonly Projectile[] {
+  if (parent.splitCount <= 0 || !canProjectileSplit(parent.isSplitChild)) {
+    return [];
+  }
+
+  const requested = clampProjectilesPerAttack(parent.splitCount, MAX_PROJECTILES_PER_ATTACK);
+  const count = clampSpawnForActiveCap(ownerActiveCount, requested);
+  if (count <= 0) {
+    return [];
+  }
+
+  const speed = Math.hypot(parent.velocity.x, parent.velocity.y);
+  const heading = Math.atan2(parent.velocity.y, parent.velocity.x);
+  const children: Projectile[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const spreadFraction = count === 1 ? 0 : index / (count - 1) - 0.5;
+    const angle = heading + (spreadFraction * SPLIT_SPREAD_DEGREES * Math.PI) / 180;
+    children.push({
+      ...parent,
+      id: `${parent.id}-split-${String(index)}`,
+      position: parent.position,
+      velocity: { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed },
+      damage: parent.damage * SPLIT_CHILD_DAMAGE_MULTIPLIER,
+      remainingLifespanMs: PROJECTILE_LIFESPAN_MS,
+      // A child starts its own hit history: it is a new projectile, and the
+      // target that consumed its parent is a legitimate target for it.
+      hitTargetIds: [],
+      // Cap 6, at the point of creation: a child cannot create the parent
+      // effect. The gate in the expiry branch refuses it a second time even if
+      // this were ever set true.
+      canReturn: false,
+      returnsSoFar: 0,
+      splitCount: 0,
+      isSplitChild: true,
+    });
+  }
+  return children;
+}
+
 export function stepProjectiles(
   projectiles: readonly Projectile[],
   dtMs: number,
@@ -265,6 +356,19 @@ export function stepProjectiles(
   let workingTargets = targets;
   const hitEvents: HitEvent[] = [];
   const survivors: Projectile[] = [];
+
+  // §13.4's cap 7 is per owner, so a split has to know how many projectiles that
+  // owner already has in flight. Seeded from this step's input and kept current
+  // as children are added, so a burst cannot push a player past their ceiling
+  // and a second burst in the same step sees the first one's children.
+  const liveByOwner = new Map<string, number>();
+  for (const projectile of projectiles) {
+    liveByOwner.set(projectile.ownerId, (liveByOwner.get(projectile.ownerId) ?? 0) + 1);
+  }
+  const liveCountFor = (ownerId: string): number => liveByOwner.get(ownerId) ?? 0;
+  const noteSpawned = (ownerId: string): void => {
+    liveByOwner.set(ownerId, (liveByOwner.get(ownerId) ?? 0) + 1);
+  };
 
   for (const projectile of projectiles) {
     let velocity = projectile.velocity;
@@ -358,11 +462,32 @@ export function stepProjectiles(
           hitTargetIds: [...projectile.hitTargetIds, target.id],
         });
       }
+      if (projectile.piercesRemaining <= 0) {
+        // Consumed by the target: this is where a split happens (M7). A
+        // *piercing* projectile is deliberately excluded — it survived the hit,
+        // so it was not consumed, and letting it both continue and burst would
+        // be one projectile becoming several while still being itself.
+        const children = splitProjectile(
+          { ...projectile, position: movedPosition, velocity: movedVelocity, damage },
+          liveCountFor(projectile.ownerId),
+        );
+        for (const child of children) {
+          survivors.push(child);
+          noteSpawned(child.ownerId);
+        }
+      }
       continue; // Consumed on hit (or continued as a piercing survivor, pushed above).
     }
 
     if (remainingLifespanMs <= 0) {
-      if (projectile.canReturn && canProjectileReturn(projectile.returnsSoFar)) {
+      if (
+        projectile.canReturn &&
+        canProjectileReturn(projectile.returnsSoFar) &&
+        // Cap 6: a child may not create the parent effect. Checked here as well
+        // as at creation, so a projectile that claims `canReturn` while being a
+        // child — however it came to claim it — is still refused.
+        canChildCreateParentEffect(projectile.isSplitChild)
+      ) {
         survivors.push({
           ...projectile,
           position: movedPosition,

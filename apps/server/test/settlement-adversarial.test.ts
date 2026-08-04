@@ -16,7 +16,12 @@
  *    ordering makes it structurally impossible, and the two tests here stage
  *    both a failing and a hanging write.)
  */
-import { type ArenaDefinition, CONTENT_VERSION, warlordsSeal } from "@carry-or-fall/game-content";
+import {
+  type ArenaDefinition,
+  CONTENT_VERSION,
+  splitReturnCore,
+  warlordsSeal,
+} from "@carry-or-fall/game-content";
 import {
   type ExtractionPointView,
   INPUT_MESSAGE_TYPE,
@@ -38,6 +43,7 @@ import { MemoryStore } from "../src/progression/memory-store";
 import { DEFAULT_UNLOCK_GRANTS, SettlementService } from "../src/progression/settlement-service";
 import type { Balances } from "../src/progression/store";
 import { createGameServer, type GameServerHandle } from "../src/server";
+import { BOSS_LAIR, bossArena, trainingBoss } from "./boss-fixtures";
 
 const BUILD_VERSION = "0.0.0-test";
 const TEST_LOBBY_MS = 300;
@@ -633,6 +639,333 @@ describe("secure-slot persistence before confirmation (§38 M5 exit criterion 2)
       expect(account?.balances).toEqual(warlordsSeal.points);
     }
   });
+});
+
+/**
+ * §38 M7's **second** exit criterion: "settlement is idempotent under
+ * duplicate/retry conditions" — re-run against a settlement that now carries a
+ * boss core (M7.7, `docs/M7_ISSUES.md` §12.5–§12.9).
+ *
+ * The M5 block above proved the property for ordinary secured loot. A boss core
+ * is where getting it wrong would hurt most, because the thing at stake is not a
+ * number that can be re-summed but a **permanent unlock**: award it twice and
+ * the account holds it twice; classify it as a duplicate when it was the first,
+ * and the player is paid points for an unlock they never received.
+ *
+ * Every attack from M5 is repeated here — settled twice, settled concurrently,
+ * retried after a failure that cannot be distinguished from success, replayed by
+ * the client, and crashed on each side of the write — with a core in the secure
+ * slot. D44's ordering requirement applies to it exactly as to any other secured
+ * item, and the last test asserts that: a boss core needed no separate path,
+ * which is the point of shaping it as loot (`docs/DECISIONS.md` D65).
+ */
+describe("settlement carrying a boss core (§38 M7 exit criterion 2)", () => {
+  let handle: GameServerHandle;
+  let store: MemoryStore;
+  let wsBaseUrl: string;
+  let sequence = 0;
+
+  const USER_ID = localUserIdFor(RETURNING_TOKEN);
+
+  function attach(room: Room<unknown, MatchRoomState>): TestClient {
+    let privateState: LocalPlayerState | null = null;
+    let settlement: SettlementMessage | null = null;
+    room.onMessage(PRIVATE_STATE_MESSAGE_TYPE, (message: LocalPlayerState) => {
+      privateState = message;
+    });
+    room.onMessage(SETTLEMENT_MESSAGE_TYPE, (message: SettlementMessage) => {
+      settlement = message;
+    });
+    return {
+      room,
+      privateState: () => privateState,
+      settlement: () => settlement,
+      send: (input) => {
+        sequence += 1;
+        room.send(INPUT_MESSAGE_TYPE, { ...NEUTRAL, ...input, sequence });
+      },
+    };
+  }
+
+  async function joinMatch(): Promise<TestClient> {
+    const client = new Client(wsBaseUrl);
+    const room = await client.joinOrCreate<MatchRoomState>(MATCH_ROOM, validJoin);
+    const joined = attach(room);
+    await waitFor(() => (room.state as Partial<MatchRoomState>).players !== undefined);
+    await waitFor(() => room.state.phase === "running");
+    return joined;
+  }
+
+  async function walkTo(client: TestClient, targetX: number, targetY: number): Promise<void> {
+    const id = client.room.sessionId;
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+      const player = client.room.state.players.get(id);
+      if (player === undefined) {
+        return;
+      }
+      const dx = targetX - player.x;
+      const dy = targetY - player.y;
+      if (Math.hypot(dx, dy) < 15) {
+        client.send({});
+        return;
+      }
+      if (Date.now() > deadline) {
+        throw new Error("walkTo: did not arrive within 20s");
+      }
+      client.send({
+        moveX: Math.abs(dx) > 6 ? (dx > 0 ? 1 : -1) : 0,
+        moveY: Math.abs(dy) > 6 ? (dy > 0 ? 1 : -1) : 0,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    }
+  }
+
+  function coreSlot(client: TestClient): number {
+    return (client.privateState()?.inventory ?? []).indexOf(splitReturnCore.id);
+  }
+
+  /** Kill the boss from outside its aggro radius and walk over the core it drops. */
+  async function takeACore(client: TestClient): Promise<number> {
+    await walkTo(client, BOSS_LAIR.x - 200, BOSS_LAIR.y);
+    const killDeadline = Date.now() + 30_000;
+    while (client.room.state.boss.size > 0) {
+      if (Date.now() > killDeadline) {
+        throw new Error("takeACore: the boss survived 30s of arrows");
+      }
+      client.send({ secondaryAttackPressed: true, aimAngle: 0 });
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      client.send({ secondaryAttackPressed: false, aimAngle: 0 });
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    }
+
+    let dropped: { x: number; y: number } | null = null;
+    await waitFor(() => {
+      client.room.state.groundLoot.forEach((loot) => {
+        if (loot.lootId === splitReturnCore.id) {
+          dropped = { x: loot.x, y: loot.y };
+        }
+      });
+      return dropped !== null;
+    });
+    const at = (dropped as { x: number; y: number } | null) ?? BOSS_LAIR;
+    await walkTo(client, at.x, at.y);
+
+    const pickupDeadline = Date.now() + 15_000;
+    while (coreSlot(client) === -1) {
+      if (Date.now() > pickupDeadline) {
+        throw new Error("takeACore: never picked the core up");
+      }
+      client.send({ interactPressed: true });
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      client.send({ interactPressed: false });
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    }
+    return coreSlot(client);
+  }
+
+  /** Take a core and put it in the secure slot, which is what makes it reach settlement. */
+  async function secureACore(client: TestClient): Promise<void> {
+    const slot = await takeACore(client);
+    client.room.send(SECURE_ITEM_MESSAGE_TYPE, { sourceSlot: slot });
+    await waitFor(() => client.privateState()?.secureSlotItemId === splitReturnCore.id);
+  }
+
+  async function extract(client: TestClient): Promise<void> {
+    const points: { x: number; y: number }[] = [];
+    client.room.state.extractionPoints.forEach((point) => {
+      points.push({ x: point.x, y: point.y });
+    });
+    const point = points[0];
+    if (point === undefined) {
+      throw new Error("no extraction point in the arena");
+    }
+    await walkTo(client, point.x, point.y);
+    const deadline = Date.now() + 25_000;
+    while (client.privateState()?.runResult == null) {
+      if (Date.now() > deadline) {
+        throw new Error("extract: run did not end within 25s");
+      }
+      client.send({ interactPressed: true });
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    }
+  }
+
+  /** How many times the account holds the boss core's unlock. Must never exceed one. */
+  async function unlockCount(): Promise<number> {
+    const account = await store.loadAccount(USER_ID);
+    return (account?.unlockIds ?? []).filter((id) => id === "split_return").length;
+  }
+
+  beforeEach(async () => {
+    sequence = 0;
+    store = new MemoryStore();
+    handle = createGameServer({
+      buildVersion: BUILD_VERSION,
+      logger: silentLogger,
+      allowedOrigins: ["http://localhost:5173"],
+      progression: {
+        store,
+        settlement: new SettlementService(store, silentLogger, {
+          maxAttempts: 1,
+          retryDelayMs: 0,
+        }),
+      },
+      match: {
+        lobbyDurationMs: TEST_LOBBY_MS,
+        matchDurationMs: 120_000,
+        reconnectWindowMs: 1_000,
+        seed: 11,
+        arena: bossArena,
+        bossDefinition: trainingBoss,
+        unlockGrants: DEFAULT_UNLOCK_GRANTS,
+      },
+    });
+    await handle.gameServer.listen(0);
+    const address = handle.httpServer.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("expected the server to be listening on a TCP port");
+    }
+    wsBaseUrl = `ws://127.0.0.1:${String(address.port)}`;
+  });
+
+  afterEach(async () => {
+    await handle.gameServer.gracefullyShutdown(false);
+  });
+
+  it("the same run cannot be settled twice, and the unlock lands once", async () => {
+    const a = await joinMatch();
+    await secureACore(a);
+    await extract(a);
+    await waitFor(() => a.settlement() !== null);
+
+    expect(a.settlement()?.newUnlockIds).toContain("split_return");
+    expect(store.appliedSettlementCount).toBe(1);
+    expect(await unlockCount()).toBe(1);
+
+    // Re-joining runs recovery over the same account. There is no pending
+    // reservation left and no second award to make.
+    await joinMatch();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(store.appliedSettlementCount).toBe(1);
+    expect(await unlockCount()).toBe(1);
+
+    await a.room.leave(true);
+  }, 90_000);
+
+  it("concurrent settlements of the same run collapse to one unlock", async () => {
+    const a = await joinMatch();
+    await secureACore(a);
+    await extract(a);
+    await waitFor(() => a.settlement() !== null);
+    const banked = (await store.loadAccount(USER_ID))?.balances;
+
+    // Twelve recoveries at once, racing each other. They share one settlement
+    // key, so at most one can apply.
+    const service = new SettlementService(store, silentLogger, { maxAttempts: 1, retryDelayMs: 0 });
+    await Promise.all(Array.from({ length: 12 }, () => service.recoverPending(USER_ID, null)));
+
+    expect(store.appliedSettlementCount).toBe(1);
+    expect(await unlockCount()).toBe(1);
+    expect((await store.loadAccount(USER_ID))?.balances).toEqual(banked);
+
+    await a.room.leave(true);
+  }, 90_000);
+
+  it("a retry after an indistinguishable failure awards the unlock once", async () => {
+    const a = await joinMatch();
+    await secureACore(a);
+
+    // The dangerous failure: the write commits and *then* the call rejects, so
+    // the server cannot tell whether it landed.
+    store.faults.failNextSettleAfterCommit = true;
+    await extract(a);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    expect(store.appliedSettlementCount).toBe(1);
+    expect(await unlockCount()).toBe(1);
+    const banked = (await store.loadAccount(USER_ID))?.balances;
+
+    // Recovery runs anyway, because the room never learned it succeeded.
+    await joinMatch();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    expect(store.appliedSettlementCount).toBe(1);
+    expect(await unlockCount()).toBe(1);
+    expect((await store.loadAccount(USER_ID))?.balances).toEqual(banked);
+  }, 90_000);
+
+  it("a crash before the write is finished by recovery, exactly once", async () => {
+    const a = await joinMatch();
+    await secureACore(a);
+
+    store.faults.failNextSettleBeforeCommit = true;
+    await extract(a);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    // Nothing written, and the reservation left for recovery to find.
+    expect(store.appliedSettlementCount).toBe(0);
+    expect(await unlockCount()).toBe(0);
+    expect(await store.listPendingReservations(USER_ID, null)).toHaveLength(1);
+
+    // The next join finishes it, and the unlock the player paid their secure
+    // slot for arrives — a secured core is exactly what recovery recovers.
+    await joinMatch();
+    await waitFor(async () => (await store.listPendingReservations(USER_ID, null)).length === 0);
+    expect(store.appliedSettlementCount).toBe(1);
+    expect(await unlockCount()).toBe(1);
+
+    // A third join must not award it again.
+    await joinMatch();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(store.appliedSettlementCount).toBe(1);
+    expect(await unlockCount()).toBe(1);
+
+    await a.room.leave(true);
+  }, 120_000);
+
+  it("a client replaying a settlement message cannot grant itself the unlock", async () => {
+    const a = await joinMatch();
+    await secureACore(a);
+    await extract(a);
+    await waitFor(() => a.settlement() !== null);
+
+    const before = await store.loadAccount(USER_ID);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      a.room.send(SETTLEMENT_MESSAGE_TYPE, {
+        alreadySettled: false,
+        balances: { force: 9999, precision: 9999, motion: 9999, guard: 9999, signal: 9999 },
+        unlockIds: ["split_return"],
+        newUnlockIds: ["split_return"],
+        duplicateCoreIds: [],
+        isAnonymous: false,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    }
+
+    const after = await store.loadAccount(USER_ID);
+    expect(after?.balances).toEqual(before?.balances);
+    expect(store.appliedSettlementCount).toBe(1);
+    expect(await unlockCount()).toBe(1);
+  }, 90_000);
+
+  it("the reservation for a secured core is written before the slot is reported filled (D44)", async () => {
+    const a = await joinMatch();
+    const slot = await takeACore(a);
+
+    // A hung write: the reservation never resolves, so the simulation is never
+    // handed the intent, so the slot never fills.
+    store.faults.hangNextReserve = true;
+    a.room.send(SECURE_ITEM_MESSAGE_TYPE, { sourceSlot: slot });
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+
+    // Never reported as secured, because it never was: there is no code path
+    // that tells the client "secured" and then writes.
+    expect(a.privateState()?.secureSlotItemId).toBeNull();
+    expect(a.privateState()?.inventory[slot]).toBe(splitReturnCore.id);
+
+    await a.room.leave(true);
+  }, 120_000);
 });
 
 /**

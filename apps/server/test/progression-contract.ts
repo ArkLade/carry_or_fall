@@ -52,6 +52,7 @@ function request(
       itemsConverted: 1,
       itemsLost: 0,
       contentVersion: 2,
+      bossCoreIds: [],
     },
     points,
     unlocks: [],

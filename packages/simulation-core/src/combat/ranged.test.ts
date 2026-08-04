@@ -248,6 +248,8 @@ describe("cap 2 (bounces): ricochet-style skill behavior end-to-end (M3.4)", () 
       homingStrength: 0,
       postBounceDamageMultiplier: 1,
       hitTargetIds: [],
+      splitCount: 0,
+      isSplitChild: false,
     };
     const { projectiles } = stepProjectiles([exhausted], 50, 0.05, [], grid);
     expect(projectiles).toHaveLength(0);
@@ -326,6 +328,8 @@ describe("cap 4 (returns): returning-shot-style skill behavior end-to-end (M3.4)
       homingStrength: 0,
       postBounceDamageMultiplier: 1,
       hitTargetIds: [],
+      splitCount: 0,
+      isSplitChild: false,
     };
     const { projectiles } = stepProjectiles([alreadyReturned], 50, 0.05, [], NO_WALLS);
     expect(projectiles).toHaveLength(0);

@@ -16,7 +16,13 @@
  * movement lags input by up to one server tick plus latency. Whether that is
  * acceptable is a measurement §11.2 defers until multiplayer is correct.
  */
-import type { EnemyView, MatchView, PlayerView, ProjectileView } from "@carry-or-fall/protocol";
+import type {
+  BossView,
+  EnemyView,
+  MatchView,
+  PlayerView,
+  ProjectileView,
+} from "@carry-or-fall/protocol";
 
 function lerp(from: number, to: number, alpha: number): number {
   return from + (to - from) * alpha;
@@ -69,6 +75,24 @@ function blendProjectile(
 }
 
 /**
+ * The boss moves continuously like any other body, so its position blends the
+ * same way (M7). Its telegraph does **not**: `telegraphRemainingMs` counts down
+ * toward a moment the server decides, and a blended countdown would drift away
+ * from the wind-up actually being resolved — the one number in this view a
+ * player is meant to react to.
+ */
+function blendBoss(latest: BossView, previous: BossView | null, alpha: number): BossView {
+  if (previous === null || previous.id !== latest.id) {
+    return latest;
+  }
+  return {
+    ...latest,
+    x: lerp(previous.x, latest.x, alpha),
+    y: lerp(previous.y, latest.y, alpha),
+  };
+}
+
+/**
  * Blend the moving entities of `latest` toward their positions in `previous`.
  *
  * Only positions are interpolated. Health, shields, stun, extraction progress,
@@ -103,5 +127,6 @@ export function interpolateMatchView(
     projectiles: latest.projectiles.map((projectile) =>
       blendProjectile(projectile, previousProjectiles.get(projectile.id), alpha),
     ),
+    boss: latest.boss === null ? null : blendBoss(latest.boss, previous.boss, alpha),
   };
 }

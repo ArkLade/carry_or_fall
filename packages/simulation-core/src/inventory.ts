@@ -10,7 +10,12 @@
  * `build-effects.ts`'s `aggregateBuildEffects` must never read it (concept
  * §7.2: a secured item "stops contributing to the current build").
  */
-import type { LootDefinition } from "@carry-or-fall/game-content";
+import {
+  findSkill,
+  isBossCore,
+  type LootDefinition,
+  type SkillDefinition,
+} from "@carry-or-fall/game-content";
 
 /** Concept §7.1: six normal inventory slots. */
 export const INVENTORY_SIZE = 6;
@@ -104,4 +109,51 @@ export function secureItem(
     secureSlot: item,
     secured: true,
   };
+}
+
+export interface ActivateCoreResult {
+  readonly inventory: Inventory;
+  /** The skill the activated core grants, or `null` when nothing was activated. */
+  readonly skill: SkillDefinition | null;
+  readonly activated: boolean;
+}
+
+/**
+ * Concept §11 option 1: activate a boss core now.
+ *
+ * **The core leaves the inventory.** That is the whole implementation of
+ * "cannot be secured after activation" — `secureItem` moves an item *out of a
+ * slot*, and after this there is no item in that slot to move. There is no
+ * `activated` flag for a later check to forget to consult, and no message a
+ * client could send to un-activate it (`docs/M7_ISSUES.md` §1.3).
+ *
+ * It is also the whole implementation of "is lost on death": an activated core
+ * is not in the inventory, so the death path has nothing to drop, and it is not
+ * in the secure slot, so nothing survives.
+ *
+ * Refuses — does not throw, matching {@link secureItem} — when the slot is
+ * empty, holds ordinary loot rather than a core, or names a skill this build
+ * does not have. The last case is a content-version disagreement, and refusing
+ * is the conservative direction: a core that granted nothing is better than one
+ * that granted `undefined`.
+ */
+export function activateBossCore(inventory: Inventory, slotIndex: number): ActivateCoreResult {
+  const item = inventory[slotIndex];
+  if (item === undefined || item === null || !isBossCore(item)) {
+    return { inventory, skill: null, activated: false };
+  }
+  const skill = findSkill(item.bossCore.temporarySkillId);
+  if (skill === null) {
+    return { inventory, skill: null, activated: false };
+  }
+  return {
+    inventory: discardInventorySlot(inventory, slotIndex),
+    skill,
+    activated: true,
+  };
+}
+
+/** Every boss core currently in `inventory`, in slot order. */
+export function bossCoresIn(inventory: Inventory): readonly LootDefinition[] {
+  return inventory.filter((item): item is LootDefinition => item !== null && isBossCore(item));
 }

@@ -16,12 +16,22 @@
  * run-result screen is the only place it is ever shown". No database call
  * happens here, or anywhere on the fixed step.
  */
-import type { Inventory, SecureSlot } from "./inventory";
+import { isBossCore } from "@carry-or-fall/game-content";
+
+import { bossCoresIn, type Inventory, type SecureSlot } from "./inventory";
 import { addPointTotals, pointsFromLoot, sumInventoryPoints, ZERO_POINTS } from "./points";
 import type { RunResult } from "./world";
 
 function countNonEmpty(inventory: Inventory): number {
   return inventory.filter((item) => item !== null).length;
+}
+
+/**
+ * The boss cores in the secure slot, which is exactly the set that survives a
+ * death (M7, concept §11 option 3: "survives death").
+ */
+function securedCoreIds(secureSlot: SecureSlot): readonly string[] {
+  return secureSlot !== null && isBossCore(secureSlot) ? [secureSlot.id] : [];
 }
 
 /** Build the `RunResult` for a death: only the secure slot converts; the inventory is lost, not converted. */
@@ -32,6 +42,10 @@ export function buildDeathResult(inventory: Inventory, secureSlot: SecureSlot): 
     pointsGained: secureSlotPoints,
     itemsConverted: secureSlot === null ? 0 : 1,
     itemsLost: countNonEmpty(inventory),
+    // A carried core drops with the rest of the inventory, so it is lost to
+    // this player exactly like ordinary loot — and lootable by whoever is still
+    // playing (concept §15.2).
+    bossCoreIds: securedCoreIds(secureSlot),
   };
 }
 
@@ -43,5 +57,8 @@ export function buildExtractionResult(inventory: Inventory, secureSlot: SecureSl
     pointsGained: addPointTotals(secureSlotPoints, sumInventoryPoints(inventory)),
     itemsConverted: (secureSlot === null ? 0 : 1) + countNonEmpty(inventory),
     itemsLost: 0,
+    // Extraction converts everything, so a carried core counts too (concept §11
+    // option 2: "can be extracted for permanent unlock").
+    bossCoreIds: [...securedCoreIds(secureSlot), ...bossCoresIn(inventory).map((core) => core.id)],
   };
 }

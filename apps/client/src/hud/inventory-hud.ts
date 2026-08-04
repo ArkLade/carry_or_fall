@@ -16,7 +16,7 @@
  * server decides what actually is (technical plan §5.1).
  */
 import Phaser from "phaser";
-import type { LootDefinition } from "@carry-or-fall/game-content";
+import { isBossCore, type LootDefinition } from "@carry-or-fall/game-content";
 import type { LocalPlayerState, PlayerView } from "@carry-or-fall/protocol";
 import {
   addPointTotals,
@@ -39,7 +39,8 @@ const BASE_FONT = "system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
 const PANEL_X = 12;
 const PANEL_Y = 84;
 const PANEL_WIDTH = 320;
-const PANEL_HEIGHT = 234;
+const PANEL_HEIGHT = 282;
+const CORE_COLOR = "#f85149";
 
 function formatBuildEffects(effects: ReturnType<typeof aggregateBuildEffects>): string {
   const parts: string[] = [];
@@ -66,6 +67,8 @@ export class InventoryHud {
   private readonly buildText: Phaser.GameObjects.Text;
   private readonly skillsText: Phaser.GameObjects.Text;
   private readonly pointsText: Phaser.GameObjects.Text;
+  /** The boss-core prompt (M7): only present while a core is actually carried. */
+  private readonly coreText: Phaser.GameObjects.Text;
   private readonly helpText: Phaser.GameObjects.Text;
   private visible = false;
 
@@ -90,8 +93,18 @@ export class InventoryHud {
       .text(PANEL_X + 10, PANEL_Y + 140, "", { ...textStyle, color: SHIELD_COLOR })
       .setScrollFactor(0);
     this.pointsText = scene.add.text(PANEL_X + 10, PANEL_Y + 184, "", textStyle).setScrollFactor(0);
+    this.coreText = scene.add
+      .text(PANEL_X + 10, PANEL_Y + 206, "", {
+        ...textStyle,
+        fontSize: "12px",
+        color: CORE_COLOR,
+        // Wrapped rather than trusted to fit: this is the longest string the
+        // panel ever shows, and an unwrapped line would run off its background.
+        wordWrap: { width: PANEL_WIDTH - 20 },
+      })
+      .setScrollFactor(0);
     this.helpText = scene.add
-      .text(PANEL_X + 10, PANEL_Y + 208, "1-6 discard · Shift+1-6 secure · I toggle", {
+      .text(PANEL_X + 10, PANEL_Y + 256, "1-6 discard · Shift+1-6 secure · I toggle", {
         ...textStyle,
         fontSize: "12px",
         color: MUTED_COLOR,
@@ -114,6 +127,7 @@ export class InventoryHud {
       this.buildText,
       this.skillsText,
       this.pointsText,
+      this.coreText,
       this.helpText,
     ]) {
       item.setVisible(visible);
@@ -130,6 +144,7 @@ export class InventoryHud {
       this.buildText.setText("");
       this.skillsText.setText("");
       this.pointsText.setText("");
+      this.coreText.setText("");
       return;
     }
 
@@ -159,6 +174,19 @@ export class InventoryHud {
       `If extracted now: F${String(preview.force)} P${String(preview.precision)} M${String(
         preview.motion,
       )} G${String(preview.guard)} S${String(preview.signal)}`,
+    );
+
+    // The boss core's three-way decision (M7, concept §11), stated only while
+    // one is carried — and stated as the *choice*, because the choice is the
+    // mechanic. The point preview above already shows the truth that a core is
+    // worth no points on its own: what it is worth is an unlock, and only if it
+    // survives the run.
+    const coreSlot = inventory.findIndex((item) => item !== null && isBossCore(item));
+    this.coreText.setText(
+      coreSlot === -1
+        ? ""
+        : `Boss core in slot ${String(coreSlot + 1)}: C activate now (lost on death) · ` +
+            `Shift+${String(coreSlot + 1)} secure it · or carry it out`,
     );
   }
 }

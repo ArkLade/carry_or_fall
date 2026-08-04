@@ -16,7 +16,13 @@
  * explicitly deferred until multiplayer is correct (§11.2, `docs/M4_ISSUES.md`
  * §1.2).
  */
-import { findArena, testArena, type ArenaDefinition } from "@carry-or-fall/game-content";
+import {
+  findArena,
+  findLoot,
+  isBossCore,
+  testArena,
+  type ArenaDefinition,
+} from "@carry-or-fall/game-content";
 import type {
   InputMessage,
   MatchView,
@@ -105,6 +111,26 @@ export class PlayScene extends Phaser.Scene {
    */
   getPartyMemberIds(): readonly string[] {
     return this.connection?.getPrivateState()?.partyMemberIds ?? [];
+  }
+
+  /**
+   * Which inventory slot holds a boss core, or `null` (M7). Read from this
+   * client's own private state, which is the only place it appears — a core in
+   * someone else's inventory is not in any document this client receives.
+   */
+  private carriedCoreSlot(): number | null {
+    const inventory = this.connection?.getPrivateState()?.inventory ?? [];
+    for (let slot = 0; slot < inventory.length; slot += 1) {
+      const id = inventory[slot];
+      if (id === null || id === undefined) {
+        continue;
+      }
+      const item = findLoot(id);
+      if (item !== null && isBossCore(item)) {
+        return slot;
+      }
+    }
+    return null;
   }
 
   create(data: PlaySceneData = {}): void {
@@ -240,6 +266,17 @@ export class PlayScene extends Phaser.Scene {
     if (keyboard.discardSlotIndex !== null) {
       connection.sendDiscardItem(keyboard.discardSlotIndex);
     }
+    if (keyboard.activateCorePressed) {
+      // `C` means "activate the core I am carrying", and the client resolves
+      // *which slot* that is from its own private state purely so the player
+      // does not have to remember. It is a convenience, not an assertion: the
+      // server re-reads the slot and refuses if it does not hold a core (M7,
+      // concept §11 option 1). Nothing happens when no core is carried.
+      const coreSlot = this.carriedCoreSlot();
+      if (coreSlot !== null) {
+        connection.sendActivateCore(coreSlot);
+      }
+    }
 
     // Aim is measured from the player's last authoritative position; the client
     // reports the angle it wants, and the server decides what that angle means.
@@ -318,4 +355,5 @@ const EMPTY_VIEW: MatchView = {
   groundLoot: [],
   skillChips: [],
   extractionPoints: [],
+  boss: null,
 };

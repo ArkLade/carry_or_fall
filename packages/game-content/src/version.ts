@@ -25,4 +25,4 @@
  * offer a selection the server will refuse, or hide one it would accept. That is
  * exactly the silent disagreement about game rules §35 exists to prevent.
  */
-export const CONTENT_VERSION = 2;
+export const CONTENT_VERSION = 3;

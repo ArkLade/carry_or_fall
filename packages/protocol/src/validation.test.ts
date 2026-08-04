@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { PROTOCOL_VERSION } from "./version";
 import {
+  validateActivateCoreMessage,
   validateClientHandshake,
   validateDiscardItemMessage,
   validateHealthResponse,
@@ -237,10 +238,11 @@ describe("validateInputMessage", () => {
   });
 });
 
-describe("validateSecureItemMessage / validateDiscardItemMessage", () => {
+describe("validateSecureItemMessage / validateDiscardItemMessage / validateActivateCoreMessage", () => {
   for (const [name, validate] of [
     ["secure_item", validateSecureItemMessage],
     ["discard_item", validateDiscardItemMessage],
+    ["activate_core", validateActivateCoreMessage],
   ] as const) {
     it(`${name}: accepts every in-range slot index`, () => {
       for (let slot = 0; slot < SLOT_COUNT; slot += 1) {
@@ -266,6 +268,27 @@ describe("validateSecureItemMessage / validateDiscardItemMessage", () => {
     it(`${name}: rejects non-object inputs`, () => {
       for (const bad of [null, undefined, 2, "2", []]) {
         expect(validate(bad, SLOT_COUNT).ok).toBe(false);
+      }
+    });
+
+    it(`${name}: returns only sourceSlot, whatever else the payload carries`, () => {
+      // The M7 case this matters most for is `activate_core`: a client that
+      // could smuggle a `skillId` or an `unlockId` past the boundary would be
+      // naming its own reward. Every extra key is dropped here, so nothing
+      // downstream has the option of reading one.
+      const result = validate(
+        {
+          sourceSlot: 1,
+          skillId: "split_return",
+          unlockId: "split_return",
+          coreId: "split_return_core",
+          activated: true,
+        },
+        SLOT_COUNT,
+      );
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value).toEqual({ sourceSlot: 1 });
       }
     });
   }
@@ -368,6 +391,7 @@ describe("validateSettlementMessage (M5)", () => {
     balances,
     unlockIds: ["ricochet"],
     newUnlockIds: [],
+    duplicateCoreIds: [],
     isAnonymous: true,
   };
 
@@ -403,6 +427,28 @@ describe("validateSettlementMessage (M5)", () => {
   it("rejects non-boolean flags", () => {
     expect(validateSettlementMessage({ ...base, alreadySettled: "yes" }).ok).toBe(false);
     expect(validateSettlementMessage({ ...base, isAnonymous: 1 }).ok).toBe(false);
+  });
+
+  it("carries duplicate boss-core conversions, and treats their absence as none (M7)", () => {
+    const withDuplicates = validateSettlementMessage({
+      ...base,
+      duplicateCoreIds: ["split_return_core"],
+    });
+    expect(withDuplicates.ok && withDuplicates.value.duplicateCoreIds).toEqual([
+      "split_return_core",
+    ]);
+
+    // A server one version behind sends no such field. That must degrade to "no
+    // duplicates", not to a refused settlement that hides the points earned.
+    const { duplicateCoreIds: _absent, ...older } = base;
+    const legacy = validateSettlementMessage(older);
+    expect(legacy.ok && legacy.value.duplicateCoreIds).toEqual([]);
+  });
+
+  it("rejects a malformed duplicate list rather than ignoring it", () => {
+    for (const bad of ["split_return_core", [42], [""], [null], ["x".repeat(65)]]) {
+      expect(validateSettlementMessage({ ...base, duplicateCoreIds: bad }).ok).toBe(false);
+    }
   });
 
   it("rejects a non-object payload", () => {

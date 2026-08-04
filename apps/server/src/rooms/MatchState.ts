@@ -104,6 +104,29 @@ export const SkillChipState = schema({
 });
 export type SkillChipStateType = SchemaType<typeof SkillChipState>;
 
+/**
+ * The boss (M7, concept §14.3). Public, like every other body in the world.
+ *
+ * `telegraphAttackIndex` names an attack in the `BossDefinition` the client
+ * already holds — `-1` when nothing is winding up — so the client draws the
+ * shape the server is about to resolve rather than guessing at one.
+ */
+export const BossState = schema({
+  id: "string",
+  definitionId: "string",
+  x: "number",
+  y: "number",
+  radius: "number",
+  health: "number",
+  maxHealth: "number",
+  enraged: "boolean",
+  awake: "boolean",
+  telegraphAttackIndex: "number",
+  telegraphRemainingMs: "number",
+  telegraphFacing: "number",
+});
+export type BossStateType = SchemaType<typeof BossState>;
+
 export const ExtractionPointState = schema({
   id: "string",
   x: "number",
@@ -135,5 +158,11 @@ export const MatchState = schema({
   groundLoot: { map: GroundLootState },
   skillChips: { map: SkillChipState },
   extractionPoints: { map: ExtractionPointState },
+  /**
+   * The boss: a map holding zero or one entry (M7). A map rather than a nullable
+   * child schema because the reconciler already knows how to add and remove map
+   * entries by id, and the boss's entry disappears the moment it dies.
+   */
+  boss: { map: BossState },
 });
 export type MatchStateType = SchemaType<typeof MatchState>;

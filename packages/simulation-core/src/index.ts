@@ -16,6 +16,7 @@ export * from "./vec2";
 export * from "./angles";
 export * from "./world";
 export * from "./movement";
+export * from "./boss";
 export * from "./collision";
 export * from "./dash";
 export * from "./enemy";

@@ -26,6 +26,7 @@ import {
   interactFor,
   moveFor,
   pickUpAt,
+  reportMargin,
   waitForMatchRunning,
   waitForSnapshot,
   walkToArenaPoint,
@@ -298,6 +299,12 @@ test.describe("two real browsers play one match (§38 M4 exit criterion 1)", () 
       // so "B is still alive" below is a property of the design and not of how
       // busy the machine happened to be.
       const idleMs = Date.now() - idleStartedAt;
+      // Reported as well as asserted, so the margin audit sees it. It is a
+      // budget spent inside a spec rather than inside `helpers.ts`, which until
+      // M7 meant `E2E_MARGIN=1` could not measure it at all — the same blind
+      // spot that let the M7 audit certify a floor for a boss test whose one
+      // wait it had never seen (`docs/TEST_PLAN.md` §5, "The margin audit").
+      reportMargin("extractionIdleWindow", idleStartedAt, IDLE_PLAYER_SURVIVES_MS);
       expect(idleMs).toBeLessThan(IDLE_PLAYER_SURVIVES_MS);
 
       // B is still playing, still alive, and has no result of their own.
