@@ -662,6 +662,31 @@ export async function pickUpAt(
 
 type MoveKey = "KeyA" | "KeyD" | "KeyW" | "KeyS";
 
+/** Ignore sub-step axis error once the other axis still needs meaningful travel. */
+const AXIS_DEADZONE_PX = 10;
+
+/**
+ * Pick one cardinal direction for the next ordinary hold.
+ *
+ * WASD can express only cardinal and 45-degree movement. Pressing both axes for
+ * every non-cardinal target silently steers at 45 degrees even when the target
+ * is not on that line, so the shorter axis overshoots and oscillates. Advancing
+ * the dominant remaining axis produces bounded Manhattan legs and makes the
+ * hold's distance calculation describe the direction actually sent.
+ */
+export function movementKeyToward(dx: number, dy: number): MoveKey | null {
+  if (Math.abs(dx) >= Math.abs(dy) && Math.abs(dx) > AXIS_DEADZONE_PX) {
+    return dx > 0 ? "KeyD" : "KeyA";
+  }
+  if (Math.abs(dy) > AXIS_DEADZONE_PX) {
+    return dy > 0 ? "KeyS" : "KeyW";
+  }
+  if (Math.abs(dx) > AXIS_DEADZONE_PX) {
+    return dx > 0 ? "KeyD" : "KeyA";
+  }
+  return null;
+}
+
 /** How close to the target counts as arrived. */
 const ARRIVAL_PX = 24;
 
@@ -890,8 +915,10 @@ export async function walkToward(
       holdMs = SIDESTEP_HOLD_MS;
     } else {
       wasSidestepping = false;
-      if (Math.abs(dx) > 10) keys.push(dx > 0 ? "KeyD" : "KeyA");
-      if (Math.abs(dy) > 10) keys.push(dy > 0 ? "KeyS" : "KeyW");
+      const movementKey = movementKeyToward(dx, dy);
+      if (movementKey !== null) keys.push(movementKey);
+      const axisDistance =
+        movementKey === "KeyA" || movementKey === "KeyD" ? Math.abs(dx) : Math.abs(dy);
       // Sized to stop just short of the target rather than sail past it. The
       // keys are released before the next poll, so travel per iteration is
       // exactly this hold — the poll's own latency moves the player not at all,
@@ -901,7 +928,7 @@ export async function walkToward(
       // it instead of just past it.
       holdMs = Math.min(
         MAX_HOLD_MS,
-        Math.max(MIN_HOLD_MS, ((distance - ARRIVAL_PX) / PLAYER_SPEED) * 1000),
+        Math.max(MIN_HOLD_MS, ((axisDistance - ARRIVAL_PX) / PLAYER_SPEED) * 1000),
       );
     }
     expectedProgressPx = (PLAYER_SPEED * holdMs) / 1000;
