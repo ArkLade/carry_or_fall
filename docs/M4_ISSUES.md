@@ -1,8 +1,8 @@
 # M4 Issue List — Authoritative Multiplayer
 
-Status: **Planned** (implementation follows in the same change set as this document). The bounded
+Status: **Delivered.** The bounded
 task list for milestone **M4**, per the technical plan §38 (M4) and the repository's
-per-milestone-issue-list practice established at M1/M2/M3. M4 is implemented after M3 and after the
+per-milestone-issue-list practice established at M1/M2/M3. M4 was implemented after M3 and after the
 M4-prep tuning commit (`c6b2f71`); no M3 tail defects are carried forward beyond the two recorded in
 §1.6.
 

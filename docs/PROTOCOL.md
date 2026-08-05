@@ -1,6 +1,6 @@
 # Network Protocol
 
-Status: **M6 (party and matchmaking).** This document is authoritative for the client/server
+Status: **M7 (boss and core unlock).** This document is authoritative for the client/server
 wire contract. It records what exists today and the shapes the next milestones will add, so the contract is designed
 once rather than reinvented per feature (technical plan §10, §35, §46). It is a control document,
 not an authoritative design document; where it and the technical plan disagree, the technical plan
@@ -213,7 +213,7 @@ The server stores the latest valid input per player and advances the world by ex
 `SIMULATION_DT_MS` step per tick (§9.3). Sending faster buys nothing: the extra messages are
 rate-limited, and distance, cooldowns, and interaction range are all computed from server state.
 
-Still not implemented, and each added only when its milestone lands (technical plan §10.1):
+Current and reserved client intent messages (technical plan §10.1):
 
 | Message                  | Milestone | Purpose                                          |
 | ------------------------ | --------- | ------------------------------------------------ |
@@ -225,6 +225,9 @@ Still not implemented, and each added only when its milestone lands (technical p
 | `equip_ground_weapon`    | later     | swap to a ground weapon                          |
 | `replace_wildcard_skill` | later     | replace the wildcard through a UI rather than by walking over a chip |
 | `ping`                   | later     | latency measurement                              |
+
+The M4 and M7 rows are implemented. Rows marked `later` remain reserved and are
+added only when their milestone lands.
 
 **Nothing settlement-shaped will ever appear in this table.** M5's secure-slot write and reward
 settlement are both triggered by the server observing its own simulation state, never by a client

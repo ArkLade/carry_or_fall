@@ -1,9 +1,10 @@
 # Content Authoring
 
-Status: **M4 shipped.** §3 (weapons), §4 (skills), §5 (loot), §6 (enemies), and §6.1 (the arena) are all shipped —
-`basic_sword`, `basic_bow`, `chaser`, the six `ALL_LOOT` items, and the ten `ALL_SKILLS` skills are
-real data in `@carry-or-fall/game-content`, read by the shared attack pipeline, `build-effects.ts`,
-and `skill-effects.ts` in `@carry-or-fall/simulation-core`. This document explains how to add a
+Status: **M7 shipped.** The content package contains 11 skills, six ordinary loot definitions,
+one ordinary enemy, the arena, the Warden/core content, and unlock definitions covering
+default, threshold, and boss-core sources. These are real data in
+`@carry-or-fall/game-content`, read by the shared attack pipeline, `build-effects.ts`, and
+`skill-effects.ts` in `@carry-or-fall/simulation-core`. This document explains how to add a
 weapon, armor type, skill, loot item, or enemy as a **data definition** — not as new engine code.
 This follows the technical plan §7.2 and §43 and the `docs/DEVELOPMENT_RULES.md` rule that content
 is data-driven.
@@ -222,16 +223,11 @@ export const honingStone: LootDefinition = {
 } as const;
 ```
 
-M2 ships six items (`ALL_LOOT` in `packages/game-content/src/loot.ts`): `honing_stone`,
+M2 shipped six ordinary items (`ALL_LOOT` in `packages/game-content/src/loot.ts`): `honing_stone`,
 `farsight_lens`, `quickstep_charm`, `scrap_plating`, `resonant_core`, and `warlords_seal` (rare,
-mixed-category, meant as secure-slot bait). No `boss`-rarity item exists yet — boss drops and
-weapon/armor blueprints require the account/persistence layer M5 adds (`docs/DECISIONS.md` D27;
-`docs/M2_ISSUES.md` §1), so M2's loot is points-plus-optional-build-effect only.
-
-**Still true after M5.** M5 shipped the persistence layer, but *not* blueprint or boss-core items:
-inventing a new item kind inside a persistence milestone would be adding gameplay. M5's unlocks are
-point thresholds instead (§6.2, `docs/DECISIONS.md` D48), and blueprints remain an unbuilt item kind
-for the milestone that adds one.
+mixed-category, meant as secure-slot bait). M7 added `split_return_core`, a `boss`-rarity item held
+in `ALL_BOSS_CORES` rather than `ALL_LOOT`; the separate registries keep ordinary loot tables from
+spawning a boss reward. Weapon and armor blueprints remain unimplemented.
 
 Avoid item-quality randomness, random stat rolls, procedural affixes, and hidden conversion
 formulas (concept §6.6). Every item has clear, fixed values.
@@ -311,7 +307,7 @@ Rules when adding or changing one:
 - **Changing arena geometry is a content-version change** (`docs/DECISIONS.md` D34): a client with
   the old walls would draw a map the server does not collide against.
 
-## 6.2 Unlocks — point thresholds (M5, shipped)
+## 6.2 Unlocks — three sources (M5–M7, shipped)
 
 `packages/game-content/src/unlocks.ts`. An unlock says which content an account may bring into a run;
 the join gate refuses anything the account does not hold (technical plan §19,
@@ -321,7 +317,8 @@ the join gate refuses anything the account does not hold (technical plan §19,
 export interface UnlockDefinition extends ContentDefinition {
   readonly kind: "unlock";
   readonly unlockType: "skill" | "weapon" | "armor";
-  /** `null` = every new account starts with it (concept §5.4). */
+  readonly source: "default" | "threshold" | "boss_core";
+  /** The granting balance, and `null` for every source except `"threshold"`. */
   readonly requires: { readonly category: PointCategory; readonly amount: number } | null;
 }
 ```
@@ -338,6 +335,8 @@ Rules for authoring one:
   never be selected by any account; a skill in two would be earnable after already being granted.
   `unlocks.test.ts` asserts the partition, and `boss.test.ts` asserts that no balance, however
   large, grants a boss-core unlock.
+- **Only `threshold` sources have a non-null `requires`.** `default` and `boss_core` unlocks are
+  granted by their own server-owned events (`docs/DECISIONS.md` D67).
 - **A threshold must trace to a concept §6 sentence.** Each category says what it is "used to unlock
   or improve"; map the skill to the category whose description names its effect, and say which
   sentence in the comment.

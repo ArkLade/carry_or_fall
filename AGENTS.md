@@ -25,8 +25,8 @@ apps/
   server/            Node.js 24 + Colyseus authoritative server (TypeScript)
 packages/
   protocol/          Shared IDs, versions, message schemas, runtime validators
-  game-content/      Data-driven content type placeholders (no gameplay content yet)
-  simulation-core/   Deterministic helpers (no movement/combat yet)
+  game-content/      Data-driven skills, loot, enemies, boss, unlocks, and arena
+  simulation-core/   Deterministic movement, combat, loot, skills, and boss helpers
   config/            Shared TypeScript / tooling config
 supabase/            SQL migrations for the account/progression schema (M5)
 docs/                Authoritative docs, rules, decisions, execution plans
@@ -89,7 +89,9 @@ Before declaring a task complete:
 Read in this order before planning or editing anything:
 
 1. `docs/DEVELOPMENT_RULES.md` — the durable rules. Everything else is subordinate.
-2. `docs/DECISIONS.md` — Current state: M0 through M7 are merged and tagged (v0.7.0-boss). 
+2. `docs/DECISIONS.md` — Current state: M0 through M7 are merged; M1 through M7 are
+   tagged, ending at `v0.7.0-boss`. M7A (enemy behavior) and M7B (PvP damage per D59)
+   are planned but not built. M8 is deployment.
 3. `docs/lightweight_multiplayer_extraction_roguelite_game_concept.md` — authoritative
    for gameplay and scope.
 4. `docs/browser_multiplayer_game_technical_plan_verified_v2.md` — authoritative for
@@ -99,14 +101,14 @@ Read in this order before planning or editing anything:
 6. The `M*_ISSUES.md` and `M*_EXECUTION_PLAN.md` for the milestone you are working on,
    and the one before it.
 
-Current state: M0 through M7 are merged and tagged (v0.7.0-boss). Two milestones are
+Current state: M0 through M7 are merged. M1 through M7 are tagged, ending at
+`v0.7.0-boss`; there is no M0 tag. Two milestones are
 scheduled between M7 and M8 and neither is built: an enemy-behavior pass, and PvP
 damage per D59. M8 is deployment.
 
 Naming: `M<n>.<k>` is an issue ID inside milestone M<n> — `M7_ISSUES.md` numbers its
 issues M7.1 through M7.9. Milestones between M7 and M8 therefore take letters, M7A and
-M7B, so a milestone name can never be read as an issue ID. D59 currently calls the PvP
-milestone "M7.5", which collides with M7_ISSUES.md §6; that needs correcting.
+M7B, so a milestone name can never be read as an issue ID. D59 names the PvP milestone M7B.
 
 ## Rules for every agent, regardless of which one you are
 

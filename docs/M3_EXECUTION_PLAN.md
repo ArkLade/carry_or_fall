@@ -382,8 +382,8 @@ Matching the technical plan §38 M3 exit criteria, plus the repository gates:
 ## 13. Non-goals
 
 M3 implements none of the following (deferred to the stated milestone, or decided out per §1): boss
-skill cores and split-on-hit behavior (M7); Colyseus rooms, authoritative server state, PvP, other
-players (M4); accounts, Supabase, persistence, a real loadout-picker backed by an account (M5);
+skill cores and split-on-hit behavior (M7); Colyseus rooms, authoritative server state, and other
+players (M4); PvP (M7B); accounts, Supabase, persistence, a real loadout-picker backed by an account (M5);
 parties/matchmaking (M6); deployment (M8+); mobile controls; client prediction; weapon/armor
 blueprints and permanent unlocks; new enemy types; a wildcard chip dropped by the chaser. No empty
 service layers are created for any of these (`docs/DEVELOPMENT_RULES.md`, "Scope discipline").

@@ -1,8 +1,8 @@
 # M3 Issue List — Data-Driven Skills
 
-Status: **Planned** (implementation follows in the same change set as this document). The bounded
+Status: **Delivered.** The bounded
 task list for milestone **M3**, per the technical plan §38 (M3) and the repository's
-per-milestone-issue-list practice established at M1/M2. M3 is implemented **after** M2 (tagged
+per-milestone-issue-list practice established at M1/M2. M3 was implemented **after** M2 (tagged
 `v0.2.0-loot-extraction`); no M2 tail defects are carried forward.
 
 ## Scope
@@ -18,7 +18,7 @@ temporary wildcard skill slot, and the hard caps under real combination load.
 - No recursive effect explosion.
 
 **Explicitly out of M3** (later milestones or never, per the authoritative documents): Colyseus
-rooms/networking, other players, PvP (M4); accounts, Supabase, persistence (M5); parties/matchmaking
+rooms/networking and other players (M4); PvP (M7B); accounts, Supabase, persistence (M5); parties/matchmaking
 (M6); the boss and boss skill cores, `split_return`-style split-on-hit skills (M7, concept §11 — see
 §1 below); deployment (M8+); mobile controls; client prediction; weapon/armor blueprints and their
 permanent unlocks (still M5, per `docs/M2_ISSUES.md` §1); a lobby/account-backed loadout screen

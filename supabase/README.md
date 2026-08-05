@@ -32,16 +32,24 @@ filename order and nothing else.
 
 1. Create a project. Under **Authentication → Sign In / Providers**, enable **Anonymous sign-ins**
    (technical plan §17.1 requires instant guest play).
-2. Apply the migrations in order. Either paste each file into the SQL Editor in order, or, with the
-   Supabase CLI linked to the project:
+2. Install the Supabase CLI, then link this checkout to the project once:
+
+   ```sh
+   supabase link --project-ref <project-ref>
+   ```
+
+   The link state is local and ignored. Do not apply schema through the dashboard SQL Editor; D53
+   makes the checked-in migration history plus the CLI the only approved path.
+3. Apply every unapplied migration in filename order through the linked CLI:
 
    ```sh
    supabase db push
    ```
 
-3. Copy the project's URL, publishable key (`sb_publishable_…`), and secret key (`sb_secret_…`)
-   into the repository-root `.env`, using the variable names in `.env.example`. That file is
-   gitignored; only `.env.example` is ever tracked.
+4. Copy the project's URL, publishable key (`sb_publishable_…`), and secret key (`sb_secret_…`)
+   into the repository-root `.env`, using the commented examples in `.env.example`. Replace the
+   placeholders and uncomment all four lines together. That file is gitignored; only
+   `.env.example` is ever tracked.
 
 The publishable key is designed to be bundled into the browser. **The secret key bypasses row-level
 security and must only ever exist in the server process** — never in a `VITE_*` variable, never in

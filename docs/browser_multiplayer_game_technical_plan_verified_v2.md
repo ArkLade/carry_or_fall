@@ -28,6 +28,24 @@ The client/server/database separation remains the recommended architecture.
 
 ---
 
+# 0.1 Later Decisions That Overtook This Baseline
+
+This document remains the authoritative design baseline. The append-only
+decision log records the following later, narrower decisions; where the original
+text below differs, the cited decision is in force. This reconciliation does not
+rewrite the baseline's architecture, scope, security model, or milestone exit
+criteria.
+
+| Decision | Current rule | Baseline text overtaken |
+|---|---|---|
+| D5 | Room integration tests use the real listening server and real Colyseus client SDK. `@colyseus/testing` is not used. | §1 and §30.2 references to Colyseus test utilities |
+| D11 | Railway is the primary M8 server host; Render is the fallback. | Any later sections that still present Render as primary, including §38, §39, and §44 |
+| D22 | `DATA_MODEL.md` was deliberately deferred until M5, then authored before the M5 schema and persistence code. | §46's instruction to create it before M1 |
+| D44 | Secure-slot insertion is reserved persistently and awaited before in-memory protection is exposed. A pending reservation is recovered on the next join, so abandonment does not lose the secured item; ordinary carried inventory is still lost. | §41.1's pre-M5 loss consequence |
+| D64 | `match_room` has explicit reconnection support and `party_room` uses the SDK reconnection lifecycle. M9 may measure and harden reconnection, but it is no longer an entirely deferred capability. | §38's description of M9 as the point where reconnection is first delivered |
+
+---
+
 # 1. Executive Decision
 
 Use the following initial production stack:

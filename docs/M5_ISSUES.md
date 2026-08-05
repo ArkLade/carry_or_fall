@@ -1,8 +1,8 @@
 # M5 Issue List — Accounts and Progression
 
-Status: **Planned** (implementation follows in the same change set as this document). The bounded
+Status: **Delivered.** The bounded
 task list for milestone **M5**, per technical plan §38 (M5) and the repository's
-per-milestone-issue-list practice established at M1–M4. M5 is implemented after M4 on branch
+per-milestone-issue-list practice established at M1–M4. M5 was implemented after M4 on branch
 `m5-accounts`.
 
 `docs/DATA_MODEL.md` is a **prerequisite**, not a byproduct: `docs/DECISIONS.md` D22 deferred it to

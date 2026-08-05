@@ -92,13 +92,13 @@ milestone, not implemented yet).
 - **Consequences:** No horizontal scaling until a dedicated scaling milestone. No Redis in M0.
 - **Status:** Approved.
 
-## D9. Supabase reserved for later persistent account progression
+## D9. Supabase for persistent account progression (implemented M5)
 
 - **Decision:** Supabase (Auth + PostgreSQL) will store permanent account progression.
 - **Reason:** Instant guest play, optional linking, and progression storage (technical plan §2.4).
-- **Consequences:** Supabase must never hold live match state. **Not implemented in M0** — no
-  Supabase dependencies, variables, or code exist yet.
-- **Status:** Reserved.
+- **Consequences:** Supabase must never hold live match state. It was not implemented in M0; M5
+  added Auth, PostgreSQL migrations, server-owned settlement, and row-level security.
+- **Status:** Approved and implemented in M5.
 
 ## D10. Cloudflare Pages reserved for later client deployment
 
@@ -239,7 +239,8 @@ milestone, not implemented yet).
   author it before any migration, and the same milestone owns `supabase/` migrations, the
   `settle_match_reward` function, and RLS policies. Until then, no code reads or writes a persistent
   schema; secure-slot and reward persistence remain explicitly unimplemented (D9, D16).
-- **Status:** Reserved.
+  **Fulfilled in M5:** `DATA_MODEL.md` was authored before the migration and persistence code.
+- **Status:** Approved and fulfilled in M5.
 
 ## D23. Runtime validators ship with the first networked consumer
 
@@ -481,7 +482,7 @@ milestone, not implemented yet).
 - **Consequences:** Three of four §9.4 combinations are fully playable. Adding
   knockback later requires a new primitive in simulation-core plus a content
   definition, and serves as a live check that the data-driven claim holds.
-- **Status:** **Superseded by D69**, which schedules knockback into M7.5 rather than leaving it to
+- **Status:** **Superseded by D69**, which schedules knockback into M7B rather than leaving it to
   "a later content milestone". Kept as the record of M3's reasoning.
 ## D34. The content version activates in the join handshake
 
@@ -591,7 +592,7 @@ milestone, not implemented yet).
   account-backed loadout instead of an ad-hoc selection, and the unlock check joins the same gate.
 - **Status:** Approved.
 
-## D39. Disconnect: stationary and vulnerable, then abandonment loses the run
+## D39. Disconnect: stationary and vulnerable; secure-slot loss consequence superseded
 
 - **Date:** 2026-07-31.
 - **Decision:** An unconsented disconnect keeps the player in the world for a short reconnect window
@@ -605,12 +606,14 @@ milestone, not implemented yet).
   matching identity — cannot be met: there are no accounts until M5. The Colyseus token is issued to
   that socket and is not guessable by another client, which is the strongest identity that exists
   right now.
-- **Consequences:** **An abandoned run is lost, including the secure slot.** Nothing is persisted
-  anywhere (D9, D16, D22), so there is nothing to settle a reward into, and D27's local-only
-  secure-slot promise is not honored across a disconnect. This is the concrete shape of the gap M5
-  must close: technical plan §14.3 requires a secure-slot action to be persisted *before* it is
-  reported successful, and until that exists the promise is only as durable as the room's memory.
-- **Status:** Approved.
+- **Original M4 consequence — superseded for the secure slot by D44:** An abandoned run was lost,
+  including the secure slot, because M4 had no persistence (D9, D16, D22). That statement records
+  what was true before M5 and is no longer the rule. M5 persists a secure reservation before the
+  simulation can report success, and join-time recovery settles a reservation left pending by a
+  crashed or abandoned room. **Normal carried inventory is still lost and dropped; the secured item
+  is not.**
+- **Status:** Approved for the disconnect, vulnerability, reconnect-window, and normal-inventory
+  drop policy. **The secure-slot-loss consequence is superseded by D44.**
 
 ## D40. `foundation_room` stays alongside `match_room`, behind one shared handshake gate
 
@@ -710,7 +713,8 @@ milestone, not implemented yet).
 ## D44. The secure-slot promise is honored by ordering, not by discipline
 
 - **Date:** 2026-08-01.
-- **Decision:** Supersedes D27. A secure-slot insertion is persisted before it is reported
+- **Decision:** Supersedes D27 and D39's M4-era secure-slot-loss consequence. A secure-slot
+  insertion is persisted before it is reported
   successful, as `docs/DEVELOPMENT_RULES.md` requires. The ordering is structural rather than a
   convention someone must remember (`docs/DATA_MODEL.md` §4.2): the room validates the request
   against live simulation state, writes an idempotent `secure_reservations` row and **awaits** it,
@@ -1138,10 +1142,10 @@ milestone, not implemented yet).
     document makes. It is not taken, because private is the choice that cannot leak.
 - **Status:** Approved.
 
-## D59. Player-versus-player damage is assigned to M7.5, between the boss and the internet test
+## D59. Player-versus-player damage is assigned to M7B, between the boss and the internet test
 
 - **Date:** 2026-08-02.
-- **Decision:** PvP damage — players resolving attacks against players — is scheduled as **M7.5,
+- **Decision:** PvP damage — players resolving attacks against players — is scheduled as **M7B,
   "Player Combat and Group Balance"**, between technical plan §38's M7 (Boss and Rare Skill) and M8
   (Private Internet Test). It is **not** implemented in M6. Its scope: letting the existing shared
   attack pipeline treat players as `AttackTarget`s, spawn protection (concept §21.4), and the concept
@@ -1153,15 +1157,15 @@ milestone, not implemented yet).
   "PvE and PvP coexist" as approved baseline. Technical plan §38 assigns it to **no milestone at
   all**, and D41 deferred it out of M4 without naming where it lands. Left alone, the most central
   tension in the concept document would arrive by accident or not at all.
-  M7.5 specifically: it must come **after** M7, because the boss and its skill cores change what a
+  M7B specifically: it must come **after** M7, because the boss and its skill cores change what a
   player can bring to a fight and balancing against a moving target is wasted work; and **before**
   M8, because M8 is the first time strangers meet, concept §35's criteria 8 and 9 can only be
   *measured* with real players, and shipping the first external test with the game's central tension
   absent would make that measurement meaningless.
 - **Consequences:** M6 ships no friendly fire, because it ships no fire between players at all. The
   shape is already right — `AttackTarget` is a minimal damageable-circle interface — so the work is
-  the balance decisions §15/§16 imply rather than the plumbing. Numbering it 7.5 rather than
-  renumbering M8/M9 keeps every existing reference to §38's milestones valid.
+  the balance decisions §15/§16 imply rather than the plumbing. The lettered name places it between
+  M7 and M8 without colliding with M7 issue identifiers such as M7.5 or renumbering M8/M9.
 - **Status:** Reserved.
 
 ## D60. A party gets presence, not power; the §35 balance work is deferred with PvP
@@ -1325,12 +1329,12 @@ milestone, not implemented yet).
   when they leave. All three of its attacks (concept §14.3's two normal plus one area) are melee
   arcs or radial bursts centred on the boss; **it fires no projectiles**.
 - **Reason:** Concept §14.3 asks for a boss that attracts nearby players *and* creates optional PvPvE
-  conflict. PvP damage is M7.5 (D59), so the second half cannot exist yet, and building it here
+  conflict. PvP damage is M7B (D59), so the second half cannot exist yet, and building it here
   would be doing that milestone's work under this one's name. A leash gives the first half without
   the second: the rare drop is worth walking to, and the threat is one a player chooses to enter
   rather than one that comes to them.
   Projectiles are the same boundary. A projectile that damages a *player* is exactly the plumbing
-  M7.5 owns — widening `AttackTarget` to include players — and M7 stops short of it deliberately.
+  M7B owns — widening `AttackTarget` to include players — and M7 stops short of it deliberately.
   §14.3's "support melee and ranged interaction" is about how a player engages the boss, and both
   weapons do.
   The leash is also a **testing** decision, and that is not a side effect. M6 measured the browser
@@ -1340,7 +1344,7 @@ milestone, not implemented yet).
   at `(1500, 250)` was chosen against those routes, not for flavour (`docs/M7_ISSUES.md` §1.8).
 - **Consequences:** A ranged player can kite a boss that cannot shoot back. The area attack's reach
   (260 px, the longest of the three) and the boss's move speed are what make kiting cost real
-  movement; both are proposed and balance-deferred like every other unsourced number here. When M7.5
+  movement; both are proposed and balance-deferred like every other unsourced number here. When M7B
   widens `AttackTarget`, giving this boss a projectile attack is a content edit — a fourth entry in
   `attacks` with a new `kind` — and the fixed-triple type is the place that forces someone to
   re-read §14.3's "do not build a complex raid boss" before doing it.
@@ -1393,11 +1397,11 @@ milestone, not implemented yet).
   could not be applied even if one happened.
 - **Status:** Approved.
 
-## D69. Knockback is scheduled to M7.5, not deferred again
+## D69. Knockback is scheduled to M7B, not deferred again
 
 - **Date:** 2026-08-03.
 - **Decision:** Supersedes D33's open-ended deferral. Knockback — concept §9.2's displacement-on-hit
-  primitive, and the missing third of §9.4's Defensive Melee Combination — is scheduled into **M7.5**
+  primitive, and the missing third of §9.4's Defensive Melee Combination — is scheduled into **M7B**
   (D59), alongside the PvP damage and concept §16 balance work.
 - **Reason:** D33's stated reason has expired. It deferred knockback because covering §9.4's four
   example combinations needs eleven skills and technical plan §38 M3 scoped that milestone to "8 to
@@ -1405,7 +1409,7 @@ milestone, not implemented yet).
   The deferral still holds, for a better reason. M7's rare skill is `split_return`, a **projectile**
   primitive; knockback is a **displacement** primitive. Landing both in one milestone means two new
   combat primitives alongside a boss, a new intent, and a settlement change — and displacement
-  interacts with precisely what M7.5 exists to decide, since concept §16's solo-versus-group balance
+  interacts with precisely what M7B exists to decide, since concept §16's solo-versus-group balance
   is about who controls space in a direct fight.
 - **Consequences:** Three of §9.4's four combinations remain fully playable, unchanged from M3. The
   fourth is now owned by a named milestone rather than by "a later content milestone". Adding it

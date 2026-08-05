@@ -203,5 +203,5 @@ reported separately with its sign-in count.
 
 ## 13. What this plan will not do
 
-No PvP damage, no boss projectiles (D59). No knockback (scheduled to M7.5). No migration. No new
+No PvP damage, no boss projectiles (D59). No knockback (scheduled to M7B). No migration. No new
 dependency. No mastery schema. No second boss. No weakening of a §13.4 cap. No deployment (M8).

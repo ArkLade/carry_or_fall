@@ -1,6 +1,6 @@
 # Test Plan
 
-Status: **M4 (authoritative multiplayer).** The testing strategy for the project: the layers, what each covers, what
+Status: **M7 (boss and core unlock).** The testing strategy for the project: the layers, what each covers, what
 exists today, and what each future milestone must add. Follows the technical plan §30 and the
 `docs/DEVELOPMENT_RULES.md` rule "Tests for every meaningful rule."
 
@@ -30,9 +30,9 @@ Fast, dependency-free tests of pure logic in `packages/*`. Glob: `packages/*/src
 effect caps, inventory movement, secure slot, point conversion, extraction calculation, reward
 payload generation, duplicate-unlock conversion, cooldown validation.
 
-**Exists today (28 files, 341 tests)**, covering the simulation rules M1–M3 established, the content
-definitions, and — added in M4 — the wire validators and the multi-player rules. The ones worth
-naming here because they guard an M4 invariant:
+**Exists today (36 files, 478 tests)**, covering the simulation and content rules shipped through
+M7, including wire validators, multiplayer, parties, persistence contracts, and the boss/core loop.
+The ones worth naming here because they guard an authority invariant:
 
 - `packages/protocol/src/validation.test.ts` — every validator accepts the exact legal shape and
   rejects the wrong type, the missing field, `NaN`/`Infinity`, the out-of-range enum, the negative
@@ -57,7 +57,7 @@ send messages, verify synchronized state, test disconnects, room disposal, extra
 death/dropped loot.
 
 **One gate, two Vitest projects** (`docs/DECISIONS.md` D54). `pnpm test:integration` runs
-`--project integration --project integration-server`. The ten files that bind a real TCP port and
+`--project integration --project integration-server`. The 11 files that bind a real TCP port and
 run a real Colyseus server are the `integration-server` project and run **one file at a time**
 (`fileParallelism: false`); everything else stays parallel. Run together on a loaded machine they
 oversubscribe it, and on Windows an oversubscribed fork intermittently dies natively — the worker
@@ -65,7 +65,7 @@ exits with `0xC0000409` and no JavaScript error, so its whole file silently vani
 counts. Serialising them is the mitigation; the `vitest.incomplete-run.ts` reporter is the
 guarantee, because it fails loudly whenever any file did not report.
 
-**Exists today (6 files, 71 tests):**
+**Exists today (22 files, 222 tests; approximately 408 seconds on the measured Windows host):**
 
 - `apps/server/test/match-room.test.ts` — the full §30.2 list against the match room: two clients
   join one room and start together; the room locks at match start so a third client gets a different
@@ -134,9 +134,9 @@ plan §30.3 requires this layer eventually, and §38 M4 requires "two real brows
 already presuppose the capability, so building it now rather than at M5 is bringing forward
 required infrastructure, not scope creep.
 
-**What exists today:** `apps/client/playwright.config.ts` and `apps/client/e2e/*.spec.ts`
-(`loadout.spec.ts`, `skills.spec.ts`, `arena.spec.ts`, and — new in M4 —
-`multiplayer.spec.ts`), run via `pnpm run test:e2e`. Tests drive a real Chromium instance against
+**What exists today:** `apps/client/playwright.config.ts` and 35 tests across six specs:
+`arena.spec.ts`, `boss.spec.ts`, `loadout.spec.ts`, `multiplayer.spec.ts`, `party.spec.ts`, and
+`skills.spec.ts`. They run via `pnpm run test:e2e` and drive a real Chromium instance against
 the real Vite **dev** server (never the production build) **and the real game server**, which the
 Playwright config now starts as a second `webServer`: from M4 the client cannot play without it.
 Input is real keyboard/mouse events into the `<canvas>` — Phaser renders to canvas, not DOM nodes,
@@ -213,7 +213,7 @@ headless-rendering quirks) than the six fast, deterministic gates; keeping them 
 slow or flaky browser run never blocks or slows the fast feedback loop those six gates provide.
 
 **A broken browser suite must fail cheaply.** Three settings enforce that, because a systematic
-breakage fails every test identically and there is nothing to learn from watching it happen thirty
+breakage fails every test identically and there is nothing to learn from watching it happen 35
 times:
 
 - `maxFailures: 3` in CI stops the run after a handful of failures.
@@ -237,9 +237,10 @@ calls failed roughly 60% of the time in a repeated trial). Every keypress in thi
 holds the key down for a short, real duration (`apps/client/e2e/helpers.ts`'s `pressKey`), which is
 also a more faithful simulation of an actual human keypress.
 
-**Not yet covered:** anonymous sign-in, joining a room, the reconnect screen, the account-link
-warning (all require M4+ networking/M5 accounts, which do not exist yet); supported-browser smoke
-tests beyond Chromium (deferred; no cross-browser requirement yet).
+**Not yet covered:** real-project anonymous authentication, the reconnect screen, the account-link
+warning, and supported-browser smoke tests beyond Chromium (deferred; no cross-browser requirement
+yet). Room joining is exercised throughout the suite. The credentialed Supabase contract/RLS suite
+is a separate gate (§2.5), not a browser test.
 
 ### 2.3.0 Timing rule: wait for the thing, never for a duration that implies it
 
@@ -330,7 +331,7 @@ was standing still in front of it.
 
 ### 2.3.1 Session durability
 
-The browser suite runs thirty tests against **one** server process and abandons every match by
+The browser suite runs 35 tests against **one** server process and abandons every match by
 closing a browser rather than leaving politely, which makes it a small soak test whether or not it
 was meant to be one. `apps/server/test/match-lifecycle.test.ts` covers that shape directly: it
 creates and abandons matches in sequence and asserts rooms are disposed and step timing stays flat.
@@ -427,7 +428,7 @@ Each milestone's exit criteria (technical plan §38) imply its tests:
   client at all, and that its leash holds — which is what the rest of the browser suite's timing
   margins rest on.
 - **M8–M9:** deployment smoke and load/soak/perf per the layers above. PvP damage and the concept
-  §16 solo/group balance rules are M7.5 (D59).
+  §16 solo/group balance rules are M7B (D59).
 
 ### 4.1 The §13.4 hard caps, and which are reachable from live gameplay
 
