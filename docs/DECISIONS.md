@@ -995,7 +995,8 @@ milestone, not implemented yet).
     tests because no room reaches 5 s of uptime before its unconsented leave, but a test that got
     slower would silently start reconnecting. A test that needs an unconsented drop to *stay*
     dropped should set `room.reconnection.enabled = false`.
-- **Status:** Approved.
+- **Status:** Approved. **The one-file-at-a-time setting is superseded by D72; the project split,
+  incomplete-run reporter, and load-sensitivity finding remain in force.**
 
 ## D55. A party is seated atomically, and D8 is what makes that possible
 
@@ -1164,8 +1165,9 @@ milestone, not implemented yet).
   absent would make that measurement meaningless.
 - **Consequences:** M6 ships no friendly fire, because it ships no fire between players at all. The
   shape is already right — `AttackTarget` is a minimal damageable-circle interface — so the work is
-  the balance decisions §15/§16 imply rather than the plumbing. The lettered name places it between
-  M7 and M8 without colliding with M7 issue identifiers such as M7.5 or renumbering M8/M9.
+  the balance decisions §15/§16 imply rather than the plumbing. D70 formalizes the lettered name:
+  it places the milestone between M7 and M8 without colliding with M7 issue identifiers such as
+  M7.5 or renumbering M8/M9.
 - **Status:** Reserved.
 
 ## D60. A party gets presence, not power; the §35 balance work is deferred with PvP
@@ -1402,7 +1404,7 @@ milestone, not implemented yet).
 - **Date:** 2026-08-03.
 - **Decision:** Supersedes D33's open-ended deferral. Knockback — concept §9.2's displacement-on-hit
   primitive, and the missing third of §9.4's Defensive Melee Combination — is scheduled into **M7B**
-  (D59), alongside the PvP damage and concept §16 balance work.
+  (D59, D70), alongside the PvP damage and concept §16 balance work.
 - **Reason:** D33's stated reason has expired. It deferred knockback because covering §9.4's four
   example combinations needs eleven skills and technical plan §38 M3 scoped that milestone to "8 to
   10"; §38 M7 sets no skill count at all, so the range no longer binds anything.
@@ -1416,3 +1418,58 @@ milestone, not implemented yet).
   remains the live check of the data-driven claim D33 described: a new primitive in
   `simulation-core` plus a content definition, and nothing else.
 - **Status:** Approved. **Supersedes D33**, which is kept as the record of M3's reasoning.
+
+## D70. Lettered names identify milestones inserted between numbered milestones
+
+- **Date:** 2026-08-05.
+- **Decision:** A name of the form `M<n>.<k>` is an issue identifier inside milestone `M<n>`, never
+  a milestone name. A milestone inserted between M7 and M8 uses a letter: the enemy-behavior pass is
+  **M7A**, the player-versus-player damage milestone is **M7B**, and their issues are numbered
+  `M7A.1`, `M7A.2`, and so on, or `M7B.1`, `M7B.2`, and so on. Existing M7 headings such as M7.4 and
+  M7.5 retain their shipped meaning as issues within M7.
+- **Reason:** M5, M6, and M7 all use the dotted form for issue identifiers, and M7.5 is already the
+  shipped settlement issue. Reusing that same string as a later milestone name made references
+  ambiguous and made a milestone indistinguishable from an issue in the record it follows.
+- **Consequences:** D59 and D69 use M7B, D33's supersession points to D69 without reviving the old
+  name, and every new enemy-pass document uses M7A and `M7A.n`. Numbered milestones M8 and M9 do not
+  move. The shipped M7 issue record is not renumbered or rewritten.
+- **Status:** Approved.
+
+## D71. The M7A enemy-behavior pass precedes M7B player combat
+
+- **Date:** 2026-08-05.
+- **Decision:** M7A is a five-phase enemy-behavior milestone between shipped M7 and planned M7B:
+  arena enlargement and timing re-audit; bounded navigation plus Dasher; the hostile-projectile pool
+  plus Standard Shooter; Shield/Tank and Grenadier; then Juggernaut and Hive Mother. Each phase must
+  leave an independently playable game. M7B remains the PvP damage, group-balance, and knockback
+  milestone described by D59 and D69.
+- **Reason:** M7 playtesting found that the direct-chasing enemies and the Warden read as
+  unintelligent. Tuning player combat and group balance against trivial PvE would make those values
+  obsolete when enemy pressure changes, forcing the same balance work to be done twice. The arena
+  resize is isolated first because its route and browser-timing effects must be measurable before
+  new behaviors add a second cause.
+- **Consequences:** `docs/M7A_ISSUES.md` owns the bounded scope, multiplayer translations,
+  deferments, performance budget, and phase acceptance criteria. The design draft is explicitly
+  non-authoritative. M7A changes no persistence schema, adds no dependency, and does not implement
+  PvP, player parry, or art. M7B begins only after M7A's final playable phase and margin audit pass.
+- **Status:** Reserved.
+
+## D72. The integration-server project is capped at two file workers
+
+- **Date:** 2026-08-05.
+- **Decision:** Keep D54's isolated `integration-server` project and incomplete-run reporter, but
+  cap both projects selected by `pnpm test:integration` at `maxWorkers: 2`. Vitest requires projects
+  in one scheduling group to share that value. Do not use the machine-wide default or unbounded file
+  parallelism for real-server tests.
+- **Reason:** The M7A readiness baseline passed 22 files / 222 tests in 423.67 seconds, with the 11
+  real-server files consuming 409.42 seconds serially. Settlement, boss-core, and match-authority
+  alone consumed 267.57 seconds. The same files and assertions passed with two workers in 224.21
+  seconds. Aggregate test time rose from 416.61 to 435.51 seconds because two servers contend for
+  resources, but wall time fell by 199.46 seconds and no file disappeared.
+- **Consequences:** Peak CPU and memory are higher than D54's serial mitigation, while remaining
+  deliberately bounded below the oversubscribed configuration that exposed the Windows native
+  crash. The reporter remains the guarantee against silently losing a file. Both full verification
+  passes must preserve 22 files / 222 tests; a native loss or unstable loaded run returns the dial
+  to one worker rather than weakening or removing coverage.
+- **Status:** Approved. **Supersedes only D54's one-file-at-a-time setting; D54's project split,
+  reporter, and load-sensitivity finding remain in force.**
