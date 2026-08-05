@@ -89,7 +89,7 @@ Before declaring a task complete:
 Read in this order before planning or editing anything:
 
 1. `docs/DEVELOPMENT_RULES.md` — the durable rules. Everything else is subordinate.
-2. `docs/DECISIONS.md` — Current state: M0 through M7 are merged and tagged (v0.7.0-boss). M7.4 (enemy behavior) is planned but not built. M7.5 is PvP damage per D59. M8 is deployment.
+2. `docs/DECISIONS.md` — Current state: M0 through M7 are merged and tagged (v0.7.0-boss). 
 3. `docs/lightweight_multiplayer_extraction_roguelite_game_concept.md` — authoritative
    for gameplay and scope.
 4. `docs/browser_multiplayer_game_technical_plan_verified_v2.md` — authoritative for
