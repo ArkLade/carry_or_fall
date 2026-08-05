@@ -11,9 +11,13 @@ D66, D69, D70, D71), the concept document §§13.3, 14.2, 14.3, 21, 24.2, 26, th
 
 ## Scope
 
-M7A has five phases, each of which must leave the game independently playable:
+M7A has five phases, each of which must leave the game independently playable. Phase 0 has three
+independently accepted and revertible checkpoints before any enemy is added:
 
-0. enlarge the arena and re-audit routes and timing before adding an enemy;
+0. establish and audit the larger arena in three steps:
+   - **0A:** camera and fixed 1920 × 1080 viewport foundation on the shipped arena;
+   - **0B:** authoritative arena/content resize to 2560 × 1440;
+   - **0C:** disturbed-contract, timing, and performance re-audit;
 1. add bounded navigation and the Dasher;
 2. add the bounded hostile-projectile pool and Standard Shooter;
 3. add the Shield/Tank, without projectile reflection, and the Grenadier;
@@ -48,15 +52,23 @@ new dependency.
 
 ## §1. Decisions that must hold before enemy implementation
 
-### 1.1 Phase 0 owns the arena resize and the first margin audit
+### 1.1 Phase 0 owns the viewport camera, arena resize, and first margin audit
 
-The current arena is 1920 × 1080 and was already doubled in both dimensions during M4 preparation.
-M7A proposes 2560 × 1440: one-third more distance on each axis and about 1.78 times the area. That is
-large enough to separate six roles without turning the concept's compact map into a traversal game.
-The exact wall, spawn, pickup, extraction, open-lane, and lair coordinates are content work in Phase
-0; they are accepted by reachability and timing evidence, not by preserving their old ratios.
+The logical Phaser viewport remains **1920 × 1080**. Checkpoint 0A establishes a rendering-only
+camera on the shipped 1920 × 1080 arena; checkpoint 0B then expands only the authoritative world to
+**2560 × 1440**, one-third more distance on each axis and about 1.78 times the area. The camera
+follows the interpolated local player and clamps to authoritative arena bounds. Its movement changes
+no simulation rule, protocol field, server state, or authoritative coordinate. Combat and inventory
+HUD elements remain fixed to the viewport, and pointer aim remains based on Phaser world
+coordinates.
 
-The resize happens alone because it disturbs all of these shipped premises:
+The larger world is enough to separate six roles without turning the concept's compact map into a
+traversal game. Wall, spawn, pickup, extraction, open-lane, and lair coordinates are content work in
+0B; 0C accepts them by reachability, timing, and performance evidence rather than by preserving old
+ratios. Exact files, tests, rollback steps, and acceptance coverage are in
+`docs/M7A_EXECUTION_PLAN.md` §2.
+
+The resize disturbs all of these shipped premises:
 
 - extraction points are active for **75 seconds**, not 60, and channel for 5 seconds. The 75-second
   value was raised from 60 when the map last grew. Phase 0 measures the longest valid route plus a
@@ -71,11 +83,22 @@ The resize happens alone because it disturbs all of these shipped premises:
 - `MATCH_SEED=76` pins enemy, loot, chip, and extraction placement. Coordinates and candidate-list
   order can invalidate its safety assumptions even when the seed is unchanged.
 
-Before resizing, record `E2E_MARGIN=1 pnpm test:e2e` on an idle machine. After resizing, audit every
-reported budget and the waits that do **not** report. The current measured floor is 48%. Any budget
-below 40% is fixed before Phase 1, normally by shortening the route, moving content, or removing
-avoidable waiting—not by inflating the timeout until the percentage looks healthy. The Phase 0
-diff and audit are committed separately when M7A is implemented so later margin loss has one cause.
+The accepted merged readiness baseline is Playwright **35/35 twice consecutively**, with a lowest
+reported margin of **62%**, `walkToward` at **79%**, and `extractionIdleWindow` at **63%**. Unit
+coverage is **36 files / 478 tests**; integration coverage is **23 files / 225 tests**. Preserve the
+non-repeating **6.796 ms** maximum-room-tick outlier beside the **3.108 ms** repeat rather than
+discarding or normalizing it.
+
+Checkpoint 0A records the pre-resize `E2E_MARGIN=1 pnpm test:e2e` table; 0B and 0C record the
+post-resize movement of every reported budget and inventory waits that do **not** report. Any
+reported margin below **40% blocks its checkpoint**. Repair it by shortening the route, moving
+content, or removing avoidable waiting—not by inflating the timeout until the percentage looks
+healthy.
+
+When M7A is implemented, Phase 0 lands as three independently revertible checkpoints: **0A camera
+foundation**, **0B arena/content resize**, and **0C tests/evidence audit**. Phase 1 begins only after
+all three are accepted. `docs/M7A_EXECUTION_PLAN.md` §2 owns the exact file boundaries, tests,
+rollback procedure, acceptance conditions, and side-by-side reporting format.
 
 ### 1.2 Enemy projectiles have both a source cap and a room cap
 
@@ -272,22 +295,19 @@ Each issue follows technical plan §26.3: files, invariants, tests, migration im
 acceptance are explicit. Exact file sets are confirmed during implementation discovery; the lists
 below name the expected boundaries and may narrow, but may not expand into persistence or PvP.
 
-### M7A.1 — Phase 0: enlarge the arena and prove reachability
+### M7A.1 — Phase 0: establish the camera, resize the arena, and re-audit evidence
 
-- **Files to change:** `packages/game-content/src/arena.ts`, `packages/game-content/src/arena.test.ts`,
-  affected `apps/client/e2e/*.spec.ts` and `helpers.ts`, then `docs/TEST_PLAN.md` with measured margins.
-- **Invariants:** no enemy definition or behavior changes; 75-second active extraction and
-  five-second channel are preserved unless a separate evidence-backed decision changes them;
-  Warden leash cannot meet routine routes; every pickup and open-lane behavior remains reachable;
-  seed 76 stays explicit and its new layout is documented.
-- **Tests:** content geometry tests, full Playwright suite, pre/post `E2E_MARGIN=1` audit, manual
-  inventory of unreported waits, and all seven gates on an idle machine.
+- **Deliver:** three independently accepted and revertible checkpoints: 0A camera foundation on the
+  shipped arena, 0B authoritative arena/content resize, and 0C tests/evidence audit. Add no enemy.
+- **Invariants:** the camera remains rendering-only; 75-second active extraction and the five-second
+  channel are preserved unless a separate evidence-backed decision changes them; Warden isolation,
+  pickup reachability, the open lane, and seed 76 remain valid; any reported margin below 40% blocks
+  its checkpoint.
 - **Migration impact:** none.
-- **Rollback:** revert the Phase 0 arena/margin checkpoint as one unit; no later phase begins until it
-  is accepted.
-- **Acceptance:** 2560 × 1440 arena is playable; all listed routes pass; returning shot expires in
-  open space; Warden stays isolated; every reported margin is at least 40%; unreported budgets are
-  named; test counts have not moved except for deliberate new Phase 0 tests.
+- **Checkpoint boundary:** 0A, 0B, and 0C land as independently revertible checkpoints. Phase 1 does
+  not begin until all three are accepted.
+- **Execution detail:** see `docs/M7A_EXECUTION_PLAN.md` §2 for the exact files, tests, rollback, and
+  acceptance details for each checkpoint.
 
 ### M7A.2 — Phase 1: bounded navigation, heterogeneous roster, and Dasher
 
