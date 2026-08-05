@@ -27,9 +27,9 @@
  *   rendered frames, rather than for a duration chosen because it worked here.
  * - {@link fireAndObserve} holds the attack button until the server publishes
  *   the shot, rather than clicking for 80 ms and hoping a frame caught it.
- * - {@link walkToward} sizes each key hold to the distance left, so travel is
- *   paid in server time (which no machine can slow) instead of in poll
- *   round trips (which every loaded machine does).
+ * - {@link walkToward} releases each key hold when the authoritative player
+ *   has covered the intended distance, so host scheduling cannot stretch a
+ *   nominal duration into an overshoot.
  */
 import type { Page } from "@playwright/test";
 import { ALL_SKILLS, testArena } from "@carry-or-fall/game-content";
@@ -53,7 +53,7 @@ export const DEFAULT_SKILL_LOADOUT_IDS = ["ricochet", "extended_reach", "bulwark
 /**
  * How long to allow for joining a room and playing through the lobby countdown.
  *
- * The countdown itself is shortened to a second by `MATCH_LOBBY_MS` in
+ * The countdown itself is shortened to five seconds by `MATCH_LOBBY_MS` in
  * `playwright.config.ts`, so almost all of this budget is headroom for the parts
  * that genuinely vary: a cold runner compiling Phaser on first request, the
  * WebSocket handshake, and the first state patch arriving. A CI runner is slower
@@ -110,6 +110,54 @@ export function reportMargin(label: string, startedAt: number, budgetMs: number)
  */
 async function focusPage(page: Page): Promise<void> {
   await page.bringToFront();
+}
+
+/** Wait for a named Phaser scene and expose the join/transition budget to the margin audit. */
+export async function waitForActiveScene(
+  page: Page,
+  sceneKey: "loadout" | "play",
+  timeoutMs = MATCH_START_TIMEOUT_MS,
+): Promise<void> {
+  const budgetStart = Date.now();
+  const handle = await page.waitForFunction(
+    (expected) => window.__CARRY_OR_FALL_DEBUG__?.getActiveSceneKey() === expected,
+    sceneKey,
+    { polling: 25, timeout: timeoutMs },
+  );
+  await handle.dispose();
+  reportMargin(`activeScene:${sceneKey}`, budgetStart, timeoutMs);
+}
+
+/** Wait for an exact party size without copying party state through CDP per poll. */
+export async function waitForPartySize(
+  page: Page,
+  memberCount: number,
+  timeoutMs = MATCH_START_TIMEOUT_MS,
+): Promise<void> {
+  const budgetStart = Date.now();
+  const handle = await page.waitForFunction(
+    (expected) => (window.__CARRY_OR_FALL_DEBUG__?.getParty()?.members.length ?? 0) === expected,
+    memberCount,
+    { polling: 25, timeout: timeoutMs },
+  );
+  await handle.dispose();
+  reportMargin("partySize", budgetStart, timeoutMs);
+}
+
+/** Wait for teammate markers delivered over the party message channel. */
+export async function waitForPartyMemberMarkers(
+  page: Page,
+  markerCount: number,
+  timeoutMs = MATCH_START_TIMEOUT_MS,
+): Promise<void> {
+  const budgetStart = Date.now();
+  const handle = await page.waitForFunction(
+    (expected) => (window.__CARRY_OR_FALL_DEBUG__?.getPartyMemberIds().length ?? 0) === expected,
+    markerCount,
+    { polling: 25, timeout: timeoutMs },
+  );
+  await handle.dispose();
+  reportMargin("partyMemberMarkers", budgetStart, timeoutMs);
 }
 
 /**
@@ -205,9 +253,7 @@ export async function gotoGame(page: Page): Promise<void> {
   // Phaser's async boot/scene-start sequence completes) — otherwise an
   // immediate keypress can race ahead of `LoadoutScene.create()` registering
   // its keys and be silently dropped.
-  await page.waitForFunction(
-    () => window.__CARRY_OR_FALL_DEBUG__?.getActiveSceneKey() === "loadout",
-  );
+  await waitForActiveScene(page, "loadout");
 }
 
 /** This page's party, or `null` when it is not in one (M6). */
@@ -226,11 +272,14 @@ export async function getPartyMemberIds(page: Page): Promise<readonly string[]> 
  */
 export async function createParty(page: Page): Promise<string> {
   await pressKey(page, "KeyP");
-  await page.waitForFunction(
+  const budgetStart = Date.now();
+  const handle = await page.waitForFunction(
     () => (window.__CARRY_OR_FALL_DEBUG__?.getParty()?.joinCode.length ?? 0) > 0,
     undefined,
-    { timeout: MATCH_START_TIMEOUT_MS },
+    { polling: 25, timeout: MATCH_START_TIMEOUT_MS },
   );
+  await handle.dispose();
+  reportMargin("partyCreated", budgetStart, MATCH_START_TIMEOUT_MS);
   return (await getParty(page))!.joinCode;
 }
 
@@ -243,11 +292,14 @@ export async function joinPartyByCode(page: Page, joinCode: string): Promise<voi
   // frame, for the same reason `pressKey` holds its key (see the module doc).
   await page.keyboard.type(joinCode, { delay: 40 });
   await pressKey(page, "Enter");
-  await page.waitForFunction(
+  const budgetStart = Date.now();
+  const handle = await page.waitForFunction(
     () => (window.__CARRY_OR_FALL_DEBUG__?.getParty()?.members.length ?? 0) > 0,
     undefined,
-    { timeout: MATCH_START_TIMEOUT_MS },
+    { polling: 25, timeout: MATCH_START_TIMEOUT_MS },
   );
+  await handle.dispose();
+  reportMargin("partyJoined", budgetStart, MATCH_START_TIMEOUT_MS);
 }
 
 export async function getActiveSceneKey(page: Page): Promise<string | null> {
@@ -284,6 +336,57 @@ export async function getPrivateState(page: Page): Promise<LocalPlayerState> {
     throw new Error("expected private state: none has arrived yet");
   }
   return state;
+}
+
+/** Conditions used by multiplayer waits that can be evaluated inside the page. */
+export type MatchStateCondition =
+  | { readonly kind: "ground_loot_missing"; readonly id: string }
+  | { readonly kind: "player_run_over"; readonly id: string }
+  | { readonly kind: "player_x_below"; readonly id: string; readonly x: number };
+
+/**
+ * Wait on the browser's latest authoritative snapshot without copying that
+ * snapshot through CDP on every poll. Only the final matching state crosses
+ * the process boundary.
+ */
+export async function waitForMatchState(
+  page: Page,
+  condition: MatchStateCondition,
+  timeoutMs = 10_000,
+): Promise<MatchView> {
+  const budgetStart = Date.now();
+  const handle = await page.waitForFunction(
+    (wanted) => {
+      const view = window.__CARRY_OR_FALL_DEBUG__?.getSnapshot();
+      if (view == null) return false;
+      switch (wanted.kind) {
+        case "ground_loot_missing":
+          return view.groundLoot.every((loot) => loot.id !== wanted.id);
+        case "player_run_over":
+          return view.players.some((player) => player.id === wanted.id && player.runOver);
+        case "player_x_below":
+          return view.players.some((player) => player.id === wanted.id && player.x < wanted.x);
+      }
+    },
+    condition,
+    { polling: 25, timeout: timeoutMs },
+  );
+  await handle.dispose();
+  reportMargin(`waitForMatchState:${condition.kind}`, budgetStart, timeoutMs);
+  return getSnapshot(page);
+}
+
+/** Wait for this client's private run result without transferring private state per poll. */
+export async function waitForRunResult(page: Page, timeoutMs = 15_000): Promise<LocalPlayerState> {
+  const budgetStart = Date.now();
+  const handle = await page.waitForFunction(
+    () => window.__CARRY_OR_FALL_DEBUG__?.getPrivateState()?.runResult != null,
+    undefined,
+    { polling: 25, timeout: timeoutMs },
+  );
+  await handle.dispose();
+  reportMargin("waitForRunResult", budgetStart, timeoutMs);
+  return getPrivateState(page);
 }
 
 /**
@@ -372,7 +475,7 @@ export async function enterMatch(page: Page): Promise<void> {
  */
 export async function confirmLoadout(page: Page): Promise<void> {
   await pressKey(page, "Enter");
-  await page.waitForFunction(() => window.__CARRY_OR_FALL_DEBUG__?.getActiveSceneKey() === "play");
+  await waitForActiveScene(page, "play");
 }
 
 /**
@@ -381,11 +484,14 @@ export async function confirmLoadout(page: Page): Promise<void> {
  * through Phaser's (background-throttled) animation frame.
  */
 export async function waitForMatchRunning(page: Page): Promise<void> {
-  await page.waitForFunction(
+  const budgetStart = Date.now();
+  const handle = await page.waitForFunction(
     () => window.__CARRY_OR_FALL_DEBUG__?.getSnapshot()?.phase === "running",
     undefined,
-    { timeout: MATCH_START_TIMEOUT_MS },
+    { polling: 25, timeout: MATCH_START_TIMEOUT_MS },
   );
+  await handle.dispose();
+  reportMargin("matchRunning", budgetStart, MATCH_START_TIMEOUT_MS);
 }
 
 /** The canvas's on-screen bounding box, for converting a world position to a page click/move position. */
@@ -506,11 +612,16 @@ export async function interactFor(page: Page, durationMs: number): Promise<void>
  * pickup range even though the walker believes it arrived. Re-approaching and
  * holding is also simply what a human does: you hold E until the thing is gone.
  */
+export interface PickupEntity {
+  readonly kind: "ground_loot" | "skill_chip";
+  readonly id: string;
+}
+
 export async function pickUpAt(
   page: Page,
   x: number,
   y: number,
-  done: (snapshot: MatchView) => boolean,
+  entity: PickupEntity,
   maxMs = 25_000,
 ): Promise<void> {
   await focusPage(page);
@@ -522,13 +633,23 @@ export async function pickUpAt(
     }
     await page.keyboard.down("KeyE");
     try {
-      const settled = Date.now() + 1500;
-      while (Date.now() < settled) {
-        if (done(await getSnapshot(page))) {
-          reportMargin("pickUpAt", budgetStart, maxMs);
-          return;
-        }
-        await page.waitForTimeout(100);
+      const attemptEndsAt = Date.now() + 1500;
+      const result = await page.waitForFunction(
+        ({ target, deadline }) => {
+          const view = window.__CARRY_OR_FALL_DEBUG__?.getSnapshot();
+          if (view == null) return false;
+          const entities = target.kind === "ground_loot" ? view.groundLoot : view.skillChips;
+          if (entities.every((candidate) => candidate.id !== target.id)) return "picked_up";
+          return Date.now() >= deadline ? "retry" : false;
+        },
+        { target: entity, deadline: attemptEndsAt },
+        { polling: 25, timeout: 2500 },
+      );
+      const outcome = await result.jsonValue();
+      await result.dispose();
+      if (outcome === "picked_up") {
+        reportMargin("pickUpAt", budgetStart, maxMs);
+        return;
       }
     } finally {
       await page.keyboard.up("KeyE");
@@ -580,6 +701,56 @@ const STALL_PROGRESS_FRACTION = 0.25;
 const STALL_MIN_EXPECTED_PX = 40;
 
 /**
+ * Hold movement until the server-published player has covered the requested
+ * distance, or a bounded observation window proves that a wall stopped it.
+ * Polling happens in Chromium; Playwright sends one wait command rather than
+ * transferring a player or match object across CDP on every sample.
+ */
+async function holdMovementForAuthoritativeDistance(
+  page: Page,
+  keys: readonly MoveKey[],
+  startX: number,
+  startY: number,
+  expectedDistancePx: number,
+  nominalHoldMs: number,
+): Promise<void> {
+  for (const key of keys) {
+    await page.keyboard.down(key);
+  }
+  try {
+    const observationMs = Math.max(1000, nominalHoldMs * 2);
+    const handle = await page.waitForFunction(
+      ({ x, y, distance, deadline }) => {
+        const hook = window.__CARRY_OR_FALL_DEBUG__;
+        const id = hook?.getLocalPlayerId() ?? null;
+        const player =
+          id === null
+            ? null
+            : (hook?.getSnapshot()?.players.find((entry) => entry.id === id) ?? null);
+        if (player === null) return false;
+        return (
+          !player.alive ||
+          Math.hypot(player.x - x, player.y - y) >= distance ||
+          Date.now() >= deadline
+        );
+      },
+      {
+        x: startX,
+        y: startY,
+        distance: Math.max(4, expectedDistancePx * 0.9),
+        deadline: Date.now() + observationMs,
+      },
+      { polling: 25, timeout: observationMs + 5000 },
+    );
+    await handle.dispose();
+  } finally {
+    for (const key of keys) {
+      await page.keyboard.up(key);
+    }
+  }
+}
+
+/**
  * Walk the player toward `targetX`/`targetY`, polling the authoritative
  * position rather than assuming travel time (walls can block a leg of the
  * route, and the chasers are closing distance at the same time).
@@ -589,8 +760,10 @@ const STALL_MIN_EXPECTED_PX = 40;
  * The server stores each client's latest input and **re-applies it every tick
  * until a newer one arrives** (technical plan §9.3), so while a key is held the
  * player travels at the full `PLAYER_SPEED` no matter how busy the client is.
- * Holding is therefore *server* time; everything around it — the position read,
- * the four key events — is *machine* time.
+ * Holding is therefore *server* time; everything around it — the position read
+ * and key events — is machine time. A host-side sleep is not safe, however:
+ * when the runner is descheduled, key-up is late and the server correctly keeps
+ * applying the old input. The resulting overshoot is machine-dependent.
  *
  * The previous walker held for a fixed 150 ms and then released, whatever the
  * distance. Measured on an unloaded machine, one iteration took ~570 ms of which
@@ -603,11 +776,9 @@ const STALL_MIN_EXPECTED_PX = 40;
  * by the game.
  *
  * Sizing each hold to the distance remaining (capped by {@link MAX_HOLD_MS})
- * puts the travel back on the server's clock and makes the *number* of
- * iterations a function of the route rather than of its length: 221 px is now
- * one hold plus a check, not seven bursts. The keys are still released before
- * each poll, so travel per iteration is exactly the hold — a slow poll no longer
- * carries the player past the target and into an oscillation it cannot settle.
+ * keeps the number of iterations a function of the route rather than runner
+ * speed. The release condition is the authoritative distance actually covered,
+ * evaluated in the page, rather than the host's nominal hold duration.
  *
  * ## Why stalling is now measured against the hold, not against the clock
  *
@@ -735,13 +906,7 @@ export async function walkToward(
     }
     expectedProgressPx = (PLAYER_SPEED * holdMs) / 1000;
 
-    for (const key of keys) {
-      await page.keyboard.down(key);
-    }
-    await page.waitForTimeout(holdMs);
-    for (const key of keys) {
-      await page.keyboard.up(key);
-    }
+    await holdMovementForAuthoritativeDistance(page, keys, x, y, expectedProgressPx, holdMs);
   }
 }
 

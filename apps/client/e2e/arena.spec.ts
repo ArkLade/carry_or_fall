@@ -24,6 +24,8 @@ import {
   pressKey,
   fireAndObserve,
   startRunWithLoadout,
+  waitForActiveScene,
+  waitForMatchRunning,
   waitForSnapshot,
   walkToOpenLane,
   walkToward,
@@ -152,9 +154,7 @@ test.describe("run end returns to the loadout screen", () => {
     expect(await getActiveSceneKey(page)).toBe("play");
 
     await pressKey(page, "Enter");
-    await page.waitForFunction(
-      () => window.__CARRY_OR_FALL_DEBUG__?.getActiveSceneKey() === "loadout",
-    );
+    await waitForActiveScene(page, "loadout");
     expect(await getActiveSceneKey(page)).toBe("loadout");
   });
 
@@ -170,22 +170,14 @@ test.describe("run end returns to the loadout screen", () => {
     expect(dead.alive).toBe(false);
 
     await pressKey(page, "Enter");
-    await page.waitForFunction(
-      () => window.__CARRY_OR_FALL_DEBUG__?.getActiveSceneKey() === "loadout",
-    );
+    await waitForActiveScene(page, "loadout");
 
     // Swap ricochet out for piercing_rounds and start a fresh match.
     await pressKey(page, "2"); // ricochet off
     await pressKey(page, "3"); // piercing_rounds on
     await pressKey(page, "Enter");
-    await page.waitForFunction(
-      () => window.__CARRY_OR_FALL_DEBUG__?.getActiveSceneKey() === "play",
-    );
-    await page.waitForFunction(
-      () => window.__CARRY_OR_FALL_DEBUG__?.getSnapshot()?.phase === "running",
-      undefined,
-      { timeout: 30_000 },
-    );
+    await waitForActiveScene(page, "play");
+    await waitForMatchRunning(page);
 
     expect((await getPrivateState(page)).skillIds).toEqual(["piercing_rounds"]);
     const player = await getLocalPlayer(page);

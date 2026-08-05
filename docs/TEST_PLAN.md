@@ -58,14 +58,23 @@ death/dropped loot.
 
 **One gate, two Vitest projects** (`docs/DECISIONS.md` D54). `pnpm test:integration` runs
 `--project integration --project integration-server`. The 11 files that bind a real TCP port and
-run a real Colyseus server are the `integration-server` project and run **one file at a time**
-(`fileParallelism: false`); everything else stays parallel. Run together on a loaded machine they
-oversubscribe it, and on Windows an oversubscribed fork intermittently dies natively — the worker
-exits with `0xC0000409` and no JavaScript error, so its whole file silently vanishes from the
-counts. Serialising them is the mitigation; the `vitest.incomplete-run.ts` reporter is the
-guarantee, because it fails loudly whenever any file did not report.
+run a real Colyseus server are the `integration-server` project. Both projects selected by this gate
+are capped at **two file workers** (`maxWorkers: 2`, D72), because Vitest requires projects in one
+scheduling group to share the value. Unbounded parallelism on a loaded Windows machine exposed a
+native `0xC0000409` worker loss with no JavaScript error, so a whole file could silently vanish from
+the counts. The bounded gate is the mitigation; the
+`vitest.incomplete-run.ts` reporter is the guarantee, because it fails loudly whenever any file did
+not report.
 
-**Exists today (22 files, 222 tests; approximately 408 seconds on the measured Windows host):**
+**Exists today (22 files, 222 tests; 224.21 seconds in the two-worker readiness measurement):**
+
+The immediately preceding one-worker baseline was 423.67 seconds. Its 11 real-server files consumed
+409.42 seconds, led by `settlement-adversarial` (100.38 s), `boss-core-decision` (95.20 s), and
+`match-authority` (71.99 s). Two workers kept all 22 files / 222 tests and reduced wall time by
+199.46 seconds. Aggregate test time rose from 416.61 to 435.51 seconds, the deliberate CPU/resource
+contention trade for the shorter gate. Both configurations were measured after clearing ports
+2567/5173 with no other repository command running; Windows background scheduling cannot be made
+identical, so these are local comparison data, not a universal duration guarantee.
 
 - `apps/server/test/match-room.test.ts` — the full §30.2 list against the match room: two clients
   join one room and start together; the room locks at match start so a third client gets a different
@@ -258,11 +267,17 @@ motivated it:
   used to establish that a player pressed interact and got nothing.
 - `fireAndObserve` holds the attack button until the server publishes the shot, rather than clicking
   for a fixed 80 ms and hoping a frame caught it.
-- `walkToward` sizes each key hold to the distance remaining, so travel is paid in server time
-  (which no machine can slow) rather than in poll round trips (which every loaded machine does).
-  Measured: the previous fixed-150 ms-burst walker ran at a **25% duty cycle** — 55 px/s against the
-  server's 220 — and a 221 px walk took 2.4 s on an idle machine and long enough on a loaded one for
-  a chaser to cross the map and kill the walker.
+- `walkToward` sizes each key hold to the distance remaining and releases it when the browser sees
+  the **authoritative player cover that distance**. A host sleep is not server time: if the runner is
+  descheduled, key-up arrives late and the server correctly keeps applying the previous input. The
+  old fixed-150 ms walker first failed by running at a 25% duty cycle; its host-timed replacement
+  could fail in the other direction by overshooting under load. The current release condition is
+  game state, evaluated inside Chromium, not elapsed host time or repeated CDP round trips.
+
+Multiplayer state waits follow the same rule. `pickUpAt`, extraction completion, remote movement,
+remote loot removal, and remote run-over conditions are evaluated against the latest snapshot
+inside Chromium. Only the final matching state crosses CDP; the old loops transferred a complete
+match or private state every 100–200 ms, making the wait's own observation cost machine-dependent.
 
 **Auditing the margins.** `E2E_MARGIN=1 pnpm test:e2e` prints one `BUDGET` line per budgeted wait,
 with used-against-budget. A budget routinely more than ~75% consumed is a failure waiting for a
@@ -451,7 +466,7 @@ projectile at all.
 | 5   | a child projectile may not split     | **Yes (M7)** | `split_return`: a split child that hits a target produces no grandchild (`split-caps.test.ts`) |
 | 6   | a child may not create a parent effect | **Yes (M7)** | `split_return`: a split child that expires does not return (`split-caps.test.ts`) |
 | 7   | active projectiles per player        | Yes       | sustained fire with `multishot` + `split_return` (`skill-caps-under-load.test.ts`, `split-caps.test.ts`) |
-| 8   | simultaneous effect instances        | Yes       | skill effects aggregated under load (`skill-caps-under-load.test.ts`)      |
+| 8   | bounded target-search radius          | Yes       | homing clamps/rejects targets outside the bound (`ranged.test.ts`)         |
 
 Caps 5 and 6 are tested the way an authority rule has to be: with a **liar**. `split-caps.test.ts`
 constructs a child projectile that claims `splitCount: 3`, and another that claims
@@ -490,23 +505,44 @@ idle window — now report. The by-construction claim still holds where it was a
 the routes the *rest* of the suite walks; for `boss.spec.ts` the bound is a measured health budget
 instead (§2.3.0c).
 
-**Re-run with every spec covered** (worst margin per label across a full 35-test run, two
-consecutive runs — one with a repository-root `.env` present and one with it renamed away):
+**M7A-readiness re-run with every spec covered** (worst margin per label across the full 35-test run
+with a repository-root `.env` present):
 
-| Budget                                    | Worst margin | Worst case             |
-| ----------------------------------------- | ------------ | ---------------------- |
-| `extractionIdleWindow` (was never audited) | **48%**      | 10.4 s of 20 s         |
-| `waitForSnapshot`                          | 70%          | 2.4 s of 8 s           |
-| `walkToward` (50 calls)                    | 70%          | 12.0 s of 40 s         |
-| `dieToChasers`                             | 72%          | 16.9 s of 60 s         |
-| `attackChaserUntil`                        | 95%          | 2.3 s of 45 s          |
-| `bossSortie` (was never audited)           | 97%          | 59 ms of 2000 ms       |
-| `pickUpAt`                                 | 98%          | 429 ms of 25 s         |
+| Budget | Worst margin | Worst case |
+| --- | ---: | ---: |
+| `extractionIdleWindow` | **49%** | 10.142 s of 20 s |
+| `waitForRunResult` | 62% | 5.686 s of 15 s |
+| `waitForSnapshot` | 73% | 2.168 s of 8 s |
+| `dieToChasers` | 75% | 14.967 s of 60 s |
+| `walkToward` | 79% | 5.163 s of 25 s |
+| `matchRunning` (the five-second lobby) | 81% | 5.632 s of 30 s |
+| `attackChaserUntil` | 96% | 1.917 s of 45 s |
+| `bossSortie` | 98% | 50 ms of 2 s |
+| `activeScene:loadout` | 99% | 207 ms of 30 s |
+| `partyCreated` | 99% | 166 ms of 30 s |
+| `partyJoined` | 99% | 162 ms of 30 s |
+| `partyMemberMarkers` | 99% | 152 ms of 30 s |
+| `pickUpAt` | 99% | 237 ms of 25 s |
+| `waitForMatchState:ground_loot_missing` | 99% | 94 ms of 10 s |
+| `waitForMatchState:player_run_over` | 99% | 114 ms of 10 s |
+| `waitForMatchState:player_x_below` | 99% | 98 ms of 10 s |
+| `activeScene:play` | 100% | 164 ms of 60 s |
+| `partySize` | 100% | 146 ms of 60 s |
 
-Nothing is under the 40% floor. The two previously unaudited budgets bracket the range: the
-extraction idle window is now the suite's tightest at 48%, and it was invisible while the audit
-reported a 72% floor — which is the whole reason for this section. `bossSortie` finishes in ~50 ms
-because `walkToArenaPoint`'s own final approach already spends about a second inside the aggro
+Nothing is under the 40% floor. The extraction idle window remains the tightest product premise,
+not a poll timeout; the extraction-result observation itself has 62% margin. The five-second lobby,
+party formation, scene transitions, teammate-marker delivery, and every inline deadline now report.
+
+The remaining fixed waits are actions or sampling intervals, not silent completion claims:
+`pressKey` has a minimum 50 ms hold plus two rendered frames; party-code typing uses a 40 ms human
+keystroke delay; the negative multiplayer interaction holds E for 400 ms plus frames; pickup's
+1.5-second attempt is inside the reported 25-second `pickUpAt` budget; combat helpers' 60–150 ms
+animation/retreat samples are inside their reported outer budgets; and `bossSortie`'s 25 ms sample
+interval is inside its reported two-second budget. `moveFor`, `meleeAttackFor`, and
+`rangedAttackFor` retain fixed-duration implementations but have no callers, so they spend no suite
+window. Per-test `test.setTimeout` values are outer hang guards; the 35 Playwright durations report
+their use directly, and no test approached its guard in this run. `bossSortie` can finish in about
+50 ms because `walkToArenaPoint`'s own final approach already spends about a second inside the aggro
 radius, so the boss has usually left its lair before the window opens; the 2000 ms budget is sized
 for the case where it has not (§2.3.0c), not for the case measured here.
 

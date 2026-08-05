@@ -24,12 +24,13 @@ import {
   getSnapshot,
   gotoGame,
   interactFor,
-  moveFor,
   pickUpAt,
   reportMargin,
+  waitForMatchState,
   waitForMatchRunning,
-  waitForSnapshot,
+  waitForRunResult,
   walkToArenaPoint,
+  walkToward,
 } from "./helpers";
 
 /**
@@ -146,15 +147,12 @@ test.describe("two real browsers play one match (§38 M4 exit criterion 1)", () 
       const idA = await getLocalPlayerId(page);
 
       const beforeOnB = (await getSnapshot(second)).players.find((player) => player.id === idA)!;
-      // A walks left for a full second; B is not touched at all.
-      await moveFor(page, "KeyA", 1000);
+      // A moves an authoritative 100 px left; B is not touched at all.
+      await walkToward(page, beforeOnB.x - 100, beforeOnB.y, 10_000);
 
-      const afterOnB = await waitForSnapshot(
+      const afterOnB = await waitForMatchState(
         second,
-        (view) => {
-          const remote = view.players.find((player) => player.id === idA);
-          return remote !== undefined && remote.x < beforeOnB.x - 30;
-        },
+        { kind: "player_x_below", id: idA, x: beforeOnB.x - 30 },
         10_000,
       );
 
@@ -214,15 +212,13 @@ test.describe("two real browsers play one match (§38 M4 exit criterion 1)", () 
       await walkToArenaPoint(page, target.x, target.y, 40_000);
 
       // A takes it, with B in range of the same item the whole time.
-      await pickUpAt(page, target.x, target.y, (view) =>
-        view.groundLoot.every((loot) => loot.id !== target.id),
-      );
+      await pickUpAt(page, target.x, target.y, { kind: "ground_loot", id: target.id });
       expect((await getPrivateState(page)).inventory).toContain(target.lootId);
 
       // B sees it gone too, and taking it is not possible any more.
-      const onB = await waitForSnapshot(
+      const onB = await waitForMatchState(
         second,
-        (view) => view.groundLoot.every((loot) => loot.id !== target.id),
+        { kind: "ground_loot_missing", id: target.id },
         10_000,
       );
       expect(onB.groundLoot.some((loot) => loot.id === target.id)).toBe(false);
@@ -281,14 +277,7 @@ test.describe("two real browsers play one match (§38 M4 exit criterion 1)", () 
       await page.keyboard.down("KeyE");
       let resultA: Awaited<ReturnType<typeof getPrivateState>>["runResult"] = null;
       try {
-        const deadline = Date.now() + 15_000;
-        while (Date.now() < deadline) {
-          resultA = (await getPrivateState(page)).runResult;
-          if (resultA !== null) {
-            break;
-          }
-          await page.waitForTimeout(200);
-        }
+        resultA = (await waitForRunResult(page, 15_000)).runResult;
       } finally {
         await page.keyboard.up("KeyE");
       }
@@ -315,11 +304,7 @@ test.describe("two real browsers play one match (§38 M4 exit criterion 1)", () 
       expect(playerB.runOver).toBe(false);
 
       // And B sees A as out of the match, not still standing there.
-      const onB = await waitForSnapshot(
-        second,
-        (view) => view.players.find((player) => player.id === idA)?.runOver === true,
-        10_000,
-      );
+      const onB = await waitForMatchState(second, { kind: "player_run_over", id: idA }, 10_000);
       expect(onB.players.find((player) => player.id === idA)?.runOver).toBe(true);
     } finally {
       await second.context().close();

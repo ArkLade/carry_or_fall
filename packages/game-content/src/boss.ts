@@ -22,7 +22,7 @@
  *
  * **The leash is a design decision, not a convenience** (`docs/DECISIONS.md`
  * D66). Concept §14.3 also asks for optional PvPvE conflict, and PvP damage is
- * M7.5 (D59), so the conflict half cannot exist yet. A boss bounded to its lair
+ * M7B (D59, D70), so the conflict half cannot exist yet. A boss bounded to its lair
  * gives the attraction without it: the rare drop is worth walking to, and the
  * threat is one a player chooses to enter. It also means the boss cannot reach
  * anywhere else on the map, which is what keeps it from eroding the rest of the
@@ -41,7 +41,7 @@ import type { ContentDefinition } from "./index";
  * - `"area"` — a radial burst centred on the boss, ignoring facing.
  *
  * There is deliberately no `"projectile"` kind. A projectile that damages a
- * *player* is the same plumbing M7.5 owns (D59), and adding it here would be
+ * *player* is the same plumbing M7B owns (D59, D70), and adding it here would be
  * doing that milestone's work under this one's name (`docs/M7_ISSUES.md` §1.4).
  */
 export interface BossAttack {

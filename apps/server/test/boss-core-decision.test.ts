@@ -82,8 +82,8 @@ const NEUTRAL: Omit<InputMessage, "sequence"> = {
  * needs a player to actually *die* while carrying a core (concept §15.2).
  *
  * A chaser rather than the boss, because by the time a core exists the boss is
- * dead, and rather than another player, because PvP damage is M7.5
- * (`docs/DECISIONS.md` D59). It is kept out of the default arena because a
+ * dead, and rather than another player, because PvP damage is M7B
+ * (`docs/DECISIONS.md` D59, D70). It is kept out of the default arena because a
  * chaser that followed every test around would fail them for reasons that have
  * nothing to do with boss cores.
  */

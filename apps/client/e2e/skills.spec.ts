@@ -202,9 +202,7 @@ test.describe("wildcard skill chip (M3.7)", () => {
     const chip = snapshot.skillChips[0]!;
 
     await walkToArenaPoint(page, chip.x, chip.y, 25_000);
-    await pickUpAt(page, chip.x, chip.y, (view) =>
-      view.skillChips.every((entry) => entry.id !== chip.id),
-    );
+    await pickUpAt(page, chip.x, chip.y, { kind: "skill_chip", id: chip.id });
     privateState = await getPrivateState(page);
     expect(privateState.wildcardSkillId).toBe(chip.skillId);
   });
@@ -218,11 +216,17 @@ test.describe("wildcard skill chip (M3.7)", () => {
 
     const [firstChip, secondChip] = snapshot.skillChips;
     await walkToArenaPoint(page, firstChip!.x, firstChip!.y, 25_000);
-    await pickUpAt(page, firstChip!.x, firstChip!.y, (view) => view.skillChips.length === 1);
+    await pickUpAt(page, firstChip!.x, firstChip!.y, {
+      kind: "skill_chip",
+      id: firstChip!.id,
+    });
     expect((await getPrivateState(page)).wildcardSkillId).toBe(firstChip!.skillId);
 
     await walkToArenaPoint(page, secondChip!.x, secondChip!.y, 30_000);
-    await pickUpAt(page, secondChip!.x, secondChip!.y, (view) => view.skillChips.length === 0);
+    await pickUpAt(page, secondChip!.x, secondChip!.y, {
+      kind: "skill_chip",
+      id: secondChip!.id,
+    });
 
     // Never refused, per concept §10: a new chip always replaces the old one.
     expect((await getPrivateState(page)).wildcardSkillId).toBe(secondChip!.skillId);
@@ -240,9 +244,7 @@ test.describe("wildcard skill chip (M3.7)", () => {
     const snapshot = await getSnapshot(page);
     const chip = snapshot.skillChips[0]!;
     await walkToArenaPoint(page, chip.x, chip.y, 25_000);
-    await pickUpAt(page, chip.x, chip.y, (view) =>
-      view.skillChips.every((entry) => entry.id !== chip.id),
-    );
+    await pickUpAt(page, chip.x, chip.y, { kind: "skill_chip", id: chip.id });
     expect((await getPrivateState(page)).wildcardSkillId).not.toBeNull();
 
     // Let the chasers close in and kill the player through repeated contact
