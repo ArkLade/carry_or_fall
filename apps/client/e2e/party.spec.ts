@@ -26,7 +26,10 @@ import {
   gotoGame,
   joinPartyByCode,
   pressKey,
+  waitForActiveScene,
   waitForMatchRunning,
+  waitForPartyMemberMarkers,
+  waitForPartySize,
 } from "./helpers";
 
 /** A second and third fully independent context — the closest thing to another machine. */
@@ -55,11 +58,7 @@ test.describe("a party of three plays one match (§38 M6 exit criterion 1)", () 
       await joinPartyByCode(third, joinCode);
 
       for (const client of pages) {
-        await client.waitForFunction(
-          () => (window.__CARRY_OR_FALL_DEBUG__?.getParty()?.members.length ?? 0) === 3,
-          undefined,
-          { timeout: 60_000 },
-        );
+        await waitForPartySize(client, 3, 60_000);
       }
 
       // Exactly one leader, and it is the client that created the party.
@@ -72,11 +71,7 @@ test.describe("a party of three plays one match (§38 M6 exit criterion 1)", () 
       await pressKey(page, "Enter");
       for (const client of pages) {
         await client.bringToFront();
-        await client.waitForFunction(
-          () => window.__CARRY_OR_FALL_DEBUG__?.getActiveSceneKey() === "play",
-          undefined,
-          { timeout: 60_000 },
-        );
+        await waitForActiveScene(client, "play", 60_000);
       }
       for (const client of pages) {
         await waitForMatchRunning(client);
@@ -101,11 +96,7 @@ test.describe("a party of three plays one match (§38 M6 exit criterion 1)", () 
       // Waited for rather than read once: the marker list arrives in a message,
       // and a message that has not arrived yet is not the same as a wrong one.
       for (const [index, client] of pages.entries()) {
-        await client.waitForFunction(
-          () => (window.__CARRY_OR_FALL_DEBUG__?.getPartyMemberIds().length ?? 0) === 2,
-          undefined,
-          { timeout: 30_000 },
-        );
+        await waitForPartyMemberMarkers(client, 2, 30_000);
         const markers = await getPartyMemberIds(client);
         expect([...markers].sort()).toEqual(expected.filter((id) => id !== ids[index]));
         expect(markers).not.toContain(ids[index]);
@@ -134,21 +125,13 @@ test.describe("a party of three plays one match (§38 M6 exit criterion 1)", () 
       await joinPartyByCode(second, joinCode);
       await joinPartyByCode(third, joinCode);
       for (const client of pages) {
-        await client.waitForFunction(
-          () => (window.__CARRY_OR_FALL_DEBUG__?.getParty()?.members.length ?? 0) === 3,
-          undefined,
-          { timeout: 60_000 },
-        );
+        await waitForPartySize(client, 3, 60_000);
       }
 
       await pressKey(page, "Enter");
       for (const client of pages) {
         await client.bringToFront();
-        await client.waitForFunction(
-          () => window.__CARRY_OR_FALL_DEBUG__?.getActiveSceneKey() === "play",
-          undefined,
-          { timeout: 60_000 },
-        );
+        await waitForActiveScene(client, "play", 60_000);
       }
       for (const client of pages) {
         await waitForMatchRunning(client);

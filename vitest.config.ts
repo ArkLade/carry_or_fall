@@ -2,11 +2,11 @@ import { defineConfig } from "vitest/config";
 
 /**
  * The integration files that bind a real TCP port and run a real Colyseus
- * server with real `@colyseus/sdk` clients. They are serialised into their own
- * project (`docs/DECISIONS.md` D54): run in parallel with each other and with
- * the two files that spawn full production builds, they oversubscribe the box,
- * and on Windows an oversubscribed fork intermittently dies natively rather
- * than failing a test.
+ * server with real `@colyseus/sdk` clients. They are isolated in their own
+ * project (`docs/DECISIONS.md` D54) and limited to two workers. Unbounded
+ * parallelism oversubscribes the box, and on Windows an oversubscribed fork
+ * intermittently dies natively rather than failing a test. Two workers retain
+ * that protection while overlapping the two longest independent server files.
  */
 const realServerTests = [
   "apps/server/test/boss-core-decision.test.ts",
@@ -45,6 +45,10 @@ export default defineConfig({
           environment: "node",
           include: ["apps/*/test/**/*.test.ts"],
           exclude: realServerTests,
+          // Vitest requires projects in one scheduling group to share this
+          // value. The gate-wide cap also prevents the build files from adding
+          // unbounded workers beside the two real-server files (D72).
+          maxWorkers: 2,
           // Booting Colyseus and running real production builds is far slower
           // than a unit test; allow headroom without letting CI hang forever.
           testTimeout: 60_000,
@@ -53,11 +57,13 @@ export default defineConfig({
       },
       {
         test: {
-          // The real-server half, one file at a time. See `realServerTests`.
+          // The real-server half, capped at two files at a time. See
+          // `realServerTests` and D54; the incomplete-run reporter above still
+          // refuses to accept a native worker loss as a passing run.
           name: "integration-server",
           environment: "node",
           include: realServerTests,
-          fileParallelism: false,
+          maxWorkers: 2,
           testTimeout: 60_000,
           hookTimeout: 60_000,
         },
