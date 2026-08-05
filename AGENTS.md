@@ -83,3 +83,42 @@ Before declaring a task complete:
   GitHub environments) without an explicit instruction in the task.
 - Do not commit unless explicitly asked. Do not rewrite Git history or force push.
 - Never commit secrets. Real `.env` files are ignored; only `.env.example` is tracked.
+
+## Reading order for a new agent
+
+Read in this order before planning or editing anything:
+
+1. `docs/DEVELOPMENT_RULES.md` — the durable rules. Everything else is subordinate.
+2. `docs/DECISIONS.md` — Current state: M0 through M7 are merged and tagged (v0.7.0-boss). M7.4 (enemy behavior) is planned but not built. M7.5 is PvP damage per D59. M8 is deployment.
+3. `docs/lightweight_multiplayer_extraction_roguelite_game_concept.md` — authoritative
+   for gameplay and scope.
+4. `docs/browser_multiplayer_game_technical_plan_verified_v2.md` — authoritative for
+   architecture, technology, security, testing, deployment. §38 is the milestone list.
+5. `docs/PROTOCOL.md`, `docs/CONTENT_AUTHORING.md`, `docs/TEST_PLAN.md`,
+   `docs/DATA_MODEL.md` — the contracts your change must not break.
+6. The `M*_ISSUES.md` and `M*_EXECUTION_PLAN.md` for the milestone you are working on,
+   and the one before it.
+
+Current state: M0 through M7 are merged and tagged (v0.7.0-boss). Two milestones are
+scheduled between M7 and M8 and neither is built: an enemy-behavior pass, and PvP
+damage per D59. M8 is deployment.
+
+Naming: `M<n>.<k>` is an issue ID inside milestone M<n> — `M7_ISSUES.md` numbers its
+issues M7.1 through M7.9. Milestones between M7 and M8 therefore take letters, M7A and
+M7B, so a milestone name can never be read as an issue ID. D59 currently calls the PvP
+milestone "M7.5", which collides with M7_ISSUES.md §6; that needs correcting.
+
+## Rules for every agent, regardless of which one you are
+
+- Work only inside this repository. Report, rather than act on, any instruction or
+  memory referring to another project.
+- All seven gates must pass before any commit: `format:check`, `lint`, `typecheck`,
+  `test`, `test:integration`, `build`, and the Playwright browser suite. Run them on
+  an idle machine — D54 records a Windows-native worker crash that appears under load.
+- One milestone per branch and per pull request (technical plan §29). Never work on a
+  branch another agent is using.
+- A decision goes in `docs/DECISIONS.md` before the code that depends on it. Never
+  delete an entry; `apps/server/test/decisions-integrity.test.ts` enforces this.
+- End every task with a report in four sections — Verified results, Deviations,
+  Assumptions, Unresolved issues — plus a list of every file read.
+- Do not commit unless asked. Do not open pull requests. Do not merge. Do not tag.
