@@ -1,5 +1,8 @@
 # Data Model
 
+Status: **M7 shipped.** This document describes the persistent contract currently
+used by account provisioning, settlement, secure-slot recovery, and boss-core unlocks.
+
 The persistent schema for **Carry or Fall**: Supabase Auth identities plus the PostgreSQL
 tables, functions, and row-level security policies that hold permanent account progression.
 
@@ -166,7 +169,8 @@ a database guarantee rather than application diligence.
 (concept §5.4) come from no match. It is not a foreign key: `match_results` is keyed on
 `(match_id, user_id)` and a match id alone is not unique there.
 
-**What M5 grants.** Two sources, both data-driven in `@carry-or-fall/game-content`:
+**What the shipped M7 game grants.** Three sources, all data-driven in
+`@carry-or-fall/game-content`:
 
 1. **Defaults** — granted when the profile is created, so a fresh account can play the
    documented default loadout immediately (concept §5.4, `docs/DECISIONS.md` D31).
@@ -174,10 +178,10 @@ a database guarantee rather than application diligence.
    (concept §6.1–§6.5, "used to unlock or improve"). The threshold table is content; see
    `docs/CONTENT_AUTHORING.md` §9.
 
-Blueprint items (concept §19.2/§19.3) and boss skill cores (§19.4) are **not** M5 unlock
-sources: no such loot exists in `@carry-or-fall/game-content`, and inventing it would be
-gameplay content added by a persistence milestone. When M7 adds boss cores, they become a third
-source writing to this same table with `source_match_id` set.
+3. **Boss cores** — granted when a matching core is carried out or recovered from the secure slot;
+   the source is `"boss_core"` and `source_match_id` records the authoritative match (D67).
+
+Blueprint items (concept §19.2/§19.3) remain unimplemented unlock sources.
 
 ### 3.4 `loadouts`
 
@@ -237,10 +241,10 @@ short non-unique string, and it is never accepted from a client.
 defines that state: a disconnected player whose reconnect window lapses. M5 settles an
 abandoned run through the crash-recovery path (§4.4) when it holds a secure reservation.
 
-`kills` and `boss_damage` are written as `0` in M5: there is no PvP damage (`docs/DECISIONS.md`
-D41) and no boss (M7). `pve_kills` is not tracked by the simulation either, and is likewise
-`0`. They are stored because §18.1 names them; the alternative — omitting columns and migrating
-them in later — is worse for a table whose primary key is already fixed.
+`kills`, `pve_kills`, and `boss_damage` are still written as `0`: settlement does not yet carry
+those metrics. M7 shipped the boss/core reward without adding damage statistics, and PvP damage is
+scheduled for M7B (D59). The columns remain because §18.1 names them; omitting columns and migrating
+them later would be worse for a table whose primary key is already fixed.
 
 ### 3.6 `reward_ledger`
 
@@ -529,7 +533,8 @@ Restating the authority model (technical plan §5.1, `docs/DEVELOPMENT_RULES.md`
 of this document, because M5 is the first milestone where the answer has money in it.
 
 **There is no settlement message.** The client→server message set is: join options
-(handshake + skill loadout ids + access token), `input`, `secure_item`, `discard_item`. Not one
+(handshake + skill loadout ids + access token), `input`, `secure_item`, `discard_item`, and
+`activate_core`. Not one
 of them has a field capable of expressing a point value, an item's worth, an unlock, an
 outcome, or a reward — so there is no "settlement message validation" in the sense of checking
 a claimed reward, because no claim can be made. A client that invents a `settle` message hits
@@ -544,6 +549,7 @@ consumer):
 | `accessToken` in join options | `validateMatchJoinOptions` (shape/length) then Supabase Auth (authenticity) | Malformed, absent when required, expired, forged, or another project's token. |
 | `skillLoadoutIds` | `validateMatchJoinOptions` then `createSkillLoadout` then the unlock check | Unknown id, duplicate, over the slot budget, **or not unlocked by this account** (technical plan §19). |
 | `secure_item.sourceSlot` | `validateSecureItemMessage` then live simulation state | Out-of-range, non-integer, empty slot, occupied secure slot, dead player. |
+| `activate_core.sourceSlot` | `validateActivateCoreMessage` then live simulation state | Out-of-range, non-integer, empty slot, non-core item, dead player, or an already-active core skill. |
 
 The reward itself is computed from the simulation's own `RunResult` — the server's authoritative
 record of what that player was carrying — by a pure function in `@carry-or-fall/simulation-core`

@@ -4,11 +4,9 @@ A lightweight browser multiplayer extraction roguelite. This repository is a
 strict-TypeScript **pnpm monorepo** with a Phaser browser client and an
 authoritative Colyseus game server.
 
-> **Milestone status: M0 — Repository Foundation.** This milestone establishes
-> the toolchain, the client/server skeleton, and exactly one verified
-> client-to-server connection. **There is no gameplay yet** (no movement,
-> combat, enemies, loot, inventory, extraction, skills, or bosses). Gameplay
-> begins at M1.
+> **Milestone status: M7 shipped and tagged as `v0.7.0-boss`.** M0 through M7
+> are delivered. M7A (enemy behavior) and M7B (PvP damage and group balance)
+> are planned but not built; M8 is the private-internet deployment milestone.
 
 ## Authoritative documents
 
@@ -25,9 +23,18 @@ Supporting control documents:
 - [`docs/DEVELOPMENT_RULES.md`](docs/DEVELOPMENT_RULES.md) — durable rules.
 - [`docs/DECISIONS.md`](docs/DECISIONS.md) — approved architecture decisions.
 - [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — the client/server wire contract.
+- [`docs/CONTENT_AUTHORING.md`](docs/CONTENT_AUTHORING.md) — the data-driven
+  content contract.
 - [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md) — the testing layers.
-- Per-milestone issue lists and execution plans: `docs/M0_EXECUTION_PLAN.md`
-  through `docs/M4_EXECUTION_PLAN.md`.
+- [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md) — the persistent-data contract.
+- Milestone documents: [M0 plan](docs/M0_EXECUTION_PLAN.md);
+  [M1 issues](docs/M1_ISSUES.md) / [plan](docs/M1_EXECUTION_PLAN.md);
+  [M2 issues](docs/M2_ISSUES.md) / [plan](docs/M2_EXECUTION_PLAN.md);
+  [M3 issues](docs/M3_ISSUES.md) / [plan](docs/M3_EXECUTION_PLAN.md);
+  [M4 issues](docs/M4_ISSUES.md) / [plan](docs/M4_EXECUTION_PLAN.md);
+  [M5 issues](docs/M5_ISSUES.md) / [plan](docs/M5_EXECUTION_PLAN.md);
+  [M6 issues](docs/M6_ISSUES.md) / [plan](docs/M6_EXECUTION_PLAN.md); and
+  [M7 issues](docs/M7_ISSUES.md) / [plan](docs/M7_EXECUTION_PLAN.md).
 
 ## Prerequisites
 
@@ -73,8 +80,8 @@ of date. For day-to-day work `pnpm install` is fine.
 
 ## Configure environment
 
-Copy the example env file and adjust if needed. The defaults work for local
-development out of the box.
+Copy the example env file. Its active defaults run the complete local game with
+in-memory progression and no external account service.
 
 ```powershell
 Copy-Item .env.example .env
@@ -82,17 +89,26 @@ Copy-Item .env.example .env
 
 `.env.example` documents every variable (client `VITE_*` vars, server `PORT`,
 `ALLOWED_ORIGINS`, `GAME_BUILD_VERSION`, `LOG_LEVEL`, and the Supabase pairs). It
-contains **no secrets**; the real `.env` is git-ignored, and it is the only place
-a credential ever lives.
+contains **no secrets**. The real `.env` is git-ignored; deployed environments
+inject credentials through their host settings instead.
 
 ### Accounts and progression (optional locally)
 
 From M5 the game can store permanent progression in Supabase. All four Supabase
-variables are **optional for local development**: with none of them set, the
-server runs on an in-memory store and the client plays as a guest, so a fresh
-clone with no `.env` is fully playable and passes every gate. See
+variables are **optional for local development** and are commented out in the
+example. Copying it verbatim therefore gives the supported in-memory mode: the
+server and client agree that accounts are not configured, and the game is fully
+playable. A fresh clone with no `.env` still passes every gate, but opening the
+development client fails at startup with a message naming the missing
+`VITE_GAME_SERVER_URL`; copy the example before running locally. See
 [`supabase/README.md`](supabase/README.md) to point it at a real project, and
 [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md) for the schema.
+
+To enable persistent accounts, replace the placeholder project URL and keys and
+uncomment **all four** `VITE_SUPABASE_*` / `SUPABASE_*` lines. Do not uncomment
+the placeholder values themselves. A partial server pair is rejected at startup
+with an error naming the missing variable; a client/server project mismatch is
+refused at join as an unverifiable session.
 
 Two rules, both enforced by tests rather than by intention:
 
@@ -133,12 +149,13 @@ This runs both workspaces in parallel:
   (HTTP health + WebSocket). Health check: `http://localhost:2567/health`.
 - **Client** — Vite dev server on `http://localhost:5173`.
 
-Open <http://localhost:5173>. The boot scene shows the title, the client build
-version, and a live **server connection status** that transitions
-`Connecting…` → `Connected` once the smoke-test room join succeeds. It also
-displays the synchronized connected-player count and a **health** line reporting
-the result of an HTTP `GET /health` — proving the client can reach the server
-over HTTP, not only over WebSocket (technical plan §38 exit criteria).
+Open <http://localhost:5173>. The client starts in `LoadoutScene`, where you can
+choose unlocked skills, create or join a party, and press `Enter` to start a run.
+The match then provides the shipped M7 loop: authoritative movement and combat,
+loot and inventory, secure-slot extraction, account progression, parties, and
+the Warden boss/core unlock. The original `foundation_room` and HTTP `/health`
+endpoint remain infrastructure and test surfaces rather than the player-facing
+startup flow.
 
 If the client and server protocol versions disagree, the server refuses the join
 and the client shows a refresh/update message instead of connecting.
@@ -242,12 +259,12 @@ contract. `docs/TEST_PLAN.md` §5 states which claim rests on which run.
 ```
 Carry_or_Fall/
 ├─ apps/
-│  ├─ client/     Phaser 4 + Vite browser client (boot scene, connection status)
-│  └─ server/     Authoritative Colyseus server (foundation_room, health, shutdown)
+│  ├─ client/     Phaser 4 + Vite browser client (loadout, arena, results)
+│  └─ server/     Authoritative Colyseus server (match, party, progression)
 ├─ packages/
 │  ├─ protocol/         Framework-agnostic client/server contract + validators
-│  ├─ game-content/     Data-driven content definitions (type placeholders in M0)
-│  ├─ simulation-core/  Deterministic simulation utilities (seeded PRNG in M0)
+│  ├─ game-content/     Data-driven skills, loot, enemies, boss, and arena
+│  ├─ simulation-core/  Deterministic movement, combat, loot, and boss helpers
 │  └─ config/           Shared TypeScript + ESLint base config (no runtime code)
 ├─ supabase/      SQL migrations for the account/progression schema (M5)
 ├─ docs/          Authoritative + control documents
@@ -260,35 +277,6 @@ Carry_or_Fall/
 ├─ vitest.config.ts           Unit + integration test projects
 └─ pnpm-workspace.yaml        Workspace + build-script allowlist
 ```
-
-## What M0 includes / excludes
-
-**Includes**
-
-- pnpm workspace with pinned dependency versions and a single lockfile.
-- Minimal Phaser client: one boot scene, build info, live connection status.
-- Minimal Colyseus server: one `foundation_room`, join/leave logging,
-  synchronized state (server build version + connected-player count), an HTTP
-  health endpoint (allowlisted CORS), env-var validation, structured logs, and
-  graceful shutdown.
-- **Version-compatibility gate**: the client sends its protocol/build version as
-  join options and the server refuses an incompatible client at the join
-  boundary with a refresh/update message (technical plan §35).
-- Shared `protocol` package with version constants, the handshake/health
-  contracts, and runtime validators (the server never trusts arbitrary client
-  input; the client validates the health response too).
-- Strict TypeScript, ESLint, Prettier, Vitest, and GitHub Actions CI, plus
-  Dependabot dependency updates and CodeQL code scanning (technical plan §31).
-- One verified local client-to-server connection, and the client reaching the
-  HTTP health endpoint.
-
-**Excludes (deferred to later milestones)**
-
-- All gameplay (movement, combat, enemies, loot, inventory, extraction, skills,
-  bosses — **the boss and its rare skill shipped in M7**).
-- Persistence / accounts (Supabase — **shipped in M5**), deployment (Cloudflare
-  Pages, Railway), horizontal scaling (Redis / multi-process presence), and
-  mobile support.
 
 ## Troubleshooting
 
@@ -337,9 +325,9 @@ Carry_or_Fall/
 
 ## Next milestone
 
-**M7.5 (PvP damage and group balance)** is next — a milestone added by
-`docs/DECISIONS.md` D59 because technical plan §38 assigns player-versus-player
-damage to no milestone at all — and it also carries the knockback decision D33
-deferred and D69 scheduled. Then **M8 (private internet test)**. See
+**M7A (enemy behavior)** is next, followed by **M7B (PvP damage and group
+balance)**. M7B was added by `docs/DECISIONS.md` D59 because technical plan §38
+assigns player-versus-player damage to no milestone at all; it also carries the
+knockback decisions D33 and D69. Then comes **M8 (private internet test)**. See
 [`docs/M7_ISSUES.md`](docs/M7_ISSUES.md) for what the current milestone
 deliberately left out, and the technical plan §38 for the roadmap.
