@@ -20,7 +20,10 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import playwrightConfig from "../playwright.config";
+
 const clientSrc = path.resolve(fileURLToPath(new URL("../src", import.meta.url)));
+const clientRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 
 /** Every `.ts` file under `apps/client/src`. */
 async function sourceFiles(directory: string): Promise<string[]> {
@@ -71,6 +74,16 @@ describe("the client runs no simulation (docs/M4_EXECUTION_PLAN.md §5.1)", () =
     const importers = files.filter((file) => file.includes("hud") || file.includes("render"));
     const sources = await Promise.all(importers.map((file) => readFile(file, "utf8")));
     expect(sources.some((source) => source.includes("@carry-or-fall/simulation-core"))).toBe(true);
+  });
+});
+
+describe("the browser harness does not reload itself", () => {
+  it("writes Playwright artifacts outside Vite's watched client root", () => {
+    expect(playwrightConfig.outputDir).toBeDefined();
+    const outputDir = path.resolve(clientRoot, playwrightConfig.outputDir!);
+    const relative = path.relative(clientRoot, outputDir);
+
+    expect(relative === ".." || relative.startsWith(`..${path.sep}`)).toBe(true);
   });
 });
 

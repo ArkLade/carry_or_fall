@@ -107,6 +107,10 @@ const clientEnv = {
 
 export default defineConfig({
   testDir: "./e2e",
+  // Keep live trace/screenshot writes outside Vite's watched client root. When
+  // Playwright used its default `apps/client/test-results`, Vite treated trace
+  // resources as source changes and repeatedly reloaded the pages under test.
+  outputDir: "../../.playwright-test-results",
   // Every test starts a fresh page against a shared dev server; running two
   // Phaser game instances in parallel windows is unnecessary contention for
   // this small suite, so tests run serially within a single worker.

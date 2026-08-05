@@ -66,7 +66,8 @@ the counts. The bounded gate is the mitigation; the
 `vitest.incomplete-run.ts` reporter is the guarantee, because it fails loudly whenever any file did
 not report.
 
-**Exists today (22 files, 222 tests; 224.21 seconds in the two-worker readiness measurement):**
+**Exists today (23 files, 225 tests; the previous 22-file/222-test readiness measurement took
+224.21 seconds):**
 
 The immediately preceding one-worker baseline was 423.67 seconds. Its 11 real-server files consumed
 409.42 seconds, led by `settlement-adversarial` (100.38 s), `boss-core-decision` (95.20 s), and
@@ -271,8 +272,11 @@ motivated it:
   the **authoritative player cover that distance**. A host sleep is not server time: if the runner is
   descheduled, key-up arrives late and the server correctly keeps applying the previous input. The
   old fixed-150 ms walker first failed by running at a 25% duty cycle; its host-timed replacement
-  could fail in the other direction by overshooting under load. The current release condition is
-  game state, evaluated inside Chromium, not elapsed host time or repeated CDP round trips.
+  could fail in the other direction by overshooting under load. Each ordinary hold now advances
+  only the dominant remaining axis: WASD cannot express an arbitrary target angle, and treating
+  every two-axis target as 45 degrees made the shorter axis overshoot and oscillate. The current
+  release condition is game state, evaluated inside Chromium, not elapsed host time or repeated CDP
+  round trips.
 
 Multiplayer state waits follow the same rule. `pickUpAt`, extraction completion, remote movement,
 remote loot removal, and remote run-over conditions are evaluated against the latest snapshot
@@ -292,9 +296,9 @@ was the one wait in the suite whose cost is not time but the player's health (§
 therefore invisible to a table that nevertheless reported a 72% floor for the whole suite. Any new
 inline wait calls `reportMargin`.
 
-### 2.3.0b Two ways to invalidate a browser run without failing a test
+### 2.3.0b Three ways to invalidate a browser run without failing a test
 
-Both of these have cost a real run, and both look exactly like a product defect —
+All three have cost a real run, and all look exactly like a product defect —
 every test failing at "the client has not joined a room" — so they are written
 down rather than re-diagnosed each time.
 
@@ -308,6 +312,14 @@ check before the wrong step — check immediately before invoking the suite.
 **Editing client source while the suite runs.** The Vite dev server is watching,
 so a save hot-reloads the page mid-test and the run in progress loses its room.
 This is not a flake to re-run past; it is the edit. Finish editing, then run.
+
+**Writing Playwright artifacts inside `apps/client`.** Vite watches the client
+root, and Playwright writes live trace resources while a test runs. With the
+default `apps/client/test-results` directory, those writes were source changes
+to Vite: it repeatedly reloaded both pages, the walker overshot while input was
+still held, and healthy gameplay tests failed. `playwright.config.ts` therefore
+writes artifacts to the repository-root `.playwright-test-results` directory;
+the architecture suite enforces that the directory remains outside Vite's root.
 
 ### 2.3.0c Budgets paid in health, not in wall clock
 
@@ -532,6 +544,12 @@ with a repository-root `.env` present):
 Nothing is under the 40% floor. The extraction idle window remains the tightest product premise,
 not a poll timeout; the extraction-result observation itself has 62% margin. The five-second lobby,
 party formation, scene transitions, teammate-marker delivery, and every inline deadline now report.
+
+**M7A baseline stabilization re-run.** After moving live Playwright artifacts outside Vite's
+watched root and correcting non-45-degree walker steering, two consecutive full 35-test runs passed.
+Their worst margins were 62% (`waitForRunResult`), 63% (`extractionIdleWindow`), 72%/74%
+(`waitForSnapshot`), 78% (`dieToChasers`), and 79%/82% (`walkToward`). No gameplay timeout or arena
+coordinate changed.
 
 The remaining fixed waits are actions or sampling intervals, not silent completion claims:
 `pressKey` has a minimum 50 ms hold plus two rendered frames; party-code typing uses a 40 ms human
