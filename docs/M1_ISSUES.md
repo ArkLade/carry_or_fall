@@ -1,8 +1,8 @@
 # M1 Issue List — Local Single-Player Combat
 
-Status: **Planned** (not started). The bounded task list for milestone **M1**, per the technical
+Status: **Delivered.** The bounded task list for milestone **M1**, per the technical
 plan §38 (M1) and M0 deliverable item 10 ("first milestone issue list"), and concept Prototype
-Tier 1 (§27.1). M1 is implemented **after** M0; do not start it until M0 is accepted.
+Tier 1 (§27.1). M1 was implemented **after** M0.
 
 ## Scope
 
@@ -17,7 +17,7 @@ death, and basic map collision — playable **locally, with no network**.
 
 **Explicitly out of M1** (later milestones): Colyseus rooms / networking (M4), loot, six-slot
 inventory, secure slot, five-category points, extraction (M2), skills and the wildcard slot (M3),
-the boss (M7), accounts / Supabase / persistence (M5), PvP and parties (M4/M6), mobile controls,
+the boss (M7), accounts / Supabase / persistence (M5), PvP (M7B), parties (M6), mobile controls,
 and client prediction. Do not build empty service layers for these.
 
 ## Architectural constraints (apply to every issue)

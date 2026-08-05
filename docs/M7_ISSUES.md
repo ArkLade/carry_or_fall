@@ -1,8 +1,8 @@
 # M7 Issue List — Boss and Rare Skill
 
-Status: **Planned** (implementation follows in the same change set as this document). The bounded
+Status: **Delivered.** The bounded
 task list for milestone **M7**, per technical plan §38 (M7) and the repository's
-per-milestone-issue-list practice established at M1–M6. M7 is implemented after M6 on branch
+per-milestone-issue-list practice established at M1–M6. M7 was implemented after M6 on branch
 `m7-boss`.
 
 Read before starting: `docs/DEVELOPMENT_RULES.md`, `docs/DECISIONS.md` (D29, D30, D33, D41, D44,
@@ -28,7 +28,7 @@ settlement work under load it has never seen: a single run can now end with a pe
 settlement that carries a core.
 
 **Explicitly out of M7** (later milestones or never): player-versus-player damage and boss
-projectiles that damage players (M7.5, D59 — §1.4); knockback (§1.7, and D33 is restated rather than
+projectiles that damage players (M7B, D59 — §1.4); knockback (§1.7, and D33 is restated rather than
 quietly left open); a second boss, elite enemies, or rare map objectives as further core sources
 (concept §19.4 lists them; one boss is what §38 M7 asks for and §14.3 says explicitly not to build a
 complex one); weapon or armor blueprints (concept §19.2–§19.3 — no armor system exists, §8.2);
@@ -132,7 +132,7 @@ discard and secure (D44). §11.1 races the two in one tick and asserts the reser
 ### 1.4 Where the boss lives, how it attracts players, and why it has no projectiles
 
 Concept §14.3 wants a boss that attracts nearby players and creates *optional* PvPvE conflict. PvP
-damage is M7.5 (D59), so the second half cannot exist yet, and inventing it here would pre-empt a
+damage is M7B (D59), so the second half cannot exist yet, and inventing it here would pre-empt a
 milestone that exists precisely so it is designed rather than absorbed.
 
 What M7 ships is the attraction without the conflict:
@@ -145,7 +145,7 @@ What M7 ships is the attraction without the conflict:
   browser-test margin M6 measured; a leashed one cannot reach any route those tests take, and the
   placement is chosen against them (§1.8). That is a by-construction bound, not a budget.
 - **No boss projectiles.** All three attacks are melee-arc or area effects centred on the boss.
-  Projectiles that damage *players* are the same plumbing M7.5 owns (`AttackTarget` widening, D59),
+  Projectiles that damage *players* are the same plumbing M7B owns (`AttackTarget` widening, D59),
   and adding it here would be doing that milestone's work under this one's name. §14.3's "support
   melee and ranged interaction" is about how a *player* engages the boss, and both weapons work.
 
@@ -201,8 +201,8 @@ still holds for a different and better reason, and it is restated rather than le
 citation (D69): M7's rare skill is `split_return`, a **projectile** primitive, and knockback is a
 **displacement-on-hit** primitive. Adding both in one milestone means two new combat primitives
 landing alongside a boss, an intent, and a settlement change — and the displacement one interacts
-with exactly the thing M7.5 is for (concept §16's solo/group balance, where being pushed matters).
-Knockback is therefore scheduled into M7.5 rather than deferred indefinitely.
+with exactly the thing M7B is for (concept §16's solo/group balance, where being pushed matters).
+Knockback is therefore scheduled into M7B rather than deferred indefinitely.
 
 ### 1.8 The boss must not erode the browser suite's timing margins
 

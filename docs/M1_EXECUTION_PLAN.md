@@ -413,7 +413,7 @@ None of these block M1; M1 adds no HTTP routes, no deployment, and no server cha
 
 M1 implements none of the following (deferred to the stated milestone): loot, six-slot inventory,
 secure slot, five point categories, extraction (M2); skills and the wildcard slot (M3); Colyseus
-rooms, authoritative server combat, PvP, other players (M4); accounts, Supabase, persistence (M5);
+rooms, authoritative server combat, and other players (M4); PvP (M7B); accounts, Supabase, persistence (M5);
 parties/matchmaking (M6); the boss and boss-core (M7); deployment (M8+); mobile controls; and client
 prediction. No empty service layers are created for any of these (`docs/DEVELOPMENT_RULES.md`, "Scope
 discipline").

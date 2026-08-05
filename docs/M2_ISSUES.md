@@ -1,8 +1,8 @@
 # M2 Issue List — Loot and Extraction
 
-Status: **Planned** (implementation follows in the same change set as this document). The bounded
+Status: **Delivered.** The bounded
 task list for milestone **M2**, per the technical plan §38 (M2) and the repository's
-per-milestone-issue-list practice established at M1. M2 is implemented **after** M1 (tagged
+per-milestone-issue-list practice established at M1. M2 was implemented **after** M1 (tagged
 `v0.1.0-local-combat`); the M1 tail defects (D-1, D-2) and the enemy contact-damage-interval content
 move are cleared first (see `docs/M1_ISSUES.md`) and are not repeated here.
 
@@ -18,7 +18,7 @@ the secure slot, rotating extraction, and the local run result.
 - Death and extraction differ correctly.
 
 **Explicitly out of M2** (later milestones or never, per the authoritative documents): skills and
-the wildcard slot (M3); Colyseus rooms/networking, other players, PvP (M4); accounts, Supabase,
+the wildcard slot (M3); Colyseus rooms/networking and other players (M4); PvP (M7B); accounts, Supabase,
 persistence (M5); parties/matchmaking (M6); the boss and boss skill cores (M7); deployment (M8+);
 mobile controls; client prediction. Also out of scope, decided in this document (see §1 below):
 weapon/armor blueprints and their permanent unlocks, ground-weapon swapping and temporary

@@ -337,8 +337,8 @@ Matching the technical plan §38 M2 exit criteria, plus the repository gates:
 ## 13. Non-goals
 
 M2 implements none of the following (deferred to the stated milestone, or decided out per §1): data
--driven skills and the wildcard slot (M3); Colyseus rooms, authoritative server state, PvP, other
-players (M4); accounts, Supabase, persistence, real secure-slot durability (M5); parties/matchmaking
+-driven skills and the wildcard slot (M3); Colyseus rooms, authoritative server state, and other
+players (M4); PvP (M7B); accounts, Supabase, persistence, real secure-slot durability (M5); parties/matchmaking
 (M6); the boss and boss-core drops (M7); deployment (M8+); mobile controls; client prediction;
 weapon/armor blueprints and permanent unlocks; ground-weapon swap; new enemy types; a second secure
 slot; drag-and-drop inventory rearranging in the client UI. No empty service layers are created for

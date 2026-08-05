@@ -2,7 +2,7 @@
 
 Status: **Delivered.** The bounded
 task list for milestone **M6**, per technical plan §38 (M6) and the repository's
-per-milestone-issue-list practice established at M1–M5. M6 is implemented after M5 on branch
+per-milestone-issue-list practice established at M1–M5. M6 was implemented after M5 on branch
 `m6-party`.
 
 Read before starting: `docs/DEVELOPMENT_RULES.md`, `docs/DECISIONS.md` (D7, D8, D31, D38, D39, D42,
