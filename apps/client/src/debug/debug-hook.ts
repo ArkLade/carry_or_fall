@@ -22,6 +22,20 @@ import type { LocalPlayerState, MatchView, PartyView } from "@carry-or-fall/prot
 /** The `window` property name the hook is installed under. */
 export const DEBUG_HOOK_KEY = "__CARRY_OR_FALL_DEBUG__";
 
+/** Rendering-only main-camera state exposed to browser tests. */
+export interface CameraObservation {
+  readonly scrollX: number;
+  readonly scrollY: number;
+  readonly viewportWidth: number;
+  readonly viewportHeight: number;
+  readonly arenaBounds: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  };
+}
+
 export interface CarryOrFallDebugHook {
   /** The latest authoritative match snapshot, or `null` before the first arrives. */
   readonly getSnapshot: () => MatchView | null;
@@ -31,6 +45,8 @@ export interface CarryOrFallDebugHook {
   readonly getPrivateState: () => LocalPlayerState | null;
   /** The room connection status ("connecting", "connected", "reconnecting", …). */
   readonly getConnectionStatus: () => string;
+  /** The configured main camera, or `null` before `PlayScene` creates it. */
+  readonly getCamera: () => CameraObservation | null;
   /** The currently active Phaser scene's key ("loadout", "play", "boot"), or `null`. */
   readonly getActiveSceneKey: () => string | null;
   /**

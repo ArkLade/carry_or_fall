@@ -66,8 +66,13 @@ the counts. The bounded gate is the mitigation; the
 `vitest.incomplete-run.ts` reporter is the guarantee, because it fails loudly whenever any file did
 not report.
 
-**Exists today (23 files, 225 tests; the previous 22-file/222-test readiness measurement took
-224.21 seconds):**
+**Exists today (23 files, 230 tests).** The accepted M7A readiness baseline was 23 files / 225
+tests. Checkpoint 0A added five cases to `apps/client/test/e2e-helpers.test.ts` and moved no unit
+test: camera scroll plus FIT conversion, authoritative-coordinate immutability, and one absent-export
+case for each of `moveFor`, `meleeAttackFor`, and `rangedAttackFor`. The 0A gate took **223.4
+seconds**.
+
+The previous 22-file/222-test readiness measurement took 224.21 seconds:
 
 The immediately preceding one-worker baseline was 423.67 seconds. Its 11 real-server files consumed
 409.42 seconds, led by `settlement-adversarial` (100.38 s), `boss-core-decision` (95.20 s), and
@@ -144,9 +149,10 @@ plan §30.3 requires this layer eventually, and §38 M4 requires "two real brows
 already presuppose the capability, so building it now rather than at M5 is bringing forward
 required infrastructure, not scope creep.
 
-**What exists today:** `apps/client/playwright.config.ts` and 35 tests across six specs:
-`arena.spec.ts`, `boss.spec.ts`, `loadout.spec.ts`, `multiplayer.spec.ts`, `party.spec.ts`, and
-`skills.spec.ts`. They run via `pnpm run test:e2e` and drive a real Chromium instance against
+**What exists today:** `apps/client/playwright.config.ts` and 37 tests across seven specs:
+`arena.spec.ts`, `boss.spec.ts`, `camera.spec.ts`, `loadout.spec.ts`, `multiplayer.spec.ts`,
+`party.spec.ts`, and `skills.spec.ts`. They run via `pnpm run test:e2e` and drive a real Chromium
+instance against
 the real Vite **dev** server (never the production build) **and the real game server**, which the
 Playwright config now starts as a second `webServer`: from M4 the client cannot play without it.
 Input is real keyboard/mouse events into the `<canvas>` — Phaser renders to canvas, not DOM nodes,
@@ -160,13 +166,17 @@ export interface CarryOrFallDebugHook {
   readonly getLocalPlayerId: () => string | null; // this client's own player id
   readonly getPrivateState: () => LocalPlayerState | null; // this client's inventory/skills/result
   readonly getConnectionStatus: () => string;
+  readonly getCamera: () => CameraObservation | null; // rendering-only scroll/viewport/arena bounds
   readonly getActiveSceneKey: () => string | null; // "loadout" | "play" | "boot" | null
 }
 ```
 
 From M4 what the hook exposes is **what the server sent**, not a locally simulated world — the client
 no longer has one — and specifically the latest *authoritative* snapshot rather than the interpolated
-render frame, so rendering smoothness never changes what a test sees.
+render frame, so rendering smoothness never changes what a test sees. Checkpoint 0A's camera view is
+the one rendering-only exception: it exposes the existing main camera's scroll, logical viewport,
+and configured arena bounds so browser input helpers can transform authoritative world positions to
+page positions. It still exposes no mutator and no speculative position.
 
 `multiplayer.spec.ts` is §38 M4's first exit criterion: two independent browser **contexts** (not
 two pages in one context — separate storage, separate sockets, the closest thing to two machines)
@@ -547,18 +557,59 @@ party formation, scene transitions, teammate-marker delivery, and every inline d
 
 **M7A baseline stabilization re-run.** After moving live Playwright artifacts outside Vite's
 watched root and correcting non-45-degree walker steering, two consecutive full 35-test runs passed.
-Their worst margins were 62% (`waitForRunResult`), 63% (`extractionIdleWindow`), 72%/74%
-(`waitForSnapshot`), 78% (`dieToChasers`), and 79%/82% (`walkToward`). No gameplay timeout or arena
-coordinate changed.
+The accepted baseline uses the worse observation across them: `activeScene:loadout` 98%,
+`activeScene:play` 100%, `matchRunning` 80%, `walkToward` 79%, `waitForSnapshot` 72%,
+`attackChaserUntil` 93%, `dieToChasers` 78%, `waitForRunResult` 62%, and
+`extractionIdleWindow` 63%. Exact earlier values for the other labels were not retained. No gameplay
+timeout or arena coordinate changed.
+
+**M7A Checkpoint 0A (camera foundation, pre-resize).** The normal suite passed **37/37** in
+**501.951 seconds** and the margin audit passed **37/37** in **496.418 seconds**. The two added
+browser tests are `camera.spec.ts`'s deterministic pre-player camera state and its
+ArenaDefinition-bounds/authoritative-coordinate case. No browser test was removed and no timeout,
+arena coordinate, simulation rule, or protocol field changed.
+
+The baseline column records only the exact accepted stabilization values retained in the repository;
+other labels are marked `not retained` rather than reconstructed from a more favorable or earlier
+run. 0A reports the worst observed tuple for every label; no label disappeared or was added.
+
+| Budget | Readiness margin | 0A used / budget | 0A margin | Movement |
+| --- | ---: | ---: | ---: | ---: |
+| `activeScene:loadout` | 98% | 205 ms / 30 s | 99% | +1 pp |
+| `activeScene:play` | 100% | 155 ms / 60 s | 100% | 0 pp |
+| `attackChaserUntil` | 93% | 2.417 s / 45 s | 95% | +2 pp |
+| `bossSortie` | not retained | 17 ms / 2 s | 99% | — |
+| `dieToChasers` | 78% | 14.482 s / 60 s | 76% | -2 pp |
+| `extractionIdleWindow` | 63% | 7.906 s / 20 s | 60% | -3 pp |
+| `matchRunning` | 80% | 6.116 s / 30 s | 80% | 0 pp |
+| `partyCreated` | not retained | 161 ms / 30 s | 99% | — |
+| `partyJoined` | not retained | 165 ms / 30 s | 99% | — |
+| `partyMemberMarkers` | not retained | 131 ms / 30 s | 100% | — |
+| `partySize` | not retained | 143 ms / 60 s | 100% | — |
+| `pickUpAt` | not retained | 180 ms / 25 s | 99% | — |
+| `waitForMatchState:ground_loot_missing` | not retained | 95 ms / 10 s | 99% | — |
+| `waitForMatchState:player_run_over` | not retained | 109 ms / 10 s | 99% | — |
+| `waitForMatchState:player_x_below` | not retained | 91 ms / 10 s | 99% | — |
+| `waitForRunResult` | 62% | 6.102 s / 15 s | **59%** | -3 pp |
+| `waitForSnapshot` | 72% | 2.350 s / 8 s | 71% | -1 pp |
+| `walkToward` | 79% | 6.100 s / 30 s | 80% | +1 pp |
+
+The 0A floor is **59%**, above the checkpoint's blocking 40% floor. The accepted readiness maximum
+ticks remain recorded as the non-repeating **6.796 ms** observation and its **3.108 ms** repeat. A
+controlled 37-test 0A run with the existing info-level metrics reporter visible passed in
+**496.382 seconds** and measured **0.153 ms** tick-weighted average, **1.770 ms** maximum tick,
+**15.5 ms** maximum event-loop lag, **21.7 MB** peak heap, and **72.6 MB** peak RSS across 103
+five-second intervals. Active rooms peaked at four and returned to zero after the final abandoned
+room's 15-second reconnect window.
 
 The remaining fixed waits are actions or sampling intervals, not silent completion claims:
 `pressKey` has a minimum 50 ms hold plus two rendered frames; party-code typing uses a 40 ms human
 keystroke delay; the negative multiplayer interaction holds E for 400 ms plus frames; pickup's
 1.5-second attempt is inside the reported 25-second `pickUpAt` budget; combat helpers' 60–150 ms
 animation/retreat samples are inside their reported outer budgets; and `bossSortie`'s 25 ms sample
-interval is inside its reported two-second budget. `moveFor`, `meleeAttackFor`, and
-`rangedAttackFor` retain fixed-duration implementations but have no callers, so they spend no suite
-window. Per-test `test.setTimeout` values are outer hang guards; the 35 Playwright durations report
+interval is inside its reported two-second budget. Checkpoint 0A removed the unused fixed-duration
+`moveFor`, `meleeAttackFor`, and `rangedAttackFor` exports rather than retaining a completion model
+with no callers. Per-test `test.setTimeout` values are outer hang guards; the 37 Playwright durations report
 their use directly, and no test approached its guard in this run. `bossSortie` can finish in about
 50 ms because `walkToArenaPoint`'s own final approach already spends about a second inside the aggro
 radius, so the boss has usually left its lair before the window opens; the 2000 ms budget is sized

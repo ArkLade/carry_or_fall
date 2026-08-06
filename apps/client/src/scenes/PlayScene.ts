@@ -33,6 +33,7 @@ import Phaser from "phaser";
 
 import { UNCONFIGURED_ACCOUNT, type AccountState } from "../account/account";
 import { loadClientEnv } from "../config/env";
+import type { CameraObservation } from "../debug/debug-hook";
 import { CombatHud } from "../hud/combat-hud";
 import { InventoryHud } from "../hud/inventory-hud";
 import { KeyboardInput } from "../input/keyboard";
@@ -70,6 +71,7 @@ export class PlayScene extends Phaser.Scene {
   private statusDetail: string | null = null;
   private arena: ArenaDefinition = testArena;
   private account: AccountState = UNCONFIGURED_ACCOUNT;
+  private cameraConfigured = false;
   /** This client's own party members in this match, from the private message (M6). */
   private partyMemberIds: readonly string[] = [];
 
@@ -98,6 +100,27 @@ export class PlayScene extends Phaser.Scene {
 
   getConnectionStatus(): MatchStatus {
     return this.status;
+  }
+
+  /** Read-only rendering state for the dev-only browser observation hook. */
+  getCameraObservation(): CameraObservation | null {
+    if (!this.cameraConfigured) {
+      return null;
+    }
+    const camera = this.cameras.main;
+    const bounds = camera.getBounds();
+    return {
+      scrollX: camera.scrollX,
+      scrollY: camera.scrollY,
+      viewportWidth: camera.width,
+      viewportHeight: camera.height,
+      arenaBounds: {
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+      },
+    };
   }
 
   /**
@@ -142,6 +165,12 @@ export class PlayScene extends Phaser.Scene {
     this.connection = null;
     this.status = "connecting";
     this.statusDetail = null;
+    this.cameraConfigured = false;
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.cameraConfigured = false;
+    });
+    this.arena = testArena;
+    this.configureCamera(this.arena);
 
     this.account = data.account ?? UNCONFIGURED_ACCOUNT;
     this.partyMemberIds = [];
@@ -219,6 +248,20 @@ export class PlayScene extends Phaser.Scene {
     this.partyMemberIds = privateState?.partyMemberIds ?? [];
     const runOver = localPlayer !== null && localPlayer.runOver;
 
+    const alpha = connection.getInterpolationAlpha(performance.now());
+    const view = interpolateMatchView(connection.getPreviousSnapshot(), snapshot, alpha);
+    const arena = this.arenaFor(snapshot);
+    const renderedLocalPlayer = findLocalPlayer(view, localPlayerId);
+    if (renderedLocalPlayer === null) {
+      this.centerCameraSafely(arena);
+    } else {
+      this.cameras.main.centerOn(renderedLocalPlayer.x, renderedLocalPlayer.y);
+    }
+    // PointerInput reads worldX/worldY outside an input event. Phaser requires
+    // refreshing those values after camera movement so a stationary pointer
+    // keeps aiming at the world position currently under it.
+    this.input.activePointer.updateWorldPoint(this.cameras.main);
+
     if (runOver || snapshot.phase === "ending") {
       // This player's run has ended. The result stays on screen (rendered by
       // `CombatHud` from the private state) until they acknowledge it with
@@ -234,10 +277,7 @@ export class PlayScene extends Phaser.Scene {
       this.sendInput(snapshot, localPlayer);
     }
 
-    const alpha = connection.getInterpolationAlpha(performance.now());
-    const view = interpolateMatchView(connection.getPreviousSnapshot(), snapshot, alpha);
-
-    this.worldView.render(view, this.arenaFor(snapshot), localPlayerId, this.partyMemberIds);
+    this.worldView.render(view, arena, localPlayerId, this.partyMemberIds);
     this.combatHud.render(
       snapshot,
       localPlayer,
@@ -300,16 +340,30 @@ export class PlayScene extends Phaser.Scene {
   /** The arena the server says this match is on, falling back to the one this build ships. */
   private arenaFor(snapshot: MatchView): ArenaDefinition {
     const arena = findArena(snapshot.arenaId);
-    if (arena !== undefined) {
+    if (arena !== undefined && arena !== this.arena) {
       this.arena = arena;
+      this.configureCamera(arena);
     }
     return this.arena;
+  }
+
+  /** Configure the existing main camera directly from authoritative arena content. */
+  private configureCamera(arena: ArenaDefinition): void {
+    this.cameras.main.setBounds(0, 0, arena.width, arena.height);
+    this.cameraConfigured = true;
+    this.centerCameraSafely(arena);
+  }
+
+  /** Deterministic in-bounds view used until an authoritative local player exists. */
+  private centerCameraSafely(arena: ArenaDefinition): void {
+    this.cameras.main.centerOn(arena.width / 2, arena.height / 2);
   }
 
   private renderConnecting(): void {
     // Nothing authoritative has arrived yet, so there is nothing to draw but the
     // status. Deliberately not a fabricated world: the client owns no state to
     // show before the server sends some.
+    this.centerCameraSafely(this.arena);
     this.worldView.render(EMPTY_VIEW, this.arena, null, []);
     this.combatHud.render(EMPTY_VIEW, null, null, this.status);
     this.inventoryHud.render(null, null);
