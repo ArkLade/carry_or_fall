@@ -155,8 +155,9 @@ test.describe("each skill applies alone (M3.3, §38 M3 exit criterion 1)", () =>
     test.setTimeout(120_000);
     await gotoGame(page);
     await startRunWithLoadout(page, ["bulwark_strike"]);
-    let player = await getLocalPlayer(page);
+    const player = await getLocalPlayer(page);
     expect(player.shieldHp).toBe(0);
+    const playerId = player.id;
     const snapshot = await getSnapshot(page);
     const enemyStart = nearestEnemy(snapshot, player)!;
 
@@ -164,13 +165,14 @@ test.describe("each skill applies alone (M3.3, §38 M3 exit criterion 1)", () =>
     // closest one partway rather than assuming a fixed distance.
     await walkToArenaPoint(page, enemyStart.x, enemyStart.y, 25_000);
 
-    await attackChaserUntil(
+    const shieldedView = await attackChaserUntil(
       page,
-      (view) => view.players.some((entry) => entry.shieldHp > 0),
+      (view) => view.players.some((entry) => entry.id === playerId && entry.shieldHp > 0),
       45_000,
     );
-    player = await getLocalPlayer(page);
-    expect(player.shieldHp).toBeGreaterThan(0);
+    const shieldedPlayer = shieldedView.players.find((entry) => entry.id === playerId);
+    expect(shieldedPlayer).toBeDefined();
+    expect(shieldedPlayer!.shieldHp).toBeGreaterThan(0);
   });
 });
 
