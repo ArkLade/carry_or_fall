@@ -144,11 +144,26 @@ Expected files to change in 0B, and no others:
 - `apps/client/e2e/helpers.ts` for content-authored route waypoints only;
 - `apps/client/e2e/arena.spec.ts`, `boss.spec.ts`, `multiplayer.spec.ts`, and `skills.spec.ts` only
   where a re-authored content coordinate changes the route under test;
+- `apps/client/e2e/camera.spec.ts` only for the minimal arena-size-dependent update to the existing
+  deterministic pre-player camera and authoritative arena-bound expectations. Replace only the
+  assumptions that the authoritative arena and logical viewport have identical dimensions; derive
+  or assert the centered safe-state scroll for the accepted 2560 × 1440 arena behind the fixed
+  1920 × 1080 viewport. This is test-expectation maintenance caused directly by the authoritative
+  content resize, not a camera-policy or camera-implementation change;
 - `docs/TEST_PLAN.md` for 0B counts and the complete post-content margin table.
 
-Run all seven gates and the margin audit again. 0B is accepted only if every margin is at least 40%
-and the existing route suite remains green; it does not defer an obvious route failure to 0C.
-Commit the arena/content resize as its own revertible checkpoint when M7A is implemented.
+This narrow camera-spec allowance does not add the full post-resize camera audit to 0B. Checkpoint
+0C continues to own actual scrolling across the larger world; north, south, east, and west edge
+clamping; aim correctness during movement and at all four edges; fixed HUD behavior while scrolling;
+independent multiplayer cameras; and complete camera-aware route and performance evidence.
+`apps/client/e2e/camera.spec.ts` therefore remains in 0C's expected file list for those broader
+assertions.
+
+Run all seven gates and the margin audit again. The known arena-size-dependent camera expectation
+must be updated in 0B, not waived until 0C. 0B is accepted only if every margin is at least 40%, all
+seven gates pass independently, and the existing route suite remains green; it does not defer an
+obvious route failure to 0C. Commit the arena/content resize as its own revertible checkpoint when
+M7A is implemented.
 
 ### 2.4 Checkpoint 0C — contract and performance re-audit
 
