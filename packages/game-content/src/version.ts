@@ -24,5 +24,11 @@
  * the client marks skills locked from its own copy — so a stale client would
  * offer a selection the server will refuse, or hide one it would accept. That is
  * exactly the silent disagreement about game rules §35 exists to prevent.
+ *
+ * Version 3 is M7's boss, boss core, rare skill, and boss-core unlock source.
+ *
+ * Version 4 is M7A Checkpoint 0B's re-authored 2560 × 1440 arena geometry and
+ * spawn/candidate layout. A version-3 client would draw different walls and
+ * positions from the authoritative server, so D34 requires an exact-match bump.
  */
-export const CONTENT_VERSION = 3;
+export const CONTENT_VERSION = 4;

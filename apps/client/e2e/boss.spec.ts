@@ -39,6 +39,8 @@ import {
 } from "./helpers";
 
 const LAIR = testArena.bossSpawnPoint ?? { x: 0, y: 0 };
+const ORDINARY_ROUTE_POINT = { x: 880, y: testArena.openLaneY } as const;
+const SAFE_UPPER_LANE_Y = 240;
 
 /** How far the boss currently is from its lair. */
 function distanceFromLair(boss: { x: number; y: number }): number {
@@ -158,7 +160,7 @@ test.describe("the boss (concept §14.3)", () => {
     await gotoGame(page);
     await startRunWithLoadout(page, DEFAULT_SKILL_LOADOUT_IDS);
 
-    await walkToArenaPoint(page, 700, 900, 40_000);
+    await walkToArenaPoint(page, ORDINARY_ROUTE_POINT.x, ORDINARY_ROUTE_POINT.y, 40_000);
 
     const snapshot = await getSnapshot(page);
     const boss = snapshot.boss;
@@ -203,8 +205,8 @@ test.describe("the boss (concept §14.3)", () => {
     // Retreat in legs, sampling between them, rather than from a background
     // loop: a poll still running after the test body returns would reach into a
     // page Playwright is closing.
-    for (const legX of [LAIR.x - 400, LAIR.x - 600, 700]) {
-      await walkToward(page, legX, 250, 30_000);
+    for (const legX of [LAIR.x - 400, LAIR.x - 600, ORDINARY_ROUTE_POINT.x]) {
+      await walkToward(page, legX, SAFE_UPPER_LANE_Y, 30_000);
       // The cheap read again: between legs the player is standing still, and
       // the first leg is still partly inside the aggro radius.
       const boss = await getBoss(page);
