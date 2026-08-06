@@ -1,8 +1,8 @@
 /**
- * Checkpoint 0A camera coverage on the shipped 1920 × 1080 arena. Actual
- * scrolling remains a 0C contract after 0B supplies a larger world; these
- * tests prove the safe state, authoritative bounds, viewport, and rendering-
- * only boundary without fabricating oversized client geometry.
+ * Checkpoint 0A camera coverage, with the arena-size-dependent safe-state
+ * expectation maintained for Checkpoint 0B. Actual scrolling remains a 0C
+ * contract; these tests prove the safe state, authoritative bounds, viewport,
+ * and rendering-only boundary without fabricating client geometry.
  */
 import { testArena } from "@carry-or-fall/game-content";
 import { expect, test } from "@playwright/test";
@@ -36,11 +36,17 @@ test.describe("Checkpoint 0A main camera", () => {
 
     expect(observation.localPlayerId).toBeNull();
     expect(observation.snapshot).toBeNull();
+
+    const logicalViewport = { width: 1920, height: 1080 } as const;
+    const centeredSafeScroll = {
+      scrollX: (testArena.width - logicalViewport.width) / 2,
+      scrollY: (testArena.height - logicalViewport.height) / 2,
+    };
+    expect(centeredSafeScroll).toEqual({ scrollX: 320, scrollY: 180 });
     expect(observation.camera).toEqual({
-      scrollX: 0,
-      scrollY: 0,
-      viewportWidth: 1920,
-      viewportHeight: 1080,
+      ...centeredSafeScroll,
+      viewportWidth: logicalViewport.width,
+      viewportHeight: logicalViewport.height,
       arenaBounds: { x: 0, y: 0, width: testArena.width, height: testArena.height },
     });
 

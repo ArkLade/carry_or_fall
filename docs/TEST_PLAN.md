@@ -30,9 +30,10 @@ Fast, dependency-free tests of pure logic in `packages/*`. Glob: `packages/*/src
 effect caps, inventory movement, secure slot, point conversion, extraction calculation, reward
 payload generation, duplicate-unlock conversion, cooldown validation.
 
-**Exists today (36 files, 478 tests)**, covering the simulation and content rules shipped through
-M7, including wire validators, multiplayer, parties, persistence contracts, and the boss/core loop.
-The ones worth naming here because they guard an authority invariant:
+**Exists today (36 files, 488 tests)**, covering the simulation and content rules shipped through
+M7 plus M7A Checkpoint 0B's arena contracts, including wire validators, multiplayer, parties,
+persistence contracts, and the boss/core loop. The ones worth naming here because they guard an
+authority invariant:
 
 - `packages/protocol/src/validation.test.ts` — every validator accepts the exact legal shape and
   rejects the wrong type, the missing field, `NaN`/`Infinity`, the out-of-range enum, the negative
@@ -70,7 +71,8 @@ not report.
 tests. Checkpoint 0A added five cases to `apps/client/test/e2e-helpers.test.ts` and moved no unit
 test: camera scroll plus FIT conversion, authoritative-coordinate immutability, and one absent-export
 case for each of `moveFor`, `meleeAttackFor`, and `rangedAttackFor`. The 0A gate took **223.4
-seconds**.
+seconds**. Checkpoint 0B changed no integration test or count; its complete gate passed the same
+**23 files / 230 tests** in **234.8 seconds** of command wall time.
 
 The previous 22-file/222-test readiness measurement took 224.21 seconds:
 
@@ -569,30 +571,53 @@ browser tests are `camera.spec.ts`'s deterministic pre-player camera state and i
 ArenaDefinition-bounds/authoritative-coordinate case. No browser test was removed and no timeout,
 arena coordinate, simulation rule, or protocol field changed.
 
+**M7A Checkpoint 0B accepted (authoritative arena/content resize).** `testArena` is now exactly
+**2560 × 1440** behind the unchanged **1920 × 1080** logical viewport, and `CONTENT_VERSION` is
+**4**. The normal suite passed **37/37** in **572.8 seconds** of command wall time (**9.5 minutes**
+reported by Playwright); the margin audit passed **37/37** in **571.851 seconds** (**9.5 minutes**).
+The focused camera spec passed **2/2** in **16.6 seconds**. Its pre-player case still proves no
+authoritative local player or snapshot exists and that leaving `PlayScene` clears the observation,
+but now derives the deterministic centered scroll from arena and logical-viewport dimensions and
+asserts **(320, 180)**. This is expectation maintenance caused by the content resize, not a camera
+policy or implementation change. No browser test or timeout was added or removed.
+
+The accepted 0B file set is exactly `apps/client/e2e/boss.spec.ts`,
+`apps/client/e2e/camera.spec.ts`, `apps/client/e2e/helpers.ts`, `docs/TEST_PLAN.md`,
+`packages/game-content/src/arena.test.ts`, `packages/game-content/src/arena.ts`, and
+`packages/game-content/src/version.ts`.
+
 The baseline column records only the exact accepted stabilization values retained in the repository;
 other labels are marked `not retained` rather than reconstructed from a more favorable or earlier
-run. 0A reports the worst observed tuple for every label; no label disappeared or was added.
+run. 0A and 0B each report the worst observed tuple for every label; no label disappeared or was
+added.
 
-| Budget | Readiness margin | 0A used / budget | 0A margin | Movement |
-| --- | ---: | ---: | ---: | ---: |
-| `activeScene:loadout` | 98% | 205 ms / 30 s | 99% | +1 pp |
-| `activeScene:play` | 100% | 155 ms / 60 s | 100% | 0 pp |
-| `attackChaserUntil` | 93% | 2.417 s / 45 s | 95% | +2 pp |
-| `bossSortie` | not retained | 17 ms / 2 s | 99% | — |
-| `dieToChasers` | 78% | 14.482 s / 60 s | 76% | -2 pp |
-| `extractionIdleWindow` | 63% | 7.906 s / 20 s | 60% | -3 pp |
-| `matchRunning` | 80% | 6.116 s / 30 s | 80% | 0 pp |
-| `partyCreated` | not retained | 161 ms / 30 s | 99% | — |
-| `partyJoined` | not retained | 165 ms / 30 s | 99% | — |
-| `partyMemberMarkers` | not retained | 131 ms / 30 s | 100% | — |
-| `partySize` | not retained | 143 ms / 60 s | 100% | — |
-| `pickUpAt` | not retained | 180 ms / 25 s | 99% | — |
-| `waitForMatchState:ground_loot_missing` | not retained | 95 ms / 10 s | 99% | — |
-| `waitForMatchState:player_run_over` | not retained | 109 ms / 10 s | 99% | — |
-| `waitForMatchState:player_x_below` | not retained | 91 ms / 10 s | 99% | — |
-| `waitForRunResult` | 62% | 6.102 s / 15 s | **59%** | -3 pp |
-| `waitForSnapshot` | 72% | 2.350 s / 8 s | 71% | -1 pp |
-| `walkToward` | 79% | 6.100 s / 30 s | 80% | +1 pp |
+Both checkpoint margin captures used the non-CI 30-second `MATCH_START_TIMEOUT_MS` default, as the
+30-second `matchRunning` budgets in both columns demonstrate. `activeScene:play` is emitted by
+several call sites under one label: the party specs pass an explicit 60-second budget, while ordinary
+scene transitions use the 30-second local default. The 0A worst-ratio observation came from a party
+wait, while the 0B worst-ratio observation came from an ordinary transition. The actual used-time
+and budget tuples are retained below, but their rounded margin movement is not directly comparable.
+
+| Budget | Readiness margin | 0A used / budget | 0A margin | 0B used / budget | 0B margin | 0A → 0B |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `activeScene:loadout` | 98% | 205 ms / 30 s | 99% | 242 ms / 30 s | 99% | 0 pp |
+| `activeScene:play` | 100% | 155 ms / 60 s | 100% | 134 ms / 30 s | 100% | not comparable |
+| `attackChaserUntil` | 93% | 2.417 s / 45 s | 95% | 4.135 s / 45 s | 91% | -4 pp |
+| `bossSortie` | not retained | 17 ms / 2 s | 99% | 53 ms / 2 s | 97% | -2 pp |
+| `dieToChasers` | 78% | 14.482 s / 60 s | 76% | 17.643 s / 60 s | 71% | -5 pp |
+| `extractionIdleWindow` | 63% | 7.906 s / 20 s | 60% | 8.571 s / 20 s | **57%** | -3 pp |
+| `matchRunning` | 80% | 6.116 s / 30 s | 80% | 6.030 s / 30 s | 80% | 0 pp |
+| `partyCreated` | not retained | 161 ms / 30 s | 99% | 180 ms / 30 s | 99% | 0 pp |
+| `partyJoined` | not retained | 165 ms / 30 s | 99% | 200 ms / 30 s | 99% | 0 pp |
+| `partyMemberMarkers` | not retained | 131 ms / 30 s | 100% | 160 ms / 30 s | 99% | -1 pp |
+| `partySize` | not retained | 143 ms / 60 s | 100% | 182 ms / 60 s | 100% | 0 pp |
+| `pickUpAt` | not retained | 180 ms / 25 s | 99% | 260 ms / 25 s | 99% | 0 pp |
+| `waitForMatchState:ground_loot_missing` | not retained | 95 ms / 10 s | 99% | 95 ms / 10 s | 99% | 0 pp |
+| `waitForMatchState:player_run_over` | not retained | 109 ms / 10 s | 99% | 116 ms / 10 s | 99% | 0 pp |
+| `waitForMatchState:player_x_below` | not retained | 91 ms / 10 s | 99% | 101 ms / 10 s | 99% | 0 pp |
+| `waitForRunResult` | 62% | 6.102 s / 15 s | 59% | 6.199 s / 15 s | 59% | 0 pp |
+| `waitForSnapshot` | 72% | 2.350 s / 8 s | 71% | 2.350 s / 8 s | 71% | 0 pp |
+| `walkToward` | 79% | 6.100 s / 30 s | 80% | 8.045 s / 30 s | 73% | -7 pp |
 
 The 0A floor is **59%**, above the checkpoint's blocking 40% floor. The accepted readiness maximum
 ticks remain recorded as the non-repeating **6.796 ms** observation and its **3.108 ms** repeat. A
@@ -601,6 +626,39 @@ controlled 37-test 0A run with the existing info-level metrics reporter visible 
 **15.5 ms** maximum event-loop lag, **21.7 MB** peak heap, and **72.6 MB** peak RSS across 103
 five-second intervals. Active rooms peaked at four and returned to zero after the final abandoned
 room's 15-second reconnect window.
+
+The 0B floor is **57%**, also above the blocking 40% floor. A separate controlled, info-level
+**37/37** browser run took **660.446 seconds** (**11.0 minutes**) and captured 147 five-second
+observations covering 11,384 simulation ticks: **0.209 ms** tick-weighted average, **2.521 ms**
+maximum tick, **15.7 ms** maximum event-loop lag, **31.5 MB** peak heap, and **93.2 MB** peak RSS.
+Active rooms peaked at four and returned to zero. Because the maximum stayed below 5 ms, the
+execution plan's immediate-repeat rule did not trigger. The historical readiness observations
+remain retained beside it: the non-repeating **6.796 ms** maximum and its **3.108 ms** repeat.
+
+Checkpoint 0B added ten unit cases in `arena.test.ts` without adding a file: wall containment,
+whole-component reachability, exact dimensions, Warden encounter containment, five separately
+named Warden-to-route isolation cases (loot/chips, extraction, Chasers, returning-shot lane, and
+multiplayer), and the complete `MATCH_SEED=76` selection. It also strengthened the existing
+point/wall, point/bounds, and open-lane-clearance assertions. Counts moved from 0A's **36 files /
+478 unit tests, 23 files / 230 integration tests, and 37 browser tests** to **36 files / 488 unit
+tests, 23 files / 230 integration tests, and 37 browser tests**.
+
+The exact `MATCH_SEED=76` selection after the content rewrite is:
+
+| Kind | Selected id and position |
+| --- | --- |
+| Enemies | `enemy-0` at `(1900, 1120)`; `enemy-1` at `(2100, 1240)`; `enemy-2` at `(2300, 1160)` |
+| Ground loot | `farsight_lens` at `(900, 300)`; `warlords_seal` at `(980, 1160)`; `scrap_plating` at `(2320, 1280)` |
+| Wildcard chips | `swift_strikes` at `(1040, 700)`; `split_return` at `(2260, 1100)` |
+| Extraction | `extraction-0` at `(260, 1180)`; `extraction-1` at `(260, 260)` |
+| Boss/core | `warden` at lair `(2060, 500)`; core `split_return_core` |
+
+Measurement deviation retained for reproducibility: the first attempt to expose info-level metrics
+through a manually launched server used PowerShell empty environment assignments. On Windows those
+remove the variables, so the server loaded the developer's `.env`, selected Supabase, and correctly
+refused tokenless browser joins. That invalid attempt recorded zero simulation ticks and is excluded.
+The replacement launcher preserved explicit empty Supabase values, was focused-verified **2/2**, and
+produced the successful full controlled sample above. No secret value was logged or copied here.
 
 The remaining fixed waits are actions or sampling intervals, not silent completion claims:
 `pressKey` has a minimum 50 ms hold plus two rendered frames; party-code typing uses a 40 ms human

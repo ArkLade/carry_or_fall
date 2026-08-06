@@ -1,14 +1,13 @@
 /**
  * Arena content: the map a match is played on (M4.2, `docs/M4_ISSUES.md`).
  *
- * The geometry itself is not new — it is M1's test map as the M4-prep commit
- * tuned it (doubled in both dimensions, two extra interior walls, three
- * enemies), moved out of `apps/client/src/scenes/PlayScene.ts`. It has to move,
- * because the server now owns the map: the authoritative simulation collides
- * against these walls and spawns from these points, and the client draws the
- * same walls. Two ends needing the same geometry means one definition, and a
- * definition consumed by both ends is content (technical plan §7.1 shares
- * definitions, never authority).
+ * The geometry moved out of `apps/client/src/scenes/PlayScene.ts` in M4 because
+ * the server owns the map: the authoritative simulation collides against these
+ * walls and spawns from these points, and the client draws the same walls. Two
+ * ends needing the same geometry means one definition, and a definition
+ * consumed by both ends is content (technical plan §7.1 shares definitions,
+ * never authority). M7A Checkpoint 0B re-authored the initial arena at
+ * 2560 × 1440 behind the fixed 1920 × 1080 logical viewport.
  *
  * Everything here is pure data — no engine rule lives in this file. Values are
  * proposed and balance-deferred, exactly like the weapon, loot, and skill
@@ -79,18 +78,20 @@ export interface ArenaDefinition extends ContentDefinition {
   readonly bossSpawnPoint?: ArenaPoint;
 }
 
-const WIDTH = 1920;
-const HEIGHT = 1080;
+const WIDTH = 2560;
+const HEIGHT = 1440;
 const WALL_THICKNESS = 20;
 
 /**
- * The one arena M4 ships. A bordered room plus three interior walls to approach,
- * slide along, break line of sight on, and bounce `ricochet` projectiles off.
+ * The one arena the game ships. A bordered room plus four interior walls to
+ * approach, slide along, break line of sight on, and bounce `ricochet`
+ * projectiles off. The larger bounds provide separate player, ordinary-route,
+ * and boss regions without turning the map into empty traversal distance.
  *
- * Deliberate constraint carried over from the M4-prep tuning: every interior
- * wall sits inside `y ∈ [300, 780]`, leaving two full-width horizontal lanes
- * clear (above `y = 300` and below `y = 780`). {@link ArenaDefinition.openLaneY}
- * documents why that matters.
+ * Every interior wall sits inside `y ∈ [360, 1060]`, leaving a clear upper band
+ * and a full-width lower lane. A clear column at `x = 880` connects them on the
+ * players' side of the divider. The Warden owns the upper-right pocket; all
+ * ordinary routes remain outside its full leash plus body extent.
  */
 export const testArena: ArenaDefinition = {
   id: "test_arena",
@@ -102,9 +103,10 @@ export const testArena: ArenaDefinition = {
     { x: 0, y: HEIGHT - WALL_THICKNESS, width: WIDTH, height: WALL_THICKNESS }, // bottom
     { x: 0, y: 0, width: WALL_THICKNESS, height: HEIGHT }, // left
     { x: WIDTH - WALL_THICKNESS, y: 0, width: WALL_THICKNESS, height: HEIGHT }, // right
-    { x: WIDTH / 2 - 10, y: 300, width: 20, height: 480 }, // central divider
-    { x: 300, y: 300, width: 300, height: 20 }, // near-side cover
-    { x: 1300, y: 700, width: 300, height: 20 }, // far-side cover
+    { x: 1270, y: 360, width: 20, height: 720 }, // central divider
+    { x: 360, y: 360, width: 420, height: 20 }, // near-side upper cover
+    { x: 360, y: 840, width: 420, height: 20 }, // near-side lower cover
+    { x: 1620, y: 1040, width: 420, height: 20 }, // far-side lower cover
   ],
   // Eight distinct points, all on the players' side of the central divider and
   // clear of the near-side cover wall, in two columns so a full room of eight
@@ -112,52 +114,50 @@ export const testArena: ArenaDefinition = {
   // of the left border and far enough west of the divider that nobody spawns
   // inside geometry.
   playerSpawnPoints: [
-    { x: 420, y: 180 },
-    { x: 560, y: 180 },
-    { x: 420, y: 420 },
-    { x: 560, y: 420 },
-    { x: 420, y: 660 },
-    { x: 560, y: 660 },
-    { x: 420, y: 900 },
-    { x: 560, y: 900 },
+    { x: 480, y: 220 },
+    { x: 660, y: 220 },
+    { x: 480, y: 500 },
+    { x: 660, y: 500 },
+    { x: 480, y: 800 },
+    { x: 660, y: 800 },
+    { x: 480, y: 1180 },
+    { x: 660, y: 1180 },
   ],
-  // All on the far side of the divider from the players: the nearest is roughly
-  // 700 px from the nearest player spawn, which at the chaser's 90 px/s is about
-  // 7 seconds of warning — and the chasers have to path around the divider.
+  // All on the far side of the divider and in the lower half: they give the
+  // player reaction time, converge on the authored lower-lane meeting point,
+  // and stay outside the Warden encounter even before its leash is applied.
   enemySpawnPoints: [
-    { x: 1250, y: 250 },
-    { x: 1400, y: 200 },
-    { x: 1350, y: 820 },
-    { x: 1500, y: 880 },
-    { x: 1650, y: 540 },
+    { x: 1540, y: 1160 },
+    { x: 1740, y: 1220 },
+    { x: 1900, y: 1120 },
+    { x: 2100, y: 1240 },
+    { x: 2300, y: 1160 },
   ],
   enemyCount: 3,
   // Three scattered items plus three kill drops is exactly six, which is exactly
   // the inventory size — so a player who collects everything must start
   // discarding or securing. That pressure is what the six-slot limit exists for.
   groundLootSpawnPoints: [
-    { x: 700, y: 250 },
-    { x: 700, y: 850 },
-    { x: 1700, y: 950 },
+    { x: 900, y: 300 },
+    { x: 980, y: 1160 },
+    { x: 2320, y: 1280 },
   ],
   skillChipSpawnPoints: [
-    { x: 760, y: 540 }, // players' side: straight-line reachable from every spawn
-    { x: 1740, y: 620 }, // far side: reachable only by routing around the divider
+    { x: 1040, y: 700 }, // players' side: reached through the upper clear band
+    { x: 2260, y: 1100 }, // far side: reached safely from the lower open lane
   ],
   extractionCandidatePoints: [
-    { x: 200, y: 200 },
-    { x: 200, y: 880 },
-    { x: 1720, y: 200 },
-    { x: 1720, y: 880 },
+    { x: 260, y: 260 },
+    { x: 260, y: 1180 },
+    { x: 1480, y: 260 },
+    { x: 2320, y: 1180 },
   ],
-  openLaneY: 900,
-  // The upper far quadrant. Every route the browser suite walks is at least a
-  // leash-radius away: the far-side skill chip at (1740, 620) is ~441 px off,
-  // `meetChasers` goes to (1200, 900), `walkToOpenLane` to (700, 900), the
-  // returning-shot test fires from (400, 900), and the extraction test takes the
-  // point nearest spawn at (200, 200). With `warden`'s 420 px leash the boss
-  // cannot reach any of them (`docs/M7_ISSUES.md` §1.8).
-  bossSpawnPoint: { x: 1500, y: 250 },
+  openLaneY: 1200,
+  // The upper-right pocket is the only intentional boss route. The full
+  // 420 px leash plus the Warden's 34 px body remains inside the arena and
+  // clear of the ordinary route network; the nearest ordinary authored point
+  // is more than 600 px away.
+  bossSpawnPoint: { x: 2060, y: 500 },
 } as const;
 
 /** Every arena the game ships. One for now (concept §21.1: "initial map"). */

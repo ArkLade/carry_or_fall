@@ -950,12 +950,12 @@ const TOUCH_DISTANCE_PX = 34;
 /**
  * A column with no wall anywhere along the arena's height, between the player
  * spawn columns and the central divider. Walking straight down from a spawn
- * runs into the near-side cover wall (`x ∈ [300, 600], y ∈ [300, 320]`), and
+ * runs into the near-side cover walls (`x ∈ [360, 780]`), and
  * while the stall-and-sidestep detour below can eventually get around it, a
  * two-leg route through a column that is clear by construction is faster and
  * deterministic. Used by every helper that needs to reach the open lane.
  */
-const CLEAR_COLUMN_X = 700;
+const CLEAR_COLUMN_X = 880;
 
 /**
  * The vertical band the arena's interior walls occupy, derived from the walls
@@ -973,7 +973,7 @@ const INTERIOR_BOTTOM_Y = Math.max(...INTERIOR_WALLS.map((wall) => wall.y + wall
 const WALL_CLEARANCE_PX = 40;
 
 /** The upper wall-free band: above every interior wall, so it runs the arena's full width. */
-const UPPER_LANE_Y = 200;
+const UPPER_LANE_Y = 240;
 
 /** Whether a straight line between two heights stays entirely clear of the interior walls. */
 function sharesOpenBand(fromY: number, toY: number): boolean {
@@ -1036,7 +1036,7 @@ export async function walkToArenaPoint(
  * wall's shadow is untouchable. Walking around to meet them sidesteps that
  * entirely, and is also how a player actually dies.
  */
-const MEET_CHASERS_SPOT = { x: 1200, y: 900 };
+const MEET_CHASERS_SPOT = { x: 1540, y: 1200 };
 
 /**
  * Walk to {@link MEET_CHASERS_SPOT} in three straight legs — east into the clear
