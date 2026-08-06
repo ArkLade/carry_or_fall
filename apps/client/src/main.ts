@@ -15,22 +15,19 @@ import { LoadoutScene } from "./scenes/LoadoutScene";
 import { PlayScene } from "./scenes/PlayScene";
 
 /**
- * Matches `PlayScene`'s map dimensions, so the whole arena is visible at
- * once. Doubled alongside the map for M4 prep. `Scale.FIT` then scales that
- * down to whatever the browser window is, which means a larger map renders
- * everything proportionally smaller rather than cropping it — acceptable
- * while the map is a single fixed-size test arena, and the reason a
- * follow-camera is worth revisiting if the map grows again.
+ * The fixed logical viewport. Arena dimensions are authoritative content and
+ * may be larger; Phaser's main camera selects which part of that world is
+ * visible while `Scale.FIT` maps this viewport onto the browser canvas.
  */
-const GAME_WIDTH = 1920;
-const GAME_HEIGHT = 1080;
+const VIEWPORT_WIDTH = 1920;
+const VIEWPORT_HEIGHT = 1080;
 const BACKGROUND = "#0b0e14";
 
 export const game = new Phaser.Game({
   type: Phaser.AUTO,
   parent: "app",
-  width: GAME_WIDTH,
-  height: GAME_HEIGHT,
+  width: VIEWPORT_WIDTH,
+  height: VIEWPORT_HEIGHT,
   backgroundColor: BACKGROUND,
   scale: {
     mode: Phaser.Scale.FIT,
@@ -49,6 +46,7 @@ installDebugHook({
   getLocalPlayerId: () => playScene()?.getLocalPlayerId() ?? null,
   getPrivateState: () => playScene()?.getPrivateState() ?? null,
   getConnectionStatus: () => playScene()?.getConnectionStatus() ?? "connecting",
+  getCamera: () => playScene()?.getCameraObservation() ?? null,
   // The party lives outside any scene (it has to outlive `PlayScene`), so the
   // hook reads it from the connection directly.
   getParty: () => partyConnection.getParty(),

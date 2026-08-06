@@ -43,9 +43,7 @@ import type {
 } from "@carry-or-fall/protocol";
 import { PLAYER_SPEED } from "@carry-or-fall/simulation-core";
 
-/** Matches `main.ts`'s Phaser game config (and so the arena's dimensions). */
-export const GAME_WIDTH = testArena.width;
-export const GAME_HEIGHT = testArena.height;
+import type { CameraObservation } from "../src/debug/debug-hook";
 
 /** Matches `LoadoutScene.ts`'s `DEFAULT_SKILL_LOADOUT_IDS`. */
 export const DEFAULT_SKILL_LOADOUT_IDS = ["ricochet", "extended_reach", "bulwark_strike"];
@@ -310,6 +308,15 @@ export async function getConnectionStatus(page: Page): Promise<string> {
   return page.evaluate(() => window.__CARRY_OR_FALL_DEBUG__?.getConnectionStatus() ?? "unknown");
 }
 
+/** The rendering-only main-camera state, observed through the dev hook. */
+export async function getCamera(page: Page): Promise<CameraObservation> {
+  const camera = await page.evaluate(() => window.__CARRY_OR_FALL_DEBUG__?.getCamera() ?? null);
+  if (camera === null) {
+    throw new Error("expected PlayScene to have configured its main camera");
+  }
+  return camera;
+}
+
 /** Reads the latest authoritative snapshot. Throws if none has arrived yet. */
 export async function getSnapshot(page: Page): Promise<MatchView> {
   const snapshot = await page.evaluate(() => window.__CARRY_OR_FALL_DEBUG__?.getSnapshot() ?? null);
@@ -495,9 +502,19 @@ export async function waitForMatchRunning(page: Page): Promise<void> {
 }
 
 /** The canvas's on-screen bounding box, for converting a world position to a page click/move position. */
-async function canvasBox(
-  page: Page,
-): Promise<{ x: number; y: number; width: number; height: number }> {
+interface CanvasBox {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+type CameraTransform = Pick<
+  CameraObservation,
+  "scrollX" | "scrollY" | "viewportWidth" | "viewportHeight"
+>;
+
+async function canvasBox(page: Page): Promise<CanvasBox> {
   const box = await page.locator("canvas").boundingBox();
   if (box === null) {
     throw new Error("canvas not found");
@@ -505,51 +522,39 @@ async function canvasBox(
   return box;
 }
 
-/** Convert a world-space position to a page-space position, accounting for Phaser's FIT scaling. */
+/**
+ * Pure world-to-page transform: camera first, then the canvas's DOM offset and FIT scale.
+ * Exported so the browser helper's coordinate contract can be covered without a live page.
+ */
+export function worldToPageCoordinates(
+  worldX: number,
+  worldY: number,
+  camera: CameraTransform,
+  canvas: CanvasBox,
+): { x: number; y: number } {
+  const screenX = worldX - camera.scrollX;
+  const screenY = worldY - camera.scrollY;
+  return {
+    x: canvas.x + screenX * (canvas.width / camera.viewportWidth),
+    y: canvas.y + screenY * (canvas.height / camera.viewportHeight),
+  };
+}
+
+/** Convert a world-space position to page space through the main camera and Phaser FIT canvas. */
 export async function worldToPage(
   page: Page,
   worldX: number,
   worldY: number,
 ): Promise<{ x: number; y: number }> {
+  const camera = await getCamera(page);
   const box = await canvasBox(page);
-  return {
-    x: box.x + worldX * (box.width / GAME_WIDTH),
-    y: box.y + worldY * (box.height / GAME_HEIGHT),
-  };
+  return worldToPageCoordinates(worldX, worldY, camera, box);
 }
 
 /** Move the mouse so the player aims at `worldX`/`worldY` (`input/pointer.ts`'s `aimAngleFrom`). */
 export async function aimAt(page: Page, worldX: number, worldY: number): Promise<void> {
   const point = await worldToPage(page, worldX, worldY);
   await page.mouse.move(point.x, point.y);
-}
-
-/** Hold WASD for `durationMs`, moving the player, then release. */
-export async function moveFor(
-  page: Page,
-  direction: "KeyW" | "KeyA" | "KeyS" | "KeyD",
-  durationMs: number,
-): Promise<void> {
-  await focusPage(page);
-  await page.keyboard.down(direction);
-  await page.waitForTimeout(durationMs);
-  await page.keyboard.up(direction);
-}
-
-/** Hold the left mouse button (melee attack, `input/pointer.ts`) for `durationMs`. */
-export async function meleeAttackFor(page: Page, durationMs: number): Promise<void> {
-  await focusPage(page);
-  await page.mouse.down({ button: "left" });
-  await page.waitForTimeout(durationMs);
-  await page.mouse.up({ button: "left" });
-}
-
-/** Hold the right mouse button (ranged attack, `input/pointer.ts`) for `durationMs`. */
-export async function rangedAttackFor(page: Page, durationMs: number): Promise<void> {
-  await focusPage(page);
-  await page.mouse.down({ button: "right" });
-  await page.waitForTimeout(durationMs);
-  await page.mouse.up({ button: "right" });
 }
 
 /**
