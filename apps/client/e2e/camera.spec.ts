@@ -202,7 +202,25 @@ test.describe("Checkpoint 0C edge camera and aim", () => {
       await page.keyboard.down(edge.moveKey);
       let fired: Awaited<ReturnType<typeof fireAndObserve>>;
       try {
-        await aimAt(page, player.x + edge.aim.x * 300, player.y + edge.aim.y * 300);
+        const aimTarget = {
+          x:
+            edge.aim.x < 0
+              ? camera.scrollX + 1
+              : edge.aim.x > 0
+                ? camera.scrollX + camera.viewportWidth - 1
+                : player.x,
+          y:
+            edge.aim.y < 0
+              ? camera.scrollY + 1
+              : edge.aim.y > 0
+                ? camera.scrollY + camera.viewportHeight - 1
+                : player.y,
+        };
+        await aimAt(page, aimTarget.x, aimTarget.y);
+        // Mouse movement and the right-button press are separate browser events.
+        // Let PlayScene sample the new pointer through its camera-aware update
+        // order before firing, while the inward movement key remains held.
+        await settleRenderFrame(page);
         fired = await fireAndObserve(page);
       } finally {
         await page.keyboard.up(edge.moveKey);

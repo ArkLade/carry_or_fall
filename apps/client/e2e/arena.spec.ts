@@ -280,7 +280,17 @@ test.describe("extraction active-window contract", () => {
           targetX = targetX === 2200 ? 1200 : 2200;
         }
       };
-      const kiting = kiteUntilExtraction();
+      let intentionalKiterCleanup = false;
+      const kiting = kiteUntilExtraction().then(
+        () => ({ error: null, duringIntentionalCleanup: false }),
+        (error: unknown) => ({
+          error:
+            error instanceof Error
+              ? error
+              : new Error("kiting rejected with a non-Error value", { cause: error }),
+          duringIntentionalCleanup: intentionalKiterCleanup,
+        }),
+      );
       let routeMs = 0;
       const measureRouteLeg = async (walk: () => Promise<void>): Promise<void> => {
         const startedAt = Date.now();
@@ -300,15 +310,25 @@ test.describe("extraction active-window contract", () => {
           }),
       );
       const channelStartedAt = Date.now();
+      let channelMs = 0;
       await page.keyboard.down("KeyE");
       try {
         const result = await waitForRunResult(page);
         expect(result.runResult?.outcome).toBe("extracted");
+        channelMs = Date.now() - channelStartedAt;
+        extractionComplete = true;
+        intentionalKiterCleanup = true;
+        await kiter.context().close();
       } finally {
         await page.keyboard.up("KeyE");
-        extractionComplete = true;
       }
-      const channelMs = Date.now() - channelStartedAt;
+      const kitingOutcome = await kiting;
+      if (kitingOutcome.error !== null) {
+        const intentionalTargetClose =
+          kitingOutcome.duringIntentionalCleanup &&
+          kitingOutcome.error.message.includes("Target page, context or browser has been closed");
+        if (!intentionalTargetClose) throw kitingOutcome.error;
+      }
       expect(channelMs).toBeGreaterThanOrEqual(EXTRACTION_CHANNEL_MS);
 
       const totalRequiredMs = routeMs + fightMs + channelMs;
@@ -323,11 +343,6 @@ test.describe("extraction active-window contract", () => {
       expect(activeWindowObservedMs).toBeLessThan(EXTRACTION_POINT_ACTIVE_MS);
       expect(EXTRACTION_POINT_ACTIVE_MS).toBeGreaterThanOrEqual(45_000);
       expect(EXTRACTION_POINT_ACTIVE_MS).toBeLessThanOrEqual(90_000);
-      // Extraction is the contract's terminal state. Stop the isolated kiter
-      // context instead of requiring an already-started waypoint to finish
-      // after the authoritative result exists.
-      await kiter.context().close();
-      await kiting.catch(() => {});
 
       test.info().annotations.push(
         {
