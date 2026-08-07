@@ -18,16 +18,22 @@ import { expect, test, type Browser, type Page } from "@playwright/test";
 import {
   chooseLoadout,
   confirmLoadout,
+  createParty,
+  getCamera,
   getLocalPlayer,
   getLocalPlayerId,
   getPrivateState,
   getSnapshot,
   gotoGame,
   interactFor,
+  joinPartyByCode,
   pickUpAt,
+  pressKey,
   reportMargin,
   waitForMatchState,
   waitForMatchRunning,
+  waitForActiveScene,
+  waitForPartySize,
   waitForRunResult,
   walkToArenaPoint,
   walkToward,
@@ -306,6 +312,68 @@ test.describe("two real browsers play one match (§38 M4 exit criterion 1)", () 
       // And B sees A as out of the match, not still standing there.
       const onB = await waitForMatchState(second, { kind: "player_run_over", id: idA }, 10_000);
       expect(onB.players.find((player) => player.id === idA)?.runOver).toBe(true);
+    } finally {
+      await second.context().close();
+    }
+  });
+});
+
+test.describe("party cameras remain client-local", () => {
+  test("each browser follows its own player instead of the moving party member", async ({
+    page,
+    browser,
+  }) => {
+    const second = await openSecondClient(browser);
+    try {
+      await gotoGame(page);
+      await gotoGame(second);
+      const joinCode = await createParty(page);
+      await joinPartyByCode(second, joinCode);
+      await waitForPartySize(page, 2);
+      await waitForPartySize(second, 2);
+
+      await pressKey(page, "Enter");
+      for (const client of [page, second]) {
+        await client.bringToFront();
+        await waitForActiveScene(client, "play");
+        await waitForMatchRunning(client);
+      }
+
+      const [leaderId, memberId] = await Promise.all([
+        getLocalPlayerId(page),
+        getLocalPlayerId(second),
+      ]);
+      await page.bringToFront();
+      await walkToArenaPoint(page, 880, testArena.openLaneY);
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+      const leaderCamera = await getCamera(page);
+      const leaderView = await getSnapshot(page);
+      const leader = leaderView.players.find((entry) => entry.id === leaderId)!;
+      expect(leaderCamera.scrollY).toBe(360);
+      expect(leader.y - leaderCamera.scrollY).toBeGreaterThanOrEqual(0);
+      expect(leader.y - leaderCamera.scrollY).toBeLessThanOrEqual(leaderCamera.viewportHeight);
+
+      await second.bringToFront();
+      await second.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+      const memberCamera = await getCamera(second);
+      const memberView = await getSnapshot(second);
+      const member = memberView.players.find((entry) => entry.id === memberId)!;
+      const remoteLeader = memberView.players.find((entry) => entry.id === leaderId)!;
+      expect(remoteLeader.y).toBeGreaterThan(1080);
+      expect(member.y).toBeLessThan(540);
+      expect(memberCamera.scrollY).toBe(0);
+      expect(member.y - memberCamera.scrollY).toBeGreaterThanOrEqual(0);
+      expect(member.y - memberCamera.scrollY).toBeLessThanOrEqual(memberCamera.viewportHeight);
     } finally {
       await second.context().close();
     }

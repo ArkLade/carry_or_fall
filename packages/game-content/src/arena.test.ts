@@ -1,17 +1,25 @@
 import { describe, expect, it } from "vitest";
 
-import { createSimulation } from "../../simulation-core/src/simulation";
+import { sweptCircleIntersectsWall } from "../../simulation-core/src/collision";
+import {
+  PROJECTILE_LIFESPAN_MS,
+  PROJECTILE_RADIUS_PX,
+} from "../../simulation-core/src/combat/ranged";
+import {
+  createSimulation,
+  ENEMY_RADIUS,
+  PLAYER_RADIUS,
+} from "../../simulation-core/src/simulation";
 import { ALL_ARENAS, type ArenaDefinition, type ArenaPoint, findArena, testArena } from "./arena";
 import { warden } from "./boss";
 import { chaser } from "./enemies";
+import { basicBow } from "./weapons";
 
 /**
- * Clearance every spawned circular actor needs around a point. Larger than
- * `simulation-core`'s `PLAYER_RADIUS` (16) and `ENEMY_RADIUS` (18), which this
- * package cannot import (the dependency runs the other way), so a point that
- * passes here is safe for either.
+ * Clearance every spawned circular actor needs around a point, derived from
+ * the real simulation radii rather than maintained as a parallel test value.
  */
-const ACTOR_CLEARANCE_PX = 20;
+const ACTOR_CLEARANCE_PX = Math.max(PLAYER_RADIUS, ENEMY_RADIUS);
 
 /** Extraction has the largest authored point radius; this safely covers every smaller point kind. */
 const POINT_CLEARANCE_PX = 40;
@@ -80,6 +88,15 @@ function reachableGridPoints(arena: ArenaDefinition, start: ArenaPoint): Readonl
   return visited;
 }
 
+function requiredPlayerPoints(arena: ArenaDefinition): readonly ArenaPoint[] {
+  return [
+    ...arena.playerSpawnPoints,
+    ...arena.groundLootSpawnPoints,
+    ...arena.skillChipSpawnPoints,
+    ...arena.extractionCandidatePoints,
+  ];
+}
+
 interface RouteSegment {
   readonly from: ArenaPoint;
   readonly to: ArenaPoint;
@@ -91,6 +108,29 @@ function routeTo(point: ArenaPoint): readonly RouteSegment[] {
     { from: { x: CLEAR_COLUMN_X, y: laneY }, to: { x: point.x, y: laneY } },
     { from: { x: point.x, y: laneY }, to: point },
   ];
+}
+
+function routeFromSpawnTo(spawn: ArenaPoint, point: ArenaPoint): readonly RouteSegment[] {
+  const laneY = point.y < testArena.height / 2 ? UPPER_LANE_Y : LOWER_LANE_Y;
+  return [
+    { from: spawn, to: { x: CLEAR_COLUMN_X, y: spawn.y } },
+    { from: { x: CLEAR_COLUMN_X, y: spawn.y }, to: { x: CLEAR_COLUMN_X, y: laneY } },
+    ...routeTo(point),
+  ];
+}
+
+function routeLength(segments: readonly RouteSegment[]): number {
+  return segments.reduce(
+    (total, segment) =>
+      total + Math.hypot(segment.to.x - segment.from.x, segment.to.y - segment.from.y),
+    0,
+  );
+}
+
+function allSpawnRoutes(points: readonly ArenaPoint[]): readonly RouteSegment[] {
+  return testArena.playerSpawnPoints.flatMap((spawn) =>
+    points.flatMap((point) => routeFromSpawnTo(spawn, point)),
+  );
 }
 
 function distanceToSegment(point: ArenaPoint, segment: RouteSegment): number {
@@ -124,17 +164,18 @@ const ROUTE_GROUPS: ReadonlyArray<{
 }> = [
   {
     name: "loot and wildcard-chip routes",
-    segments: [...testArena.groundLootSpawnPoints, ...testArena.skillChipSpawnPoints].flatMap(
-      routeTo,
-    ),
+    segments: allSpawnRoutes([
+      ...testArena.groundLootSpawnPoints,
+      ...testArena.skillChipSpawnPoints,
+    ]),
   },
   {
     name: "extraction routes",
-    segments: testArena.extractionCandidatePoints.flatMap(routeTo),
+    segments: allSpawnRoutes(testArena.extractionCandidatePoints),
   },
   {
     name: "Chaser routes",
-    segments: [...testArena.enemySpawnPoints, MEET_CHASERS_SPOT].flatMap(routeTo),
+    segments: allSpawnRoutes([...testArena.enemySpawnPoints, MEET_CHASERS_SPOT]),
   },
   {
     name: "returning-shot open-lane route",
@@ -232,11 +273,16 @@ describe.each(ALL_ARENAS)("arena $id", (arena) => {
     expect(interiorCrossing).toEqual([]);
   });
 
-  it("keeps every required authored point in one reachable walkable component", () => {
-    const start = arena.playerSpawnPoints[0]!;
-    const reachable = reachableGridPoints(arena, start);
-    for (const point of everySpawnPoint(arena)) {
-      expect(reachable.has(pointKey(point)), `point ${pointKey(point)} is unreachable`).toBe(true);
+  it("keeps every player-required authored point reachable from every player spawn", () => {
+    for (const start of arena.playerSpawnPoints) {
+      const reachable = reachableGridPoints(arena, start);
+      for (const point of requiredPlayerPoints(arena)) {
+        expect(
+          reachable.has(pointKey(point)),
+          `point ${pointKey(point)} is unreachable from spawn ${pointKey(start)} ` +
+            `with the ${String(PLAYER_RADIUS)} px player radius`,
+        ).toBe(true);
+      }
     }
   });
 });
@@ -267,6 +313,65 @@ describe("M7A Checkpoint 0B test arena", () => {
         `route ${pointKey(segment.from)} -> ${pointKey(segment.to)} enters the Warden encounter`,
       ).toBeGreaterThan(requiredClearance);
     }
+  });
+
+  it("keeps the derived returning-shot travel plus 100 px in a collision-free authored lane", () => {
+    const speed = basicBow.projectileSpeed;
+    expect(speed).toBeDefined();
+    if (speed === undefined) return;
+
+    const travelPx = speed * (PROJECTILE_LIFESPAN_MS / 1000);
+    const crossingWalls = testArena.walls
+      .filter(
+        (wall) => testArena.openLaneY >= wall.y && testArena.openLaneY <= wall.y + wall.height,
+      )
+      .sort((left, right) => left.x - right.x);
+    expect(crossingWalls).toHaveLength(2);
+    const leftBorder = crossingWalls[0]!;
+    const rightBorder = crossingWalls[1]!;
+    const laneStartX = leftBorder.x + leftBorder.width;
+    const usableLanePx = rightBorder.x - laneStartX;
+    expect(usableLanePx).toBeGreaterThanOrEqual(travelPx + 100);
+
+    const start = { x: laneStartX + 100, y: testArena.openLaneY };
+    const end = { x: start.x + travelPx, y: start.y };
+    expect(
+      testArena.walls.some((wall) =>
+        sweptCircleIntersectsWall(start, end, PROJECTILE_RADIUS_PX, wall),
+      ),
+    ).toBe(false);
+    expect(end.x + PROJECTILE_RADIUS_PX).toBeLessThan(rightBorder.x);
+  });
+
+  it("identifies the longest canonical spawn-to-active-extraction route", () => {
+    const world = createSimulation({
+      seed: 76,
+      players: [],
+      walls: testArena.walls,
+      enemyDefinition: chaser,
+      enemySpawnPoints: testArena.enemySpawnPoints,
+      enemyCount: testArena.enemyCount,
+      groundLootSpawnPoints: testArena.groundLootSpawnPoints,
+      skillChipSpawnPoints: testArena.skillChipSpawnPoints,
+      extractionCandidatePoints: testArena.extractionCandidatePoints,
+      bossDefinition: warden,
+      bossSpawnPoint: testArena.bossSpawnPoint!,
+    });
+    const candidates = testArena.playerSpawnPoints.flatMap((spawn) =>
+      world.extractionPoints.map((point) => ({
+        spawn,
+        extractionId: point.id,
+        extraction: point.position,
+        distancePx: routeLength(routeFromSpawnTo(spawn, point.position)),
+      })),
+    );
+    const longest = candidates.sort((left, right) => right.distancePx - left.distancePx)[0]!;
+    expect(longest).toEqual({
+      spawn: { x: 480, y: 220 },
+      extractionId: "extraction-0",
+      extraction: { x: 260, y: 1180 },
+      distancePx: 2020,
+    });
   });
 
   it("pins the complete MATCH_SEED=76 content selection", () => {

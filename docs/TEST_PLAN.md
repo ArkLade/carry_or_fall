@@ -30,8 +30,8 @@ Fast, dependency-free tests of pure logic in `packages/*`. Glob: `packages/*/src
 effect caps, inventory movement, secure slot, point conversion, extraction calculation, reward
 payload generation, duplicate-unlock conversion, cooldown validation.
 
-**Exists today (36 files, 488 tests)**, covering the simulation and content rules shipped through
-M7 plus M7A Checkpoint 0B's arena contracts, including wire validators, multiplayer, parties,
+**Exists today (36 files, 490 tests)**, covering the simulation and content rules shipped through
+M7 plus M7A Phase 0's arena contracts, including wire validators, multiplayer, parties,
 persistence contracts, and the boss/core loop. The ones worth naming here because they guard an
 authority invariant:
 
@@ -47,8 +47,9 @@ authority invariant:
   independently, the chaser retargeting, the §13.4 active-projectile cap holding **per owner**, join
   and leave, and determinism from a seed plus a per-tick input script.
 - `packages/game-content/src/arena.test.ts` — no spawn point sits inside a wall or outside the
-  arena, there are at least eight distinct player spawns for a full room, and the open lane is
-  genuinely open.
+  arena, every player-required authored point is reachable from every player spawn at the shipped
+  player radius, the returning-shot lane carries the derived maximum travel without collision, and
+  the Warden's full leash/body extent stays isolated from every ordinary route group.
 
 ### 2.2 Room integration tests (Vitest) — `pnpm test:integration`
 
@@ -72,7 +73,11 @@ tests. Checkpoint 0A added five cases to `apps/client/test/e2e-helpers.test.ts` 
 test: camera scroll plus FIT conversion, authoritative-coordinate immutability, and one absent-export
 case for each of `moveFor`, `meleeAttackFor`, and `rangedAttackFor`. The 0A gate took **223.4
 seconds**. Checkpoint 0B changed no integration test or count; its complete gate passed the same
-**23 files / 230 tests** in **234.8 seconds** of command wall time.
+**23 files / 230 tests** in **234.8 seconds** of command wall time. Checkpoint 0C likewise changed
+no integration test or count; its final isolated repeat passed **23 files / 230 tests** in **232.81
+seconds** of Vitest duration and **233.861 seconds** of command wall time. The representative-fight
+correction's final repeat kept the same count and passed in **237.62 seconds** of Vitest duration and
+**239.080 seconds** of command wall time.
 
 The previous 22-file/222-test readiness measurement took 224.21 seconds:
 
@@ -151,7 +156,7 @@ plan §30.3 requires this layer eventually, and §38 M4 requires "two real brows
 already presuppose the capability, so building it now rather than at M5 is bringing forward
 required infrastructure, not scope creep.
 
-**What exists today:** `apps/client/playwright.config.ts` and 37 tests across seven specs:
+**What exists today:** `apps/client/playwright.config.ts` and 45 tests across seven specs:
 `arena.spec.ts`, `boss.spec.ts`, `camera.spec.ts`, `loadout.spec.ts`, `multiplayer.spec.ts`,
 `party.spec.ts`, and `skills.spec.ts`. They run via `pnpm run test:e2e` and drive a real Chromium
 instance against
@@ -221,7 +226,7 @@ violation is named immediately instead of being paid for in timeouts.
 Two of those variables are about time rather than reachability. `MATCH_SEED` pins spawn placement so
 a test that walks to "the first extraction point" gets the same one every run (technical plan §9.4
 asks for reproducible seeded tests). `MATCH_LOBBY_MS` shortens the pre-match countdown from eight
-seconds to one: the countdown exists so a human can join a friend's match (concept §22.2), and a
+seconds to five: the countdown exists so a human can join a friend's match (concept §22.2), and a
 suite that drives both clients itself is only watching a timer. Both are **server** configuration,
 read from the environment exactly like `PORT`; `apps/client/test/build.test.ts` asserts neither
 appears in the client production bundle, because a client able to set its own countdown or seed would
@@ -235,7 +240,7 @@ headless-rendering quirks) than the six fast, deterministic gates; keeping them 
 slow or flaky browser run never blocks or slows the fast feedback loop those six gates provide.
 
 **A broken browser suite must fail cheaply.** Three settings enforce that, because a systematic
-breakage fails every test identically and there is nothing to learn from watching it happen 35
+breakage fails every test identically and there is nothing to learn from watching it happen 45
 times:
 
 - `maxFailures: 3` in CI stops the run after a handful of failures.
@@ -370,7 +375,7 @@ was standing still in front of it.
 
 ### 2.3.1 Session durability
 
-The browser suite runs 35 tests against **one** server process and abandons every match by
+The browser suite runs 45 tests against **one** server process and abandons every match by
 closing a browser rather than leaving politely, which makes it a small soak test whether or not it
 was meant to be one. `apps/server/test/match-lifecycle.test.ts` covers that shape directly: it
 creates and abandons matches in sequence and asserts rooms are disposed and step timing stays flat.
@@ -588,8 +593,8 @@ The accepted 0B file set is exactly `apps/client/e2e/boss.spec.ts`,
 
 The baseline column records only the exact accepted stabilization values retained in the repository;
 other labels are marked `not retained` rather than reconstructed from a more favorable or earlier
-run. 0A and 0B each report the worst observed tuple for every label; no label disappeared or was
-added.
+run. 0A, 0B, and 0C each report the worst observed tuple for every label. The 0C-only
+`extractionActiveWindow` label is marked absent in earlier checkpoints rather than reconstructed.
 
 Both checkpoint margin captures used the non-CI 30-second `MATCH_START_TIMEOUT_MS` default, as the
 30-second `matchRunning` budgets in both columns demonstrate. `activeScene:play` is emitted by
@@ -597,27 +602,30 @@ several call sites under one label: the party specs pass an explicit 60-second b
 scene transitions use the 30-second local default. The 0A worst-ratio observation came from a party
 wait, while the 0B worst-ratio observation came from an ordinary transition. The actual used-time
 and budget tuples are retained below, but their rounded margin movement is not directly comparable.
+The 0C capture used the same non-CI 30-second default and records the actual winning budget when a
+label has several call sites.
 
-| Budget | Readiness margin | 0A used / budget | 0A margin | 0B used / budget | 0B margin | 0A → 0B |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `activeScene:loadout` | 98% | 205 ms / 30 s | 99% | 242 ms / 30 s | 99% | 0 pp |
-| `activeScene:play` | 100% | 155 ms / 60 s | 100% | 134 ms / 30 s | 100% | not comparable |
-| `attackChaserUntil` | 93% | 2.417 s / 45 s | 95% | 4.135 s / 45 s | 91% | -4 pp |
-| `bossSortie` | not retained | 17 ms / 2 s | 99% | 53 ms / 2 s | 97% | -2 pp |
-| `dieToChasers` | 78% | 14.482 s / 60 s | 76% | 17.643 s / 60 s | 71% | -5 pp |
-| `extractionIdleWindow` | 63% | 7.906 s / 20 s | 60% | 8.571 s / 20 s | **57%** | -3 pp |
-| `matchRunning` | 80% | 6.116 s / 30 s | 80% | 6.030 s / 30 s | 80% | 0 pp |
-| `partyCreated` | not retained | 161 ms / 30 s | 99% | 180 ms / 30 s | 99% | 0 pp |
-| `partyJoined` | not retained | 165 ms / 30 s | 99% | 200 ms / 30 s | 99% | 0 pp |
-| `partyMemberMarkers` | not retained | 131 ms / 30 s | 100% | 160 ms / 30 s | 99% | -1 pp |
-| `partySize` | not retained | 143 ms / 60 s | 100% | 182 ms / 60 s | 100% | 0 pp |
-| `pickUpAt` | not retained | 180 ms / 25 s | 99% | 260 ms / 25 s | 99% | 0 pp |
-| `waitForMatchState:ground_loot_missing` | not retained | 95 ms / 10 s | 99% | 95 ms / 10 s | 99% | 0 pp |
-| `waitForMatchState:player_run_over` | not retained | 109 ms / 10 s | 99% | 116 ms / 10 s | 99% | 0 pp |
-| `waitForMatchState:player_x_below` | not retained | 91 ms / 10 s | 99% | 101 ms / 10 s | 99% | 0 pp |
-| `waitForRunResult` | 62% | 6.102 s / 15 s | 59% | 6.199 s / 15 s | 59% | 0 pp |
-| `waitForSnapshot` | 72% | 2.350 s / 8 s | 71% | 2.350 s / 8 s | 71% | 0 pp |
-| `walkToward` | 79% | 6.100 s / 30 s | 80% | 8.045 s / 30 s | 73% | -7 pp |
+| Budget | Readiness margin | 0A used / budget (margin) | 0B used / budget (margin) | 0C used / budget (margin) |
+| --- | ---: | ---: | ---: | ---: |
+| `activeScene:loadout` | 98% | 205 ms / 30 s (99%) | 242 ms / 30 s (99%) | 237 ms / 30 s (99%) |
+| `activeScene:play` | 100% | 155 ms / 60 s (100%) | 134 ms / 30 s (100%) | 127 ms / 30 s (100%) |
+| `attackChaserUntil` | 93% | 2.417 s / 45 s (95%) | 4.135 s / 45 s (91%) | 5.857 s / 45 s (87%) |
+| `bossSortie` | not retained | 17 ms / 2 s (99%) | 53 ms / 2 s (97%) | 50 ms / 2 s (98%) |
+| `dieToChasers` | 78% | 14.482 s / 60 s (76%) | 17.643 s / 60 s (71%) | 17.675 s / 60 s (71%) |
+| `extractionActiveWindow` | not present | not present | not present | 34.802 s / 75 s (**54%**) |
+| `extractionIdleWindow` | 63% | 7.906 s / 20 s (60%) | 8.571 s / 20 s (57%) | 8.469 s / 20 s (58%) |
+| `matchRunning` | 80% | 6.116 s / 30 s (80%) | 6.030 s / 30 s (80%) | 6.086 s / 30 s (80%) |
+| `partyCreated` | not retained | 161 ms / 30 s (99%) | 180 ms / 30 s (99%) | 183 ms / 30 s (99%) |
+| `partyJoined` | not retained | 165 ms / 30 s (99%) | 200 ms / 30 s (99%) | 183 ms / 30 s (99%) |
+| `partyMemberMarkers` | not retained | 131 ms / 30 s (100%) | 160 ms / 30 s (99%) | 156 ms / 30 s (99%) |
+| `partySize` | not retained | 143 ms / 60 s (100%) | 182 ms / 60 s (100%) | 111 ms / 30 s (100%) |
+| `pickUpAt` | not retained | 180 ms / 25 s (99%) | 260 ms / 25 s (99%) | 284 ms / 25 s (99%) |
+| `waitForMatchState:ground_loot_missing` | not retained | 95 ms / 10 s (99%) | 95 ms / 10 s (99%) | 110 ms / 10 s (99%) |
+| `waitForMatchState:player_run_over` | not retained | 109 ms / 10 s (99%) | 116 ms / 10 s (99%) | 128 ms / 10 s (99%) |
+| `waitForMatchState:player_x_below` | not retained | 91 ms / 10 s (99%) | 101 ms / 10 s (99%) | 99 ms / 10 s (99%) |
+| `waitForRunResult` | 62% | 6.102 s / 15 s (59%) | 6.199 s / 15 s (59%) | 6.228 s / 15 s (58%) |
+| `waitForSnapshot` | 72% | 2.350 s / 8 s (71%) | 2.350 s / 8 s (71%) | 2.457 s / 8 s (69%) |
+| `walkToward` | 79% | 6.100 s / 30 s (80%) | 8.045 s / 30 s (73%) | 9.785 s / 30 s (67%) |
 
 The 0A floor is **59%**, above the checkpoint's blocking 40% floor. The accepted readiness maximum
 ticks remain recorded as the non-repeating **6.796 ms** observation and its **3.108 ms** repeat. A
@@ -653,6 +661,115 @@ The exact `MATCH_SEED=76` selection after the content rewrite is:
 | Extraction | `extraction-0` at `(260, 1180)`; `extraction-1` at `(260, 260)` |
 | Boss/core | `warden` at lair `(2060, 500)`; core `split_return_core` |
 
+**M7A Checkpoint 0C and Phase 0 accepted (disturbed-contract audit).** After tightening the
+representative-fight contract, the final normal browser suite passed **45/45** in **882.931
+seconds**, and the final margin suite passed **45/45** in **866.099 seconds**. The worst retained 0C
+tuple per label is shown above; its floor is **54%**, above the blocking 40% floor. The earlier
+**721.000-second** controlled-metrics suite remains the accepted performance capture described
+below. Checkpoint 0C and Phase 0 are accepted. Phase 1 has not begun, and this does not mark M7A
+complete.
+
+Counts moved from 0B's **36 files / 488 unit tests, 23 files / 230 integration tests, and 37
+browser tests** to **36 files / 490 unit tests, 23 files / 230 integration tests, and 45 browser
+tests**. The two unit additions are `arena.test.ts`'s derived returning-shot travel/collision case
+and longest canonical active-extraction route case. Existing all-point reachability and five Warden
+route-isolation cases were strengthened rather than duplicated. The eight browser additions are:
+
+- `arena.spec.ts`: one complete extraction active-window scenario;
+- `camera.spec.ts`: north, south, east, and west edge/aim cases plus one fixed-HUD case;
+- `multiplayer.spec.ts`: one independent-party-camera case;
+- `skills.spec.ts`: one farthest seed-selected item route.
+
+The exact 0C changed-file set is `packages/game-content/src/arena.test.ts`,
+`apps/client/e2e/arena.spec.ts`, `apps/client/e2e/camera.spec.ts`,
+`apps/client/e2e/multiplayer.spec.ts`, `apps/client/e2e/skills.spec.ts`, and
+`docs/TEST_PLAN.md`. The permitted `apps/client/e2e/boss.spec.ts` did not need a change; its existing
+intentional sortie and ordinary-route cases were re-run. No arena/version content, helper,
+production client, camera implementation, server, protocol, simulation, configuration, dependency,
+or timeout changed.
+
+The disturbed contracts are evidenced as follows:
+
+- **Returning shot:** shipped `basic_bow` speed **600 px/s** times the shipped **2.000 s** projectile
+  lifetime derives **1200 px** maximum outgoing travel. The open lane has **2520 px** between its
+  authored border interiors, exceeding travel plus 100 px; the browser fires from the derived
+  west-side clearance with **2420 px** remaining, observes the real projectile survive to expiry and
+  reverse, and the unit case applies the shipped projectile radius to prove no swept wall collision.
+- **Reachability:** every player spawn, ground-loot candidate, wildcard-chip candidate, and
+  extraction candidate remains more than the authored 40 px point clearance inside bounds and
+  outside walls. A bounded flood using the shipped **16 px player radius** reaches every required
+  point from each of all eight player spawns; route-clearance checks use the real player/enemy radii.
+- **Seed 76:** the exact selection remains the table above. The browser computes the farthest item
+  from the actual first spawn across the selected loot and chips, identifies `scrap_plating` at
+  `(2320, 1280)`, walks there through camera-aware world-to-page helpers, and arrives alive. It does
+  not substitute the last authored candidate.
+- **Extraction:** the longest canonical active route is **2020 px**, from first spawn `(480, 220)`
+  through the clear column/open lane to `extraction-0` `(260, 1180)`. The representative fight is
+  now literal and separately measured: in an ordinary solo match, a player kites and fires the
+  shipped basic bow with `homing_arrows` until the authoritative enemy collection drops from three
+  Chasers to two. No fabricated health or direct mutation participates. A fresh two-player match
+  then measures the route and shipped five-second channel while the second player uses ordinary
+  authoritative movement to keep the Chasers away. The three consecutive focused repeats were:
+
+  | Repeat | Route | One-Chaser defeat | Channel | Arithmetic total |
+  | --- | ---: | ---: | ---: | ---: |
+  | 1 | 14.275 s | 15.689 s | 6.387 s | **36.351 s** |
+  | 2 | 13.767 s | 15.866 s | 6.464 s | **36.097 s** |
+  | 3 | 14.762 s | 15.695 s | 6.404 s | **36.861 s** |
+
+  The final full margin suite measured the arithmetic sum at **34.802 / 75 seconds** (**54%**
+  margin). The assertion adds the measured route, fight, and channel durations; it does not reduce
+  the total by overlapping combat with travel. The fresh extraction match also finished in 31.400,
+  30.947, and 31.912 seconds in the focused repeats, independently proving the product point stayed
+  active through extraction. The unchanged 75 seconds remains inside the concept's approved
+  **45-90 second** range. No wait, timeout, arena coordinate, or gameplay value changed.
+- **Warden isolation:** every loot/chip, extraction, Chaser, returning-shot/open-lane, and
+  multiplayer route from every relevant spawn remains farther from the lair than the **420 px leash
+  + 34 px Warden body + actor clearance**. The separate intentional sortie retained its named
+  two-second health budget and used **17 ms** in the final full audit (99% margin); the browser also
+  re-proved the Warden stays asleep on the ordinary route and never crosses its leash when visited.
+- **Camera/viewport:** four fresh-match cases move to each cardinal edge, assert scroll clamps
+  `(0..640, 0..360)`, keep the local player within the fixed **1920 x 1080** viewport, and land a
+  correctly directed real shot while movement input is active. The east route reaches world
+  positions outside the initial viewport without entering the Warden encounter. A browser-level
+  display-list observation proves all five `CombatHud` and eight `InventoryHud` objects retain
+  `scrollFactor(0)` and identical viewport positions while the world scrolls; its screenshot is
+  written through `testInfo.outputPath` under repository-root `.playwright-test-results`, and the
+  player id/scene remain unchanged. A two-browser party case moves only the leader south: its camera
+  clamps at 360 while the stationary member's remains at zero despite seeing the remote leader,
+  proving cameras follow each client's own interpolated local player. The existing no-input camera
+  case still proves camera motion changes no authoritative coordinate, and the dominant-axis walker
+  unit coverage remains in place.
+
+The complete route inventory was re-run by the 45-test suite: nearest extraction/channel, far
+selected chip/item walks, Chaser meeting/fight, returning-shot lane, intentional Warden sortie,
+two-client contested loot, party creation/joins, death/restart, and loadout/skill walks. Reporter-
+invisible waits were not introduced. Remaining fixed durations are inputs or bounded sampling
+intervals already listed below; the new cross-page handoffs wait for two rendered frames and the
+server-authoritative result, never a guessed wall-clock completion.
+
+The controlled final run retained **148** five-second samples covering **14,658** simulation ticks:
+**0.178 ms** tick-weighted average, **2.389 ms** maximum tick, **15.7 ms** maximum event-loop lag,
+**28.4 MB** peak heap, and **89.3 MB** peak RSS. Active rooms peaked at **4** and returned to **0**
+after the reconnect-disposal window. The maximum stayed below 5 ms, so no immediate comparable
+repeat was required. Historical maxima remain preserved: readiness **6.796 ms** non-repeating and
+**3.108 ms** repeat, accepted 0A **1.770 ms**, accepted 0B **2.521 ms**.
+
+Discarded 0C measurement trials are retained as test-design deviations, not accepted evidence. The
+first accepted draft treated one landed bow hit concurrent with route travel as its representative
+fight; the correction rejects that interpretation. A solo melee defeat attempt died to the full
+pack, and two same-match bow-defeat constructions allowed the surviving Chasers to retarget and kill
+the extractor (including one 44/45 full suite and one focused failure after two passes). One later
+fresh-match run extracted successfully but then required the kiter to finish an irrelevant waypoint;
+the kiter died during that post-result cleanup, so the final test closes its isolated context as soon
+as the authoritative extraction result exists. The final construction measures an authoritative
+one-Chaser defeat in its own ordinary match and adds that duration to a fresh match's route and
+channel durations. Separately, the first controlled
+metrics reducer checked a nonexistent `message` field instead of the logger's shipped `msg` field
+and therefore retained no samples; the final 148-sample run used the correct field. No failed trial
+changed content, gameplay, timeout, retry, or accepted evidence. All accepted browser and integration
+runs used the same machine and power state with no visible competing repository work.
+
 Measurement deviation retained for reproducibility: the first attempt to expose info-level metrics
 through a manually launched server used PowerShell empty environment assignments. On Windows those
 remove the variables, so the server loaded the developer's `.env`, selected Supabase, and correctly
@@ -667,7 +784,7 @@ keystroke delay; the negative multiplayer interaction holds E for 400 ms plus fr
 animation/retreat samples are inside their reported outer budgets; and `bossSortie`'s 25 ms sample
 interval is inside its reported two-second budget. Checkpoint 0A removed the unused fixed-duration
 `moveFor`, `meleeAttackFor`, and `rangedAttackFor` exports rather than retaining a completion model
-with no callers. Per-test `test.setTimeout` values are outer hang guards; the 37 Playwright durations report
+with no callers. Per-test `test.setTimeout` values are outer hang guards; the 45 Playwright durations report
 their use directly, and no test approached its guard in this run. `bossSortie` can finish in about
 50 ms because `walkToArenaPoint`'s own final approach already spends about a second inside the aggro
 radius, so the boss has usually left its lair before the window opens; the 2000 ms budget is sized

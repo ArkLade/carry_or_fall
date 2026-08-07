@@ -141,12 +141,33 @@ test.describe("each skill applies alone (M3.3, §38 M3 exit criterion 1)", () =>
     const enemyStart = nearestEnemy(snapshot, player)!;
 
     await walkToArenaPoint(page, enemyStart.x, enemyStart.y, 25_000);
-    const stunned = await attackChaserUntil(
+    // `stunnedMs` is an 800 ms authoritative state. Retain the exact matching
+    // snapshot in the renderer so a loaded host cannot miss the whole state
+    // between two CDP reads while the normal combat loop keeps attacking.
+    let observedStunned = false;
+    const stunObservation = page
+      .waitForFunction(
+        () => {
+          const view = window.__CARRY_OR_FALL_DEBUG__?.getSnapshot() ?? null;
+          return view?.enemies.some((enemy) => enemy.stunnedMs > 0) === true ? view : null;
+        },
+        undefined,
+        { polling: 25, timeout: 45_000 },
+      )
+      .then(async (handle) => {
+        const view = await handle.jsonValue();
+        await handle.dispose();
+        observedStunned = true;
+        return view;
+      });
+    const combat = attackChaserUntil(
       page,
-      (view) => view.enemies.some((enemy) => enemy.stunnedMs > 0),
+      (view) => observedStunned || view.enemies.some((enemy) => enemy.stunnedMs > 0),
       45_000,
     );
-    expect(stunned.enemies.some((enemy) => enemy.stunnedMs > 0)).toBe(true);
+    const [stunned] = await Promise.all([stunObservation, combat]);
+    expect(stunned).not.toBeNull();
+    expect(stunned!.enemies.some((enemy) => enemy.stunnedMs > 0)).toBe(true);
   });
 
   test("bulwark_strike grants shield on a landed melee hit against the real chaser", async ({
@@ -192,6 +213,49 @@ test.describe("three-skill combinations apply together (M3.3)", () => {
 });
 
 test.describe("wildcard skill chip (M3.7)", () => {
+  test("the browser reaches the farthest item actually selected by MATCH_SEED=76", async ({
+    page,
+  }) => {
+    await gotoGame(page);
+    await startRunWithLoadout(page, []);
+    const player = await getLocalPlayer(page);
+    const snapshot = await getSnapshot(page);
+    expect(snapshot.seed).toBe(76);
+
+    const selectedItems = [
+      ...snapshot.groundLoot.map((loot) => ({
+        kind: "ground_loot" as const,
+        id: loot.id,
+        contentId: loot.lootId,
+        x: loot.x,
+        y: loot.y,
+      })),
+      ...snapshot.skillChips.map((chip) => ({
+        kind: "skill_chip" as const,
+        id: chip.id,
+        contentId: chip.skillId,
+        x: chip.x,
+        y: chip.y,
+      })),
+    ];
+    const farthest = selectedItems.sort(
+      (left, right) =>
+        Math.hypot(right.x - player.x, right.y - player.y) -
+        Math.hypot(left.x - player.x, left.y - player.y),
+    )[0]!;
+    expect(farthest).toMatchObject({
+      kind: "ground_loot",
+      contentId: "scrap_plating",
+      x: 2320,
+      y: 1280,
+    });
+
+    await walkToArenaPoint(page, farthest.x, farthest.y);
+    const arrived = await getLocalPlayer(page);
+    expect(arrived.alive).toBe(true);
+    expect(Math.hypot(arrived.x - farthest.x, arrived.y - farthest.y)).toBeLessThan(30);
+  });
+
   test("picking up a chip sets the wildcard slot", async ({ page }) => {
     test.setTimeout(90_000);
     await gotoGame(page);
