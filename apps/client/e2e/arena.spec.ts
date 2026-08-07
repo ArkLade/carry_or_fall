@@ -8,12 +8,19 @@
  * values that `packages/*` unit tests already cover.
  */
 import { basicBow, basicSword, chaser, testArena } from "@carry-or-fall/game-content";
-import { PROJECTILE_LIFESPAN_MS } from "@carry-or-fall/simulation-core";
+import {
+  EXTRACTION_CHANNEL_MS,
+  EXTRACTION_POINT_ACTIVE_MS,
+  PLAYER_SPEED,
+  PROJECTILE_LIFESPAN_MS,
+} from "@carry-or-fall/simulation-core";
 import { expect, test } from "@playwright/test";
 
 import {
   aimAt,
   attackChaserUntil,
+  chooseLoadout,
+  confirmLoadout,
   dieToChasers,
   getActiveSceneKey,
   getLocalPlayer,
@@ -23,9 +30,11 @@ import {
   meetChasers,
   pressKey,
   fireAndObserve,
+  reportMargin,
   startRunWithLoadout,
   waitForActiveScene,
   waitForMatchRunning,
+  waitForRunResult,
   waitForSnapshot,
   walkToOpenLane,
   walkToward,
@@ -99,7 +108,12 @@ const PROJECTILE_TRAVEL_PX = (PROJECTILE_LIFESPAN_MS / 1000) * (basicBow.project
  * wall a few pixels before its lifespan ends, and a projectile stopped by a wall
  * never returns.
  */
-const FIRING_X = 400;
+const OPEN_LANE_BORDERS = testArena.walls
+  .filter((wall) => testArena.openLaneY >= wall.y && testArena.openLaneY <= wall.y + wall.height)
+  .sort((left, right) => left.x - right.x);
+const OPEN_LANE_LEFT_X = OPEN_LANE_BORDERS[0]!.x + OPEN_LANE_BORDERS[0]!.width;
+const OPEN_LANE_RIGHT_X = OPEN_LANE_BORDERS[1]!.x;
+const FIRING_X = OPEN_LANE_LEFT_X + 100;
 
 test.describe("returning_shot is reachable on this arena", () => {
   test("a shot fired along the open lane survives its lifespan and reverses", async ({ page }) => {
@@ -110,7 +124,8 @@ test.describe("returning_shot is reachable on this arena", () => {
     // The arena has to be long enough for the shot to expire in open space; a
     // shorter map makes this behavior unobservable entirely, which is why
     // `ArenaDefinition.openLaneY` exists at all.
-    expect(testArena.width - FIRING_X).toBeGreaterThan(PROJECTILE_TRAVEL_PX + 100);
+    expect(OPEN_LANE_BORDERS).toHaveLength(2);
+    expect(OPEN_LANE_RIGHT_X - FIRING_X).toBeGreaterThanOrEqual(PROJECTILE_TRAVEL_PX + 100);
 
     await walkToOpenLane(page);
     await walkToward(page, FIRING_X, testArena.openLaneY, 30_000);
@@ -132,6 +147,214 @@ test.describe("returning_shot is reachable on this arena", () => {
     expect(reversed.returnsSoFar).toBe(1);
     expect(reversed.velocityX).toBeLessThan(0); // reversed back toward the shooter
     expect(basicBow.projectileSpeed).toBeGreaterThan(0);
+  });
+});
+
+test.describe("extraction active-window contract", () => {
+  test("the longest active route, a Chaser fight, and the channel fit inside 75 seconds", async ({
+    page,
+    browser,
+  }) => {
+    const fightPage = await browser.newPage();
+    const kiter = await browser.newPage();
+    let fightMoveKey: "KeyD" | "KeyA" | null = null;
+    const steerFightPage = async (next: "KeyD" | "KeyA"): Promise<void> => {
+      await fightPage.bringToFront();
+      if (fightMoveKey !== null) await fightPage.keyboard.up(fightMoveKey);
+      await fightPage.keyboard.down(next);
+      fightMoveKey = next;
+      await fightPage.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+    };
+    try {
+      // Measure a complete representative fight in its own ordinary match.
+      // Separating it from the extraction match prevents concurrency from
+      // making combat time disappear from the route + fight + channel sum.
+      await gotoGame(fightPage);
+      await startRunWithLoadout(fightPage, ["homing_arrows"]);
+      await walkToOpenLane(fightPage);
+      await walkToward(fightPage, 1200, testArena.openLaneY);
+      const beforeFight = await getSnapshot(fightPage);
+      const initialEnemyIds = new Set(beforeFight.enemies.map((enemy) => enemy.id));
+      await steerFightPage("KeyA");
+      const fightStartedAt = Date.now();
+      let afterFight = beforeFight;
+      const maximumShotAttempts = Math.ceil(chaser.health / basicBow.damage) * 2;
+      for (
+        let shotAttempt = 0;
+        shotAttempt < maximumShotAttempts &&
+        afterFight.enemies.length === beforeFight.enemies.length;
+        shotAttempt += 1
+      ) {
+        if (shotAttempt > 0 && shotAttempt % 3 === 0) {
+          await steerFightPage(shotAttempt % 6 === 0 ? "KeyA" : "KeyD");
+        }
+
+        const fighterPlayer = await getLocalPlayer(fightPage);
+        expect(fighterPlayer.alive).toBe(true);
+        const target = [...afterFight.enemies].sort(
+          (left, right) =>
+            Math.hypot(left.x - fighterPlayer.x, left.y - fighterPlayer.y) -
+            Math.hypot(right.x - fighterPlayer.x, right.y - fighterPlayer.y),
+        )[0]!;
+        const totalHealthBefore = afterFight.enemies.reduce(
+          (total, enemy) => total + enemy.health,
+          0,
+        );
+        await aimAt(fightPage, target.x, target.y);
+        const fired = await fireAndObserve(fightPage);
+        const firedProjectileIds = new Set(
+          fired.projectiles
+            .filter(
+              (projectile) =>
+                projectile.ownerId === fighterPlayer.id && projectile.homingStrength > 0,
+            )
+            .map((projectile) => projectile.id),
+        );
+        expect(firedProjectileIds.size).toBeGreaterThan(0);
+        afterFight = await waitForSnapshot(
+          fightPage,
+          (view) =>
+            view.enemies.length < beforeFight.enemies.length ||
+            view.enemies.reduce((total, enemy) => total + enemy.health, 0) < totalHealthBefore ||
+            [...firedProjectileIds].every(
+              (id) => !view.projectiles.some((projectile) => projectile.id === id),
+            ),
+          8000,
+          25,
+        );
+      }
+      const fightMs = Date.now() - fightStartedAt;
+      const defeatedEnemyIds = [...initialEnemyIds].filter(
+        (id) => !afterFight.enemies.some((enemy) => enemy.id === id),
+      );
+      expect(defeatedEnemyIds).toHaveLength(1);
+      expect(afterFight.enemies).toHaveLength(beforeFight.enemies.length - 1);
+      if (fightMoveKey !== null) {
+        await fightPage.keyboard.up(fightMoveKey);
+        fightMoveKey = null;
+      }
+      await fightPage.context().close();
+
+      // Use a fresh two-player match for the route and channel. The second
+      // player remains a full-health target for the ordinary Chasers while the
+      // first walks the exact longest canonical route.
+      await gotoGame(page);
+      await gotoGame(kiter);
+      await chooseLoadout(page, []);
+      await chooseLoadout(kiter, []);
+      await confirmLoadout(page);
+      await confirmLoadout(kiter);
+      await Promise.all([waitForMatchRunning(page), waitForMatchRunning(kiter)]);
+
+      const activeWindowObservedAt = Date.now();
+      const spawn = await getLocalPlayer(page);
+      const kiterSpawn = await getLocalPlayer(kiter);
+      expect({ x: spawn.x, y: spawn.y }).toEqual({ x: 480, y: 220 });
+      expect({ x: kiterSpawn.x, y: kiterSpawn.y }).toEqual({ x: 660, y: 220 });
+      const extraction = (await getSnapshot(page)).extractionPoints.find(
+        (point) => point.id === "extraction-0",
+      );
+      expect(extraction).toMatchObject({ x: 260, y: 1180 });
+      if (extraction === undefined) return;
+      const canonicalRoutePx =
+        Math.abs(880 - spawn.x) +
+        Math.abs(testArena.openLaneY - spawn.y) +
+        Math.abs(extraction.x - 880) +
+        Math.abs(extraction.y - testArena.openLaneY);
+      expect(canonicalRoutePx).toBe(2020);
+      expect(canonicalRoutePx / PLAYER_SPEED).toBeLessThan(EXTRACTION_POINT_ACTIVE_MS / 1000);
+
+      await kiter.bringToFront();
+      await walkToOpenLane(kiter);
+      await walkToward(kiter, 1200, testArena.openLaneY);
+      let extractionComplete = false;
+      const kiteUntilExtraction = async (): Promise<void> => {
+        let targetX = 2200;
+        while (!extractionComplete) {
+          await walkToward(kiter, targetX, testArena.openLaneY);
+          targetX = targetX === 2200 ? 1200 : 2200;
+        }
+      };
+      const kiting = kiteUntilExtraction();
+      let routeMs = 0;
+      const measureRouteLeg = async (walk: () => Promise<void>): Promise<void> => {
+        const startedAt = Date.now();
+        await walk();
+        routeMs += Date.now() - startedAt;
+      };
+      await page.bringToFront();
+      await measureRouteLeg(() => walkToOpenLane(page));
+      await page.bringToFront();
+      await measureRouteLeg(() => walkToward(page, extraction.x, testArena.openLaneY));
+      await page.bringToFront();
+      await measureRouteLeg(() => walkToward(page, extraction.x, extraction.y));
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+      const channelStartedAt = Date.now();
+      await page.keyboard.down("KeyE");
+      try {
+        const result = await waitForRunResult(page);
+        expect(result.runResult?.outcome).toBe("extracted");
+      } finally {
+        await page.keyboard.up("KeyE");
+        extractionComplete = true;
+      }
+      const channelMs = Date.now() - channelStartedAt;
+      expect(channelMs).toBeGreaterThanOrEqual(EXTRACTION_CHANNEL_MS);
+
+      const totalRequiredMs = routeMs + fightMs + channelMs;
+      const activeWindowObservedMs = Date.now() - activeWindowObservedAt;
+      const marginReportedAt = Date.now();
+      reportMargin(
+        "extractionActiveWindow",
+        marginReportedAt - totalRequiredMs,
+        EXTRACTION_POINT_ACTIVE_MS,
+      );
+      expect(totalRequiredMs).toBeLessThan(EXTRACTION_POINT_ACTIVE_MS);
+      expect(activeWindowObservedMs).toBeLessThan(EXTRACTION_POINT_ACTIVE_MS);
+      expect(EXTRACTION_POINT_ACTIVE_MS).toBeGreaterThanOrEqual(45_000);
+      expect(EXTRACTION_POINT_ACTIVE_MS).toBeLessThanOrEqual(90_000);
+      // Extraction is the contract's terminal state. Stop the isolated kiter
+      // context instead of requiring an already-started waypoint to finish
+      // after the authoritative result exists.
+      await kiter.context().close();
+      await kiting.catch(() => {});
+
+      test.info().annotations.push(
+        {
+          type: "canonical-route",
+          description: `${String(canonicalRoutePx)} px / ${String(routeMs)} ms`,
+        },
+        {
+          type: "representative-fight",
+          description: `one Chaser defeated / ${String(fightMs)} ms`,
+        },
+        { type: "extraction-channel", description: `${String(channelMs)} ms` },
+        { type: "arithmetic-total", description: `${String(totalRequiredMs)} ms` },
+        { type: "active-window-observed", description: `${String(activeWindowObservedMs)} ms` },
+      );
+    } finally {
+      if (fightMoveKey !== null) {
+        await fightPage.keyboard.up(fightMoveKey).catch(() => {});
+      }
+      await fightPage
+        .context()
+        .close()
+        .catch(() => {});
+      await kiter
+        .context()
+        .close()
+        .catch(() => {});
+    }
   });
 });
 

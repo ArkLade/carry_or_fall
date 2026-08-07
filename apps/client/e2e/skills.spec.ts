@@ -192,6 +192,49 @@ test.describe("three-skill combinations apply together (M3.3)", () => {
 });
 
 test.describe("wildcard skill chip (M3.7)", () => {
+  test("the browser reaches the farthest item actually selected by MATCH_SEED=76", async ({
+    page,
+  }) => {
+    await gotoGame(page);
+    await startRunWithLoadout(page, []);
+    const player = await getLocalPlayer(page);
+    const snapshot = await getSnapshot(page);
+    expect(snapshot.seed).toBe(76);
+
+    const selectedItems = [
+      ...snapshot.groundLoot.map((loot) => ({
+        kind: "ground_loot" as const,
+        id: loot.id,
+        contentId: loot.lootId,
+        x: loot.x,
+        y: loot.y,
+      })),
+      ...snapshot.skillChips.map((chip) => ({
+        kind: "skill_chip" as const,
+        id: chip.id,
+        contentId: chip.skillId,
+        x: chip.x,
+        y: chip.y,
+      })),
+    ];
+    const farthest = selectedItems.sort(
+      (left, right) =>
+        Math.hypot(right.x - player.x, right.y - player.y) -
+        Math.hypot(left.x - player.x, left.y - player.y),
+    )[0]!;
+    expect(farthest).toMatchObject({
+      kind: "ground_loot",
+      contentId: "scrap_plating",
+      x: 2320,
+      y: 1280,
+    });
+
+    await walkToArenaPoint(page, farthest.x, farthest.y);
+    const arrived = await getLocalPlayer(page);
+    expect(arrived.alive).toBe(true);
+    expect(Math.hypot(arrived.x - farthest.x, arrived.y - farthest.y)).toBeLessThan(30);
+  });
+
   test("picking up a chip sets the wildcard slot", async ({ page }) => {
     test.setTimeout(90_000);
     await gotoGame(page);
